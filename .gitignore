@@ -1,0 +1,16 @@
+node_modules
+dist
+target
+
+# 문서 (커밋 제외 요청)
+docs/
+
+# 캐릭터 이미지 (개인 에셋 — 실제 위치는 %APPDATA%지만 안전장치)
+characters/
+
+# 로컬 디버그 잔여물
+*.log
+stderr.txt
+stdout.txt
+boot*.txt
+run-*.txt
