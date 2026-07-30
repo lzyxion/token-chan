@@ -1,0 +1,637 @@
+/* ── 펫 캐릭터: 치비 드래곤 (기본 내장 캐릭터) ─────────────────────
+   상태: idle(숨쉬기/깜빡임/꼬리 살랑) · working(타자+날개 파닥) · alert(콧김)
+        · sleep(잠) · exhausted(뒹굴 누움) · refreshed(폴짝+반짝) */
+
+.pet {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  position: relative;
+  /* 컨디션(피로도) 0..1 — 세션 소진율이 눈꺼풀·자세·호흡·땀으로 연속 반영 */
+  --fatigue: 0;
+}
+
+/* 드래그 영역은 루트만: 자식은 마우스 이벤트를 루트로 통과 */
+.pet * {
+  pointer-events: none;
+}
+
+/* 크기 배율이 적용되는 무대: 창 크기(=기본×배율)에 맞춰 하단 중앙 기준으로 확대 */
+.stage {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding-bottom: 12px;
+  position: relative;
+  transform-origin: 50% 100%;
+}
+
+.cat {
+  position: relative;
+  width: 104px;
+  height: 96px;
+  animation: breathe 3.2s ease-in-out infinite;
+  /* 피로할수록 호흡이 느려짐 */
+  animation-duration: calc(3.2s + var(--fatigue) * 2.4s);
+  transform-origin: 50% 100%;
+  z-index: 1;
+}
+
+/* ── 드래곤 파츠 ── */
+
+.horn {
+  position: absolute;
+  top: 2px;
+  width: 15px;
+  height: 17px;
+  background: #f6e7c1;
+  clip-path: polygon(50% 0, 92% 100%, 8% 100%);
+}
+.horn-l {
+  left: 26px;
+  transform: rotate(-10deg);
+}
+.horn-r {
+  right: 26px;
+  transform: rotate(10deg);
+}
+
+.wing {
+  position: absolute;
+  top: 30px;
+  width: 27px;
+  height: 21px;
+  background: #6cc797;
+  border-radius: 80% 20% 60% 40%;
+  animation: flutter 3.4s ease-in-out infinite;
+}
+.wing-l {
+  left: -13px;
+  transform-origin: right center;
+}
+.wing-r {
+  right: -13px;
+  transform: scaleX(-1);
+  transform-origin: left center;
+}
+
+.tail-d {
+  position: absolute;
+  bottom: 6px;
+  right: -17px;
+  width: 32px;
+  height: 13px;
+  background: #7fd4a4;
+  border-radius: 8px 12px 12px 8px / 50%;
+  transform-origin: left center;
+  animation: tail-sway 3s ease-in-out infinite;
+}
+/* 꼬리 끝 스페이드 */
+.tail-d::after {
+  content: "";
+  position: absolute;
+  right: -5px;
+  top: 50%;
+  width: 12px;
+  height: 12px;
+  background: #6cc797;
+  border-radius: 3px;
+  transform: translateY(-50%) rotate(45deg);
+}
+
+.body {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  width: 104px;
+  height: 82px;
+  background: linear-gradient(180deg, #b9ecd0 0%, #82d6a8 100%);
+  border-radius: 52px 52px 42px 42px;
+  box-shadow:
+    inset 0 -8px 12px rgba(30, 110, 70, 0.16),
+    inset 0 4px 8px rgba(255, 255, 255, 0.55);
+  /* 피로할수록 자세 처짐 */
+  transform: translateY(calc(var(--fatigue) * 3px)) scaleY(calc(1 - var(--fatigue) * 0.05));
+  transform-origin: 50% 100%;
+}
+
+.belly {
+  position: absolute;
+  bottom: 4px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 58px;
+  height: 40px;
+  background: #ecfbf1;
+  border-radius: 50%;
+  opacity: 0.9;
+}
+
+.eye {
+  position: absolute;
+  top: 30px;
+  width: 11px;
+  /* 피로할수록 눈꺼풀이 감김 */
+  height: calc(13px - var(--fatigue) * 6px);
+  background: #35443a;
+  border-radius: 50%;
+  animation: blink 4.5s infinite;
+}
+.eye-l {
+  left: 28px;
+}
+.eye-r {
+  right: 28px;
+}
+/* 반짝 하이라이트 (씹덕 눈) */
+.eye::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 4px;
+  height: 4px;
+  background: #fff;
+  border-radius: 50%;
+  opacity: 0.95;
+}
+
+.nostril {
+  position: absolute;
+  top: 43px;
+  width: 3px;
+  height: 3px;
+  background: #4a5d52;
+  border-radius: 50%;
+  opacity: 0.7;
+}
+.nostril-l {
+  left: calc(50% - 7px);
+}
+.nostril-r {
+  right: calc(50% - 7px);
+}
+
+/* ω 입 */
+.mouth {
+  position: absolute;
+  top: 48px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 16px;
+  height: 7px;
+  display: flex;
+}
+.mouth::before,
+.mouth::after {
+  content: "";
+  flex: 1;
+  border-bottom: 2.5px solid #4a5d52;
+  border-radius: 0 0 50% 50%;
+}
+
+.cheek {
+  position: absolute;
+  top: 44px;
+  width: 14px;
+  height: 8px;
+  background: #ffa2b0;
+  opacity: 0.6;
+  border-radius: 50%;
+  filter: blur(1px);
+}
+.cheek-l {
+  left: 14px;
+}
+.cheek-r {
+  right: 14px;
+}
+
+.ground-shadow {
+  width: 84px;
+  height: 12px;
+  margin-top: -6px;
+  background: radial-gradient(ellipse, rgba(0, 0, 0, 0.28) 0%, transparent 70%);
+}
+
+/* 상태 배지/소품: 기본 숨김 */
+.laptop,
+.zzz,
+.alert-mark,
+.ko-mark,
+.sparkle,
+.steam {
+  display: none;
+  position: absolute;
+}
+
+/* 땀방울: 소진율 55%부터 서서히 나타남 */
+.sweat {
+  position: absolute;
+  top: 4px;
+  right: -2px;
+  font-size: 12px;
+  opacity: clamp(0, calc((var(--fatigue) - 0.55) / 0.35), 1);
+  filter: drop-shadow(0 1px 1px rgba(0, 0, 0, 0.2));
+}
+
+/* 사용자 캐릭터 팩: 이미지 한 장이 캐릭터 전체를 대체 (하단 중앙 = 발) */
+.cat.pack {
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+}
+.cat.pack img {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+  -webkit-user-drag: none;
+}
+
+/* ── 발밑 진행 링 (안: 세션 5h, 밖: 주간) ── */
+.ring-wrap {
+  position: relative;
+  width: 124px;
+  height: 22px;
+  margin-top: -8px;
+  z-index: 0;
+}
+.ring {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  border-radius: 50%;
+  transform: translate(-50%, -50%) scaleY(0.3);
+}
+.ring-session {
+  width: 104px;
+  height: 104px;
+  -webkit-mask: radial-gradient(closest-side, transparent 66%, #000 67%);
+  mask: radial-gradient(closest-side, transparent 66%, #000 67%);
+  filter: drop-shadow(0 0 4px rgba(0, 0, 0, 0.25));
+}
+.ring-weekly {
+  width: 124px;
+  height: 124px;
+  -webkit-mask: radial-gradient(closest-side, transparent 80%, #000 81%);
+  mask: radial-gradient(closest-side, transparent 80%, #000 81%);
+  opacity: 0.55;
+}
+
+/* ── 미니 라벨 (옵션) ── */
+.mini-label {
+  margin-top: -1px;
+  font-size: 9.5px;
+  font-weight: 600;
+  letter-spacing: 0.2px;
+  color: rgba(232, 234, 240, 0.8);
+  background: rgba(18, 21, 28, 0.6);
+  padding: 1px 8px;
+  border-radius: 8px;
+  white-space: nowrap;
+}
+
+/* ── working ── */
+.pet.working .cat {
+  animation: work-bob 0.55s ease-in-out infinite;
+}
+.pet.working .eye {
+  height: 8px;
+  border-radius: 40%;
+  animation: none;
+}
+.pet.working .wing {
+  animation: flap 0.3s ease-in-out infinite alternate;
+}
+.pet.working .laptop {
+  display: block;
+  bottom: -6px;
+  left: 50%;
+  transform: translateX(-50%);
+  font-size: 22px;
+  filter: drop-shadow(0 2px 2px rgba(0, 0, 0, 0.25));
+  animation: typing 0.28s steps(2) infinite;
+}
+
+/* ── sleep ── */
+.pet.sleep .cat {
+  animation: breathe 4.5s ease-in-out infinite;
+}
+.pet.sleep .eye {
+  height: 2.5px;
+  border-radius: 2px;
+  animation: none;
+}
+.pet.sleep .eye::after {
+  display: none;
+}
+.pet.sleep .zzz {
+  display: block;
+  top: -14px;
+  right: -4px;
+  font-size: 16px;
+  font-weight: 700;
+  color: #8aa2c8;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.25);
+  animation: zfloat 2.4s ease-in-out infinite;
+}
+.pet.sleep .zzz span {
+  font-size: 11px;
+  display: inline-block;
+  transform: translateY(-6px);
+}
+
+/* ── alert (콧김 뿜뿜) ── */
+.pet.alert .body {
+  background: linear-gradient(180deg, #ffc7b0 0%, #f08a68 100%);
+}
+.pet.alert .cat {
+  animation: shake 0.9s ease-in-out infinite;
+}
+.pet.alert .steam {
+  display: block;
+  top: 38px;
+  font-size: 13px;
+}
+.pet.alert .steam-l {
+  left: -15px;
+  animation: steam-puff-l 1s ease-out infinite;
+}
+.pet.alert .steam-r {
+  right: -15px;
+  animation: steam-puff-r 1s ease-out infinite;
+}
+.pet.alert .alert-mark {
+  display: block;
+  top: -18px;
+  left: 50%;
+  transform: translateX(-50%);
+  font-size: 20px;
+  font-weight: 900;
+  color: #ff5d47;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+  animation: pop 0.8s ease-in-out infinite;
+}
+.pet.alert .eye {
+  height: 11px;
+  width: 11px;
+}
+
+/* ── exhausted (세션 한도 100% 소진 — 뒹굴 누움) ── */
+.pet.exhausted .cat {
+  animation: none;
+  transform: rotate(85deg) translate(4px, -4px);
+  filter: saturate(0.4) brightness(0.96);
+}
+.pet.exhausted .body {
+  background: linear-gradient(180deg, #d8d3cc 0%, #b3aca2 100%);
+}
+.pet.exhausted .wing,
+.pet.exhausted .tail-d {
+  background: #a29a8f;
+  animation: none;
+}
+.pet.exhausted .horn {
+  background: #d9cdb4;
+}
+.pet.exhausted .eye {
+  background: transparent;
+  animation: none;
+}
+/* X 자 눈 */
+.pet.exhausted .eye::before,
+.pet.exhausted .eye::after {
+  content: "";
+  position: absolute;
+  left: -1px;
+  top: 5px;
+  width: 13px;
+  height: 2.5px;
+  background: #4a453d;
+  border-radius: 2px;
+  opacity: 1;
+}
+.pet.exhausted .eye::before {
+  transform: rotate(45deg);
+}
+.pet.exhausted .eye::after {
+  transform: rotate(-45deg);
+}
+.pet.exhausted .mouth::before,
+.pet.exhausted .mouth::after {
+  border-bottom-color: #6b6459;
+  border-radius: 0;
+}
+.pet.exhausted .cheek {
+  opacity: 0.15;
+}
+.pet.exhausted .ko-mark {
+  display: block;
+  top: 6px;
+  left: -22px;
+  font-size: 17px;
+  transform: rotate(-85deg);
+  filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.3));
+  animation: pop 1.8s ease-in-out infinite;
+}
+
+/* ── refreshed (블록 초기화 직후) ── */
+.pet.refreshed .cat {
+  animation: hop 0.9s ease-in-out infinite;
+}
+.pet.refreshed .wing {
+  animation: flap 0.25s ease-in-out infinite alternate;
+}
+/* 행복한 ∪ 눈 */
+.pet.refreshed .eye {
+  background: transparent;
+  border-bottom: 3px solid #35443a;
+  border-radius: 0 0 10px 10px;
+  height: 7px;
+  animation: none;
+}
+.pet.refreshed .eye::after {
+  display: none;
+}
+.pet.refreshed .mouth {
+  width: 18px;
+  height: 9px;
+}
+.pet.refreshed .cheek {
+  opacity: 0.9;
+}
+.pet.refreshed .sparkle {
+  display: block;
+  top: -16px;
+  left: -8px;
+  font-size: 15px;
+  animation: sparkle-float 1.4s ease-in-out infinite;
+}
+
+/* ── keyframes ── */
+
+@keyframes breathe {
+  0%,
+  100% {
+    transform: scale(1, 1);
+  }
+  50% {
+    transform: scale(1.03, 0.97);
+  }
+}
+
+@keyframes blink {
+  0%,
+  46%,
+  50%,
+  100% {
+    transform: scaleY(1);
+  }
+  48% {
+    transform: scaleY(0.08);
+  }
+}
+
+@keyframes work-bob {
+  0%,
+  100% {
+    transform: translateY(0) scale(1, 1);
+  }
+  50% {
+    transform: translateY(-3px) scale(0.99, 1.01);
+  }
+}
+
+@keyframes typing {
+  0% {
+    transform: translateX(-50%) translateY(0);
+  }
+  100% {
+    transform: translateX(-50%) translateY(1.5px);
+  }
+}
+
+@keyframes zfloat {
+  0% {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  40% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+    transform: translateY(-10px);
+  }
+}
+
+@keyframes shake {
+  0%,
+  100% {
+    transform: rotate(0deg);
+  }
+  25% {
+    transform: rotate(-2.5deg);
+  }
+  75% {
+    transform: rotate(2.5deg);
+  }
+}
+
+@keyframes pop {
+  0%,
+  100% {
+    transform: translateX(-50%) scale(1);
+  }
+  50% {
+    transform: translateX(-50%) scale(1.25);
+  }
+}
+
+@keyframes hop {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  30% {
+    transform: translateY(-7px) scale(1.02, 0.98);
+  }
+  55% {
+    transform: translateY(0) scale(0.99, 1.02);
+  }
+}
+
+@keyframes sparkle-float {
+  0% {
+    opacity: 0;
+    transform: translateY(3px) scale(0.7) rotate(-8deg);
+  }
+  40% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+    transform: translateY(-14px) scale(1.2) rotate(10deg);
+  }
+}
+
+/* 날개: 평상시 잔잔한 흔들림 */
+@keyframes flutter {
+  0%,
+  100% {
+    transform: rotate(0deg);
+  }
+  50% {
+    transform: rotate(-6deg);
+  }
+}
+
+/* 날개: 작업/리셋 시 파닥임 */
+@keyframes flap {
+  0% {
+    transform: rotate(-4deg);
+  }
+  100% {
+    transform: rotate(-26deg);
+  }
+}
+
+@keyframes tail-sway {
+  0%,
+  100% {
+    transform: rotate(-6deg);
+  }
+  50% {
+    transform: rotate(8deg);
+  }
+}
+
+/* 콧김: 왼쪽/오른쪽으로 퍼짐 (오른쪽은 글리프 반전) */
+@keyframes steam-puff-l {
+  0% {
+    opacity: 0;
+    transform: translateX(0) scale(0.6);
+  }
+  30% {
+    opacity: 0.9;
+  }
+  100% {
+    opacity: 0;
+    transform: translateX(-9px) scale(1.2);
+  }
+}
+@keyframes steam-puff-r {
+  0% {
+    opacity: 0;
+    transform: translateX(0) scaleX(-0.6) scaleY(0.6);
+  }
+  30% {
+    opacity: 0.9;
+  }
+  100% {
+    opacity: 0;
+    transform: translateX(9px) scaleX(-1.2) scaleY(1.2);
+  }
+}

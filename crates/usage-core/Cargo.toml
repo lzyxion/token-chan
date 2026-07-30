@@ -1,0 +1,15 @@
+[package]
+name = "usage-core"
+version = "0.1.0"
+edition = "2021"
+description = "AI CLI 토큰 사용량 파싱/집계 코어 (UI 무관, 순수 Rust)"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+chrono = { version = "0.4", features = ["serde"] }
+walkdir = "2"
+dirs = "6"
+
+[dev-dependencies]
+tempfile = "3"

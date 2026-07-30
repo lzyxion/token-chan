@@ -1,0 +1,144 @@
+//! 모델 단가표. 내장 스냅샷(pricing/prices.json) + 사용자 오버라이드 병합.
+//! 모델 ID는 날짜 접미사가 붙을 수 있으므로(예: claude-sonnet-4-5-20250929)
+//! **최장 접두사 매칭**으로 조회한다.
+
+use std::collections::HashMap;
+use std::path::Path;
+
+use serde::Deserialize;
+
+use crate::model::UsageEvent;
+
+const BUILTIN: &str = include_str!("../pricing/prices.json");
+
+/// USD / 1M tokens
+#[derive(Clone, Copy, Debug, Deserialize)]
+pub struct Price {
+    #[serde(rename = "in")]
+    pub input: f64,
+    #[serde(rename = "out")]
+    pub output: f64,
+    /// cache write (5분 TTL 기준)
+    pub cw: f64,
+    /// cache read
+    pub cr: f64,
+}
+
+#[derive(Deserialize)]
+struct PriceFile {
+    #[serde(default)]
+    models: HashMap<String, Price>,
+}
+
+pub struct PriceTable {
+    /// key 길이 내림차순 정렬 (최장 접두사 우선)
+    entries: Vec<(String, Price)>,
+}
+
+impl PriceTable {
+    pub fn from_maps(maps: &[HashMap<String, Price>]) -> Self {
+        let mut merged: HashMap<String, Price> = HashMap::new();
+        for m in maps {
+            for (k, v) in m {
+                merged.insert(k.clone(), *v); // 뒤의 맵(오버라이드)이 우선
+            }
+        }
+        let mut entries: Vec<(String, Price)> = merged.into_iter().collect();
+        entries.sort_by(|a, b| b.0.len().cmp(&a.0.len()).then(a.0.cmp(&b.0)));
+        Self { entries }
+    }
+
+    pub fn builtin() -> Self {
+        let file: PriceFile = serde_json::from_str(BUILTIN).expect("내장 prices.json 파싱 실패");
+        Self::from_maps(&[file.models])
+    }
+
+    /// 내장 단가 + 오버라이드 파일(JSON, 같은 스키마) 병합. 파일 오류는 무시하고 내장만 사용.
+    pub fn with_overrides(path: Option<&Path>) -> Self {
+        let builtin: PriceFile = serde_json::from_str(BUILTIN).expect("내장 prices.json 파싱 실패");
+        let mut maps = vec![builtin.models];
+        if let Some(p) = path {
+            if let Ok(s) = std::fs::read_to_string(p) {
+                if let Ok(f) = serde_json::from_str::<PriceFile>(&s) {
+                    maps.push(f.models);
+                }
+            }
+        }
+        Self::from_maps(&maps)
+    }
+
+    pub fn lookup(&self, model: &str) -> Option<Price> {
+        self.entries
+            .iter()
+            .find(|(prefix, _)| model.starts_with(prefix.as_str()))
+            .map(|(_, p)| *p)
+    }
+
+    /// 이벤트 비용(USD). 단가 미등록 모델은 None.
+    pub fn cost(&self, ev: &UsageEvent) -> Option<f64> {
+        let p = self.lookup(&ev.model)?;
+        Some(
+            (ev.input as f64 * p.input
+                + ev.output as f64 * p.output
+                + ev.cache_write as f64 * p.cw
+                + ev.cache_read as f64 * p.cr)
+                / 1_000_000.0,
+        )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::Source;
+    use chrono::Utc;
+
+    fn ev(model: &str, input: u64, output: u64, cw: u64, cr: u64) -> UsageEvent {
+        UsageEvent {
+            source: Source::Claude,
+            model: model.into(),
+            ts: Utc::now(),
+            input,
+            output,
+            cache_write: cw,
+            cache_read: cr,
+            sidechain: false,
+        }
+    }
+
+    #[test]
+    fn longest_prefix_matches_dated_model_ids() {
+        let t = PriceTable::builtin();
+        // 날짜 접미사가 붙은 풀 ID도 매칭되어야 함
+        assert!(t.lookup("claude-sonnet-4-5-20250929").is_some());
+        assert!(t.lookup("claude-haiku-4-5-20251001").is_some());
+        // gpt-5-codex 는 gpt-5 보다 긴 접두사가 우선
+        let codex = t.lookup("gpt-5-codex").unwrap();
+        assert_eq!(codex.input, 1.25);
+        let mini = t.lookup("gpt-5-mini-2025-08-07").unwrap();
+        assert_eq!(mini.input, 0.25);
+        // 미지의 모델은 None
+        assert!(t.lookup("totally-unknown-model").is_none());
+    }
+
+    #[test]
+    fn cost_math() {
+        let t = PriceTable::builtin();
+        // opus-4-8: in 5, out 25, cw 6.25, cr 0.5 (USD/MTok)
+        let e = ev("claude-opus-4-8", 1_000_000, 1_000_000, 1_000_000, 1_000_000);
+        let c = t.cost(&e).unwrap();
+        assert!((c - (5.0 + 25.0 + 6.25 + 0.5)).abs() < 1e-9);
+        assert!(t.cost(&ev("mystery", 10, 10, 0, 0)).is_none());
+    }
+
+    #[test]
+    fn overrides_take_precedence() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("override.json");
+        std::fs::write(&p, r#"{"models":{"claude-opus-4-8":{"in":1.0,"out":2.0,"cw":0.0,"cr":0.0}}}"#).unwrap();
+        let t = PriceTable::with_overrides(Some(&p));
+        assert_eq!(t.lookup("claude-opus-4-8").unwrap().input, 1.0);
+        // 오버라이드에 없는 모델은 내장 유지
+        assert_eq!(t.lookup("claude-fable-5").unwrap().input, 10.0);
+    }
+}
