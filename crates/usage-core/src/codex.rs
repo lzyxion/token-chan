@@ -1,14 +1,17 @@
 //! Codex CLI 어댑터.
 //!
-//! ⚠️ **미검증(unverified)**: 이 머신에 Codex CLI가 설치되어 있지 않아 실데이터로
-//! 검증하지 못했다. 공식 문서/ccusage 문서 기준으로 구현했으며, 실제 rollout 파일
-//! 확보 시 필드명·envelope을 재확인해야 한다.
+//! ✅ **실데이터 검증됨** (2026-07-31, codex-tui 0.146.0 rollout): `turn_context`
+//! top-level 이벤트의 `payload.model`, `event_msg`/`token_count` 의
+//! `info.last_token_usage`(델타)·`total_token_usage`(누적) 구조 확인.
+//! 실파일엔 `cache_write_input_tokens` 필드도 존재(관측값 0) → cache_write 로 전달.
+//! 검증 방법: `cargo run -p usage-core --example scan_codex`
 //!
 //! 알려진 포맷:
 //! - 세션 파일: `$CODEX_HOME/sessions/YYYY/MM/DD/rollout-*.jsonl` + `archived_sessions/`
 //! - `type:"event_msg"` + `payload.type:"token_count"` 이벤트:
 //!   `payload.info.total_token_usage` = 세션 **누적**, `payload.info.last_token_usage` = 요청 **델타**
-//!   필드: input_tokens, cached_input_tokens, output_tokens, reasoning_output_tokens, total_tokens
+//!   필드: input_tokens, cached_input_tokens, cache_write_input_tokens,
+//!   output_tokens, reasoning_output_tokens, total_tokens
 //! - 모델명은 `turn_context` 이벤트의 payload.model
 //!
 //! 집계 규칙: last_token_usage 델타 우선, 없으면 누적값 차분(음수는 0 클램프).
@@ -29,6 +32,7 @@ use crate::model::{ScanOutcome, Source, SourceStatus, UsageEvent};
 struct Counters {
     input: u64,
     cached: u64,
+    cache_write: u64,
     output: u64,
     reasoning: u64,
 }
@@ -39,17 +43,23 @@ impl Counters {
         Self {
             input: g("input_tokens"),
             cached: g("cached_input_tokens"),
+            cache_write: g("cache_write_input_tokens"),
             output: g("output_tokens"),
             reasoning: g("reasoning_output_tokens"),
         }
     }
     fn is_zero(&self) -> bool {
-        self.input == 0 && self.cached == 0 && self.output == 0 && self.reasoning == 0
+        self.input == 0
+            && self.cached == 0
+            && self.cache_write == 0
+            && self.output == 0
+            && self.reasoning == 0
     }
     fn delta_from(&self, prev: &Self) -> Self {
         Self {
             input: self.input.saturating_sub(prev.input),
             cached: self.cached.saturating_sub(prev.cached),
+            cache_write: self.cache_write.saturating_sub(prev.cache_write),
             output: self.output.saturating_sub(prev.output),
             reasoning: self.reasoning.saturating_sub(prev.reasoning),
         }
@@ -210,7 +220,8 @@ fn parse_rollout(path: &Path) -> Vec<UsageEvent> {
             ts,
             input: delta.input.saturating_sub(delta.cached),
             output,
-            cache_write: 0,
+            // 실데이터에서 관측값은 아직 0 — input_tokens 포함 여부가 미확인이라 그대로 전달만
+            cache_write: delta.cache_write,
             cache_read: delta.cached,
             sidechain: false,
         });
@@ -234,7 +245,7 @@ mod tests {
             // 모델 컨텍스트
             r#"{"timestamp":"2026-07-30T01:00:01.000Z","type":"turn_context","payload":{"model":"gpt-5-codex","cwd":"/x"}}"#.to_string(),
             // 1) last_token_usage 제공 (델타 직접 사용)
-            r#"{"timestamp":"2026-07-30T01:00:10.000Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":1000,"cached_input_tokens":600,"output_tokens":200,"reasoning_output_tokens":50,"total_tokens":1200},"last_token_usage":{"input_tokens":1000,"cached_input_tokens":600,"output_tokens":200,"reasoning_output_tokens":50,"total_tokens":1200},"model_context_window":272000}}}"#.to_string(),
+            r#"{"timestamp":"2026-07-30T01:00:10.000Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":1000,"cached_input_tokens":600,"cache_write_input_tokens":40,"output_tokens":200,"reasoning_output_tokens":50,"total_tokens":1200},"last_token_usage":{"input_tokens":1000,"cached_input_tokens":600,"cache_write_input_tokens":40,"output_tokens":200,"reasoning_output_tokens":50,"total_tokens":1200},"model_context_window":272000}}}"#.to_string(),
             // 2) last 없음 → 누적 차분 (input 2500-1000=1500, cached 1500-600=900, output 500-200=300)
             r#"{"timestamp":"2026-07-30T01:01:00.000Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":2500,"cached_input_tokens":1500,"output_tokens":500,"reasoning_output_tokens":120,"total_tokens":3000},"last_token_usage":null}}}"#.to_string(),
         ];
@@ -250,6 +261,7 @@ mod tests {
         assert_eq!(e1.model, "gpt-5-codex");
         assert_eq!(e1.input, 400); // 1000 - 600(cached)
         assert_eq!(e1.cache_read, 600);
+        assert_eq!(e1.cache_write, 40);
         assert_eq!(e1.output, 200);
 
         let e2 = &out.events[1];

@@ -13,6 +13,14 @@ pub struct CharacterRule {
     pub pack: String,
 }
 
+/// 모델 접두사(콤마 구분) → 문구 세트 이름 매핑 규칙 (캐릭터 규칙과 같은 최장 접두사 우선)
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct SpeechRule {
+    pub prefixes: String,
+    pub set: String,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Settings {
@@ -30,12 +38,20 @@ pub struct Settings {
     pub pet_scale: f64,
     /// 주간 한도 경고 임계값 (0..1) — 공식 주간 % 기준
     pub weekly_alert_threshold: f64,
-    /// 블록 리셋 임박 알림 (분 전, 0 = 끔)
+    /// 블록 리셋 임박 대사 (분 전, 0 = 끔) — OS 알림이 아니라 말풍선으로 나간다
     pub reset_notify_minutes: u32,
     /// 클릭 통과 모드 — 펫이 마우스에 전혀 반응하지 않음 (트레이에서만 해제)
     pub click_through: bool,
-    /// 말풍선 숨김 지연 (ms)
-    pub hover_delay_ms: u64,
+    /// 사용량 패널 창 위치 (물리 픽셀) — 사용자가 옮긴 자리를 기억
+    pub panel_pos: Option<(i32, i32)>,
+    /// 사용량 패널 창 크기 (물리 픽셀) — 사용자가 조절한 크기를 기억
+    pub panel_size: Option<(u32, u32)>,
+    /// 설정 창 크기 (물리 픽셀) — 사용자가 조절한 크기를 기억
+    pub settings_size: Option<(u32, u32)>,
+    /// 상황별 대사 말풍선 사용
+    pub speech_enabled: bool,
+    /// 대사 말풍선 표시 시간 (ms)
+    pub speech_duration_ms: u64,
     /// 시작 시 펫 숨김 (트레이로만 시작)
     pub start_hidden: bool,
     /// 선택된 캐릭터 팩 이름 (None = 기본 CSS 고양이)
@@ -48,6 +64,16 @@ pub struct Settings {
     pub disabled_states: Vec<String>,
     /// 발밑 미니 라벨 (소진율·남은시간) 상시 표시
     pub show_mini_label: bool,
+    /// 도넛 게이지 위치 — "right" | "left" | "off"
+    pub gauge_side: String,
+    /// 상황별 사용자 문구 — 키("enter.working"·"poke"·"resetNotify" 등) → 문구 목록.
+    /// 비어 있으면 내장 기본 문구. `{변수}` 는 표시 시점에 값으로 치환된다.
+    pub speech_lines: std::collections::HashMap<String, Vec<String>>,
+    /// 이름 붙은 문구 세트(모델별 말투) — 세트에 없는 상황은 speech_lines → 내장 기본 순 폴백
+    pub speech_sets:
+        std::collections::HashMap<String, std::collections::HashMap<String, Vec<String>>>,
+    /// 모델 접두사 → 문구 세트 매핑 (최장 접두사 우선, 미매칭 시 기본 문구)
+    pub speech_rules: Vec<SpeechRule>,
 }
 
 impl Default for Settings {
@@ -62,13 +88,21 @@ impl Default for Settings {
             weekly_alert_threshold: 0.9,
             reset_notify_minutes: 15,
             click_through: false,
-            hover_delay_ms: 250,
+            panel_pos: None,
+            panel_size: None,
+            settings_size: None,
+            speech_enabled: true,
+            speech_duration_ms: 4000,
             start_hidden: false,
             character_pack: None,
             sleep_after_minutes: 30,
             character_rules: vec![],
             disabled_states: vec![],
             show_mini_label: false,
+            gauge_side: "right".into(),
+            speech_lines: Default::default(),
+            speech_sets: Default::default(),
+            speech_rules: vec![],
         }
     }
 }
@@ -78,9 +112,10 @@ pub fn characters_dir() -> Option<std::path::PathBuf> {
     dirs::config_dir().map(|d| d.join("token-pet").join("characters"))
 }
 
-/// 펫 창 기본 크기 (논리 px) — 스케일 적용의 기준
-pub const PET_BASE_W: f64 = 150.0;
-pub const PET_BASE_H: f64 = 160.0;
+/// 펫 창 **초기** 크기 (논리 px). 웹뷰가 뜨는 즉시 실측 크기로 다시 맞추므로
+/// (`fit_pet_window`) 대략적인 값이면 된다 — 첫 프레임에 잘려 보이지만 않으면 충분.
+pub const PET_BASE_W: f64 = 220.0;
+pub const PET_BASE_H: f64 = 140.0;
 
 pub fn config_path() -> Option<PathBuf> {
     dirs::config_dir().map(|d| d.join("token-pet").join("settings.json"))

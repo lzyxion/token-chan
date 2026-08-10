@@ -1,0 +1,75 @@
+/* ── 리사이즈 손잡이 (ResizeGrips) ──
+   decorations:false 라 OS 테두리가 없다 → 카드 바깥 투명 패딩(8px)을 잡이로 쓴다.
+   fixed 라 안쪽에 스크롤 컨테이너가 있어도 항상 창 가장자리에 붙는다. */
+.resize-grip {
+  position: fixed;
+  z-index: 20;
+}
+.resize-grip.n,
+.resize-grip.s {
+  left: 10px;
+  right: 10px;
+  height: 8px;
+  cursor: ns-resize;
+}
+.resize-grip.n {
+  top: 0;
+}
+.resize-grip.s {
+  bottom: 0;
+}
+.resize-grip.e,
+.resize-grip.w {
+  top: 10px;
+  bottom: 10px;
+  width: 8px;
+  cursor: ew-resize;
+}
+.resize-grip.e {
+  right: 0;
+}
+.resize-grip.w {
+  left: 0;
+}
+.resize-grip.ne,
+.resize-grip.nw,
+.resize-grip.se,
+.resize-grip.sw {
+  width: 14px;
+  height: 14px;
+}
+.resize-grip.nw {
+  top: 0;
+  left: 0;
+  cursor: nwse-resize;
+}
+.resize-grip.se {
+  bottom: 0;
+  right: 0;
+  cursor: nwse-resize;
+}
+.resize-grip.ne {
+  top: 0;
+  right: 0;
+  cursor: nesw-resize;
+}
+.resize-grip.sw {
+  bottom: 0;
+  left: 0;
+  cursor: nesw-resize;
+}
+/* 우하단만 눈에 보이게 — 크기를 조절할 수 있다는 유일한 힌트 */
+.resize-grip.se::after {
+  content: "";
+  position: absolute;
+  right: 3px;
+  bottom: 3px;
+  width: 8px;
+  height: 8px;
+  border-right: 2px solid rgba(255, 255, 255, 0.28);
+  border-bottom: 2px solid rgba(255, 255, 255, 0.28);
+  border-bottom-right-radius: 3px;
+}
+.resize-grip.se:hover::after {
+  border-color: rgba(255, 255, 255, 0.6);
+}

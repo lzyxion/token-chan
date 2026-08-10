@@ -349,13 +349,12 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let home = dir.path().join(".gemini");
         fs::create_dir_all(&home).unwrap();
-        // 절대경로 outfile 지정
+        // 절대경로 outfile 지정 — Windows 경로 역슬래시가 JSON 이스케이프되도록 json!으로 직렬화
         let custom = dir.path().join("custom-telemetry.log");
-        fs::write(
-            home.join("settings.json"),
-            format!(r#"{{"telemetry":{{"enabled":true,"target":"local","outfile":"{}"}}}}"#, custom.display()),
-        )
-        .unwrap();
+        let settings = serde_json::json!({
+            "telemetry": { "enabled": true, "target": "local", "outfile": custom.to_string_lossy() }
+        });
+        fs::write(home.join("settings.json"), settings.to_string()).unwrap();
         fs::write(&custom, r#"{"attributes":{"event.name":"gemini_cli.api_response","event.timestamp":"2026-07-30T01:00:00.000Z","model":"gemini-2.5-pro","input_token_count":10,"output_token_count":5}}"#).unwrap();
 
         let mut adapter = GeminiAdapter::new(vec![home]);
