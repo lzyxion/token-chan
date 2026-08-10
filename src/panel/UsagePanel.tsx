@@ -1,10 +1,11 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
+import { getCurrentWindow } from "@tauri-apps/api/window";
+import ResizeGrips from "../components/ResizeGrips";
 import { useLive, usePlan, useSummary } from "../hooks/useUsage";
 import { fmtCost, fmtMinutes, fmtTokens, parseResetTime, shortModel, totalOf } from "../format";
 import type { SourceStatus, SourceSummary } from "../types";
-import "./bubble.css";
+import "./panel.css";
 
 function meterClass(pct: number): string {
   if (pct >= 85) return "danger";
@@ -42,38 +43,53 @@ function SourceRow({ s }: { s: SourceSummary }) {
 
 const PAGE_TITLES = ["요약", "소스·블록", "모델·세션"];
 
-export default function Bubble() {
+/** 독립 창으로 뜨는 사용량 패널 — 펫 우클릭 또는 트레이 메뉴로 토글 */
+export default function UsagePanel() {
   const summary = useSummary();
   const live = useLive();
   const plan = usePlan();
   const [page, setPage] = useState(0);
-  const [tailPos, setTailPos] = useState<"bottom" | "top">("bottom");
-  const [pinned, setPinned] = useState(false);
+  const bodyRef = useRef<HTMLDivElement | null>(null);
 
-  // 꼬리 방향(펫 기준 배치: 위=bottom 꼬리, 아래=top 꼬리) + 고정 상태 동기화
+  // 사용자가 옮긴 위치·조절한 크기 기억 (연속 이벤트 debounce)
   useEffect(() => {
-    const unTail = listen<string>("bubble-tail", (e) => {
-      setTailPos(e.payload === "top" ? "top" : "bottom");
+    const win = getCurrentWindow();
+    let moveTimer: ReturnType<typeof setTimeout> | undefined;
+    let sizeTimer: ReturnType<typeof setTimeout> | undefined;
+    const unMoved = win.onMoved(({ payload }) => {
+      clearTimeout(moveTimer);
+      moveTimer = setTimeout(() => {
+        void invoke("save_panel_position", { x: payload.x, y: payload.y });
+      }, 500);
     });
-    const unPin = listen<boolean>("bubble-pinned", (e) => setPinned(e.payload));
+    const unResized = win.onResized(({ payload }) => {
+      clearTimeout(sizeTimer);
+      sizeTimer = setTimeout(() => {
+        void invoke("save_window_size", { label: "panel", width: payload.width, height: payload.height });
+      }, 500);
+    });
     return () => {
-      unTail.then((f) => f());
-      unPin.then((f) => f());
+      clearTimeout(moveTimer);
+      clearTimeout(sizeTimer);
+      unMoved.then((f) => f());
+      unResized.then((f) => f());
     };
   }, []);
 
-  // 펫 ↔ 말풍선 간 호버 이동 허용 (백엔드 hover 플래그)
-  const onEnter = () => void invoke("set_hover", { zone: "bubble", hovering: true });
-  const onLeave = () => {
-    void invoke("set_hover", { zone: "bubble", hovering: false });
-    window.setTimeout(() => void invoke("hide_bubble"), 250);
-  };
+  // Esc로 닫기
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") void getCurrentWindow().hide();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
 
   if (!summary) {
     return (
-      <div className="bubble-root" onMouseEnter={onEnter} onMouseLeave={onLeave}>
+      <div className="panel-root">
+        <ResizeGrips />
         <div className="card">
-          <div className={`tail ${tailPos}`} />
           <div className="loading">사용량 스캔 중…</div>
         </div>
       </div>
@@ -97,30 +113,38 @@ export default function Bubble() {
   const prev = () => setPage((p) => (p + pageCount - 1) % pageCount);
   const next = () => setPage((p) => (p + 1) % pageCount);
 
-  return (
-    <div
-      className="bubble-root"
-      onMouseEnter={onEnter}
-      onMouseLeave={onLeave}
-      onWheel={(e) => (e.deltaY > 0 ? next() : prev())}
-    >
-      <div className="card">
-        <div className={`tail ${tailPos}`} />
+  // 휠은 우선 본문 스크롤에 양보하고, 더 스크롤할 곳이 없을 때만 페이지를 넘긴다.
+  // (창을 작게 줄이면 본문이 넘치므로 스크롤이 먼저다)
+  const onWheel = (e: React.WheelEvent) => {
+    const el = bodyRef.current;
+    if (el && el.scrollHeight > el.clientHeight + 1) {
+      const atTop = el.scrollTop <= 0;
+      const atBottom = el.scrollTop + el.clientHeight >= el.scrollHeight - 1;
+      if (e.deltaY > 0 ? !atBottom : !atTop) return;
+    }
+    if (e.deltaY > 0) next();
+    else prev();
+  };
 
-        <div className="head">
+  return (
+    <div className="panel-root" onWheel={onWheel}>
+      <ResizeGrips />
+      <div className="card">
+        {/* 닫기는 드래그 영역(.head) 밖 — 헤더 안에 두면 드래그와 클릭이 얽힌다 */}
+        <button
+          className="panel-close"
+          title="닫기 (Esc)"
+          onClick={() => void getCurrentWindow().hide()}
+        >
+          ✕
+        </button>
+        <div className="head" data-tauri-drag-region="deep">
           <span className="title">{PAGE_TITLES[page]}</span>
           <span className="date">{summary.today_date.slice(5).replace("-", "/")}</span>
           <span className="cost">{fmtCost(summary.today_cost, summary.cost_partial)}</span>
-          <button
-            className={`pin-btn ${pinned ? "on" : ""}`}
-            title={pinned ? "고정 해제" : "말풍선 고정"}
-            onClick={() => void invoke("toggle_bubble_pin")}
-          >
-            📌
-          </button>
         </div>
 
-        <div className="page-body">
+        <div className="page-body" ref={bodyRef}>
           {page === 0 && (
             <>
               <div className="grand">
@@ -151,6 +175,17 @@ export default function Bubble() {
                       <span className={`plan-pct ${meterClass(m.used_pct)}`}>{m.used_pct}%</span>
                     </div>
                   ))}
+                  {/* 리셋까지 남은 시간도 같은 게이지로 — 다만 소진율이 아니라
+                      "블록이 얼마나 지났나"라서 단계 색 대신 파란 시간 색을 쓴다 */}
+                  {officialReset && (
+                    <div className="plan-row">
+                      <span className="plan-label">리셋까지</span>
+                      <div className="bar plan-bar">
+                        <div className="bar-fill time" style={{ width: `${blockRatio * 100}%` }} />
+                      </div>
+                      <span className="plan-pct time">{fmtMinutes(blockRemain)}</span>
+                    </div>
+                  )}
                   {plan.meters[0]?.resets && (
                     <div className="plan-reset">세션 리셋 {plan.meters[0].resets}</div>
                   )}

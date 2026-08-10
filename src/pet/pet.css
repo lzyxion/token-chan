@@ -9,23 +9,36 @@
   align-items: flex-end;
   justify-content: center;
   position: relative;
+  /* 클릭하면 반응하므로 클릭 가능함을 커서로 알린다 (드래그도 같은 자리에서) */
+  cursor: pointer;
   /* 컨디션(피로도) 0..1 — 세션 소진율이 눈꺼풀·자세·호흡·땀으로 연속 반영 */
   --fatigue: 0;
 }
 
-/* 드래그 영역은 루트만: 자식은 마우스 이벤트를 루트로 통과 */
+/* 드래그 영역은 루트만: 자식은 마우스 이벤트를 루트로 통과.
+   게이지 라벨도 개별 호버가 아니라 루트의 :hover 로 뜬다 (.pet:hover .gauge-label) */
 .pet * {
   pointer-events: none;
 }
 
-/* 크기 배율이 적용되는 무대: 창 크기(=기본×배율)에 맞춰 하단 중앙 기준으로 확대 */
+/* 크기 배율이 적용되는 무대: 창 크기(=기본×배율)에 맞춰 하단 중앙 기준으로 확대.
+   가로로 [캐릭터][게이지 열] (또는 그 반대)을 담아 통째로 같은 배율이 걸린다. */
 .stage {
   display: flex;
-  flex-direction: column;
-  align-items: center;
+  flex-direction: row;
+  align-items: flex-end;
+  /* 꼬리가 캐릭터 박스 밖으로 15px 튀어나오므로 그만큼은 띄운다 */
+  gap: 18px;
   padding-bottom: 12px;
   position: relative;
   transform-origin: 50% 100%;
+}
+
+/* 캐릭터 + 그림자 + 미니 라벨 세로 묶음 */
+.char-col {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
 }
 
 .cat {
@@ -250,34 +263,64 @@
   -webkit-user-drag: none;
 }
 
-/* ── 발밑 진행 링 (안: 세션 5h, 밖: 주간) ── */
-.ring-wrap {
-  position: relative;
-  width: 124px;
-  height: 22px;
-  margin-top: -8px;
-  z-index: 0;
+/* ── 세션 소진율 도넛 (캐릭터 옆) ──
+   .stage 밖에 절대배치 — 캐릭터 배율과 무관하게 항상 같은 크기로 읽힌다.
+   창 오른쪽 끝에 붙고, 호버 시 라벨이 왼쪽(캐릭터 위)으로 펼쳐진다. */
+/* ── 소진율 도넛 열 (위: 세션 5h, 아래: 주간) ──
+   캐릭터 옆에 세로로 쌓고, 라벨은 캐릭터 반대쪽(바깥)으로 펼친다.
+   .stage 안이라 캐릭터와 같은 배율로 함께 커진다. */
+.gauge {
+  align-self: center; /* 캐릭터 높이 기준 세로 중앙 */
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
 }
-.ring {
-  position: absolute;
-  left: 50%;
-  top: 50%;
+.gauge-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+/* 도넛이 항상 캐릭터 쪽에 붙고 라벨이 바깥으로 가도록 좌/우에서 방향을 뒤집는다 */
+.gauge.right {
+  align-items: flex-start;
+}
+.gauge.left {
+  align-items: flex-end;
+}
+.gauge.left .gauge-row {
+  flex-direction: row-reverse;
+}
+
+.gauge-ring {
+  flex: none;
+  width: 18px;
+  height: 18px;
   border-radius: 50%;
-  transform: translate(-50%, -50%) scaleY(0.3);
+  -webkit-mask: radial-gradient(closest-side, transparent 56%, #000 57%);
+  mask: radial-gradient(closest-side, transparent 56%, #000 57%);
+  filter: drop-shadow(0 1px 3px rgba(0, 0, 0, 0.45));
 }
-.ring-session {
-  width: 104px;
-  height: 104px;
-  -webkit-mask: radial-gradient(closest-side, transparent 66%, #000 67%);
-  mask: radial-gradient(closest-side, transparent 66%, #000 67%);
-  filter: drop-shadow(0 0 4px rgba(0, 0, 0, 0.25));
+
+/* 라벨은 캐릭터(=창)에 마우스를 올렸을 때만 보인다.
+   자리는 항상 차지하므로 나타날 때 배치가 흔들리지 않는다. */
+.gauge-label {
+  padding: 2px 5px;
+  border-radius: 6px;
+  background: rgba(18, 21, 28, 0.88);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  font-size: 8.5px;
+  font-weight: 600;
+  color: rgba(232, 234, 240, 0.7);
+  white-space: nowrap;
+  opacity: 0;
+  transition: opacity 0.13s ease;
 }
-.ring-weekly {
-  width: 124px;
-  height: 124px;
-  -webkit-mask: radial-gradient(closest-side, transparent 80%, #000 81%);
-  mask: radial-gradient(closest-side, transparent 80%, #000 81%);
-  opacity: 0.55;
+.gauge-label b {
+  font-weight: 800;
+  color: rgba(232, 234, 240, 0.98);
+}
+.pet:hover .gauge-label {
+  opacity: 1;
 }
 
 /* ── 미니 라벨 (옵션) ── */
@@ -291,6 +334,34 @@
   padding: 1px 8px;
   border-radius: 8px;
   white-space: nowrap;
+}
+
+/* ── poke (클릭 반응): 폴짝 두 번 + 반짝 ── */
+.pet.poke .cat {
+  animation: poke-hop 0.45s ease-in-out 2;
+}
+/* 소품은 기본이 display:none — refreshed 와 같은 방식으로 켠다 */
+.pet.poke .sparkle {
+  display: block;
+  top: -14px;
+  left: -6px;
+  font-size: 14px;
+  animation: sparkle-float 0.9s ease-in-out 2;
+}
+@keyframes poke-hop {
+  0%,
+  100% {
+    transform: translateY(0) rotate(0deg);
+  }
+  25% {
+    transform: translateY(-9px) rotate(-5deg);
+  }
+  50% {
+    transform: translateY(0) rotate(0deg);
+  }
+  75% {
+    transform: translateY(-4px) rotate(5deg);
+  }
 }
 
 /* ── working ── */

@@ -88,7 +88,15 @@ export interface PlanUsage {
   fetched_at: string;
 }
 
-export type PetState = "idle" | "working" | "alert" | "sleep" | "exhausted" | "refreshed";
+export type PetState =
+  | "idle"
+  | "working"
+  | "alert"
+  | "sleep"
+  | "exhausted"
+  | "refreshed"
+  /** 클릭했을 때의 짧은 반응 (사용량을 말풍선으로 알려줌) */
+  | "poke";
 
 /** Rust settings::Settings (serde camelCase) */
 export interface AppSettings {
@@ -101,14 +109,34 @@ export interface AppSettings {
   weeklyAlertThreshold: number;
   resetNotifyMinutes: number;
   clickThrough: boolean;
-  hoverDelayMs: number;
+  panelPos: [number, number] | null;
+  panelSize: [number, number] | null;
+  settingsSize: [number, number] | null;
+  speechEnabled: boolean;
+  speechDurationMs: number;
   startHidden: boolean;
   characterPack: string | null;
   sleepAfterMinutes: number;
   characterRules: CharacterRule[];
   disabledStates: string[];
   showMiniLabel: boolean;
+  gaugeSide: GaugeSide;
+  /** 상황 키("enter.working"·"poke"·"resetNotify" 등) → 사용자 문구 목록 (비면 기본 문구) */
+  speechLines: Record<string, string[]>;
+  /** 이름 붙은 문구 세트(모델별 말투) — 세트에 없는 상황은 speechLines → 내장 기본 순 폴백 */
+  speechSets: Record<string, Record<string, string[]>>;
+  /** 모델 접두사 → 문구 세트 매핑 (최장 접두사 우선, 미매칭 시 기본 문구) */
+  speechRules: SpeechRule[];
 }
+
+/** 모델 접두사(콤마 구분) → 문구 세트 매핑 규칙 (캐릭터 규칙과 같은 방식) */
+export interface SpeechRule {
+  prefixes: string;
+  set: string;
+}
+
+/** 도넛 게이지 위치 — off면 표시하지 않음 */
+export type GaugeSide = "right" | "left" | "off";
 
 /** 모델 접두사(콤마 구분) → 캐릭터 팩 매핑 규칙 (최장 접두사 우선) */
 export interface CharacterRule {

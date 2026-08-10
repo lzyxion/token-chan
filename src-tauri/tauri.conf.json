@@ -15,8 +15,8 @@
       {
         "label": "pet",
         "title": "Token Pet",
-        "width": 150,
-        "height": 160,
+        "width": 220,
+        "height": 140,
         "transparent": true,
         "decorations": false,
         "alwaysOnTop": true,
@@ -28,9 +28,9 @@
       },
       {
         "label": "bubble",
-        "title": "Token Pet Info",
-        "width": 264,
-        "height": 240,
+        "title": "Token Pet Speech",
+        "width": 236,
+        "height": 96,
         "visible": false,
         "focus": false,
         "transparent": true,
@@ -40,6 +40,19 @@
         "resizable": false,
         "shadow": false,
         "visibleOnAllWorkspaces": true
+      },
+      {
+        "label": "panel",
+        "title": "Token Pet 사용량",
+        "width": 320,
+        "height": 262,
+        "visible": false,
+        "transparent": true,
+        "decorations": false,
+        "alwaysOnTop": true,
+        "skipTaskbar": true,
+        "resizable": false,
+        "shadow": false
       },
       {
         "label": "settings",

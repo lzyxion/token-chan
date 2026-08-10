@@ -3,16 +3,18 @@
 AI CLI(Claude Code · Codex CLI · Gemini CLI) 토큰 사용량을 **바탕화면 위 데스크톱 펫**으로 보여주는 Tauri 2 앱.
 
 - 투명·항상 위·프레임 없는 창에 캐릭터만 떠 있음 (드래그로 이동)
-- **마우스 호버 시** 말풍선으로 오늘 사용량/비용, 5시간 블록, 모델 분포 표시 (우클릭: 말풍선 고정)
+- **상황이 생기면** 캐릭터가 말풍선으로 한마디 — 한도 경고·소진, 블록 리셋, 작업 시작/종료, 잠자기/깨기 (몇 초 뒤 자동으로 사라짐)
+- **펫을 클릭하면** 폴짝 뛰며 지금 사용량을 말풍선으로 알려줌 (드래그는 그대로 이동)
+- **펫 우클릭**(또는 트레이)으로 사용량 패널 — 오늘 사용량/비용, 플랜 한도 게이지, 5시간 블록, 모델 분포. 원하는 자리로 옮겨 두면 위치를 기억
 - Claude Code 세션이 작업 중이면 캐릭터가 타자 모션, 블록 소진율 80%↑면 경고 표정, 30분 무활동이면 잠자기
-- 시스템 트레이: 펫 보이기 / 말풍선 고정 / 자동 시작 / 종료
+- 시스템 트레이: 펫 보이기 / 사용량 패널 / 설정 / 종료
 
 ## 아키텍처
 
 ```
 crates/usage-core   # 순수 Rust: 어댑터(claude/codex/gemini) + 집계/단가/5h블록 (cargo test 가능)
 src-tauri           # Tauri 앱: 창/트레이/IPC + 10초 폴링 스캔 스레드
-src                 # React: Pet(캐릭터) + Bubble(말풍선)
+src                 # React: Pet(캐릭터) + Speech(대사 말풍선) + UsagePanel(사용량) + SettingsPanel
 ```
 
 ### 데이터 소스별 상태
@@ -55,7 +57,8 @@ pnpm tauri build           # 패키징 (msi/dmg는 GitHub Actions 매트릭스 �
    ├─ alert.gif       # 한도 경고 (없으면 idle)
    ├─ sleep.gif       # 잠자기 (없으면 idle)
    ├─ exhausted.gif   # 세션 한도 100% 소진 (없으면 idle)
-   └─ refreshed.gif   # 블록 초기화 직후 (없으면 idle)
+   ├─ refreshed.gif   # 블록 초기화 직후 (없으면 idle)
+   └─ poke.gif        # 클릭했을 때의 반응 (없으면 idle)
 ```
 
 - 포맷: GIF / 애니메이션 WebP / APNG / 정적 PNG (**투명 배경 필수**)
