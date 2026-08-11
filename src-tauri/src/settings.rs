@@ -129,9 +129,9 @@ impl Default for Settings {
     }
 }
 
-/// 사용자 캐릭터 팩 루트 (`<config>/token-pet/characters/<팩이름>/idle.gif ...`)
+/// 사용자 캐릭터 팩 루트 (`<config>/token-chan/characters/<팩이름>/idle.gif ...`)
 pub fn characters_dir() -> Option<std::path::PathBuf> {
-    dirs::config_dir().map(|d| d.join("token-pet").join("characters"))
+    dirs::config_dir().map(|d| d.join("token-chan").join("characters"))
 }
 
 /// 팩 이름이 경로로 오용되지 못하게 막는다 (디렉토리 목록에서 온 이름만 유효).
@@ -189,7 +189,7 @@ pub const PET_BASE_W: f64 = 220.0;
 pub const PET_BASE_H: f64 = 140.0;
 
 pub fn config_path() -> Option<PathBuf> {
-    dirs::config_dir().map(|d| d.join("token-pet").join("settings.json"))
+    dirs::config_dir().map(|d| d.join("token-chan").join("settings.json"))
 }
 
 pub fn load() -> Settings {

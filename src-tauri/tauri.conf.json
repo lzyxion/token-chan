@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "TokenPet",
+  "productName": "TokenChan",
   "version": "0.1.0",
-  "identifier": "com.tokenpet.app",
+  "identifier": "com.tokenchan.app",
   "build": {
     "beforeDevCommand": "pnpm dev",
     "devUrl": "http://localhost:1420",
@@ -14,7 +14,7 @@
     "windows": [
       {
         "label": "pet",
-        "title": "Token Pet",
+        "title": "토큰쨩",
         "width": 220,
         "height": 140,
         "transparent": true,
@@ -28,7 +28,7 @@
       },
       {
         "label": "bubble",
-        "title": "Token Pet Speech",
+        "title": "토큰쨩 대사",
         "width": 236,
         "height": 96,
         "visible": false,
@@ -43,7 +43,7 @@
       },
       {
         "label": "panel",
-        "title": "Token Pet 사용량",
+        "title": "토큰쨩 사용량",
         "width": 320,
         "height": 410,
         "visible": false,
@@ -56,7 +56,7 @@
       },
       {
         "label": "settings",
-        "title": "Token Pet 설정",
+        "title": "토큰쨩 설정",
         "width": 320,
         "height": 650,
         "visible": false,
@@ -69,7 +69,7 @@
       },
       {
         "label": "studio",
-        "title": "Token Pet 캐릭터 스튜디오",
+        "title": "토큰쨩 캐릭터 스튜디오",
         "width": 680,
         "height": 560,
         "visible": false,

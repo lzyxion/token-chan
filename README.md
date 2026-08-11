@@ -1,4 +1,4 @@
-# Token Pet 🐱
+# 토큰쨩 (TokenChan) 🐱
 
 AI CLI(Claude Code · Codex CLI · Antigravity CLI) 토큰 사용량을 **바탕화면 위 데스크톱 펫**으로 보여주는 Tauri 2 앱.
 
@@ -165,7 +165,7 @@ pnpm tauri dev             # 앱 실행 (WSLg에서도 동작)
 pnpm tauri build           # 패키징 (msi/dmg는 GitHub Actions 매트릭스 빌드 권장)
 ```
 
-설정 파일: `~/.config/token-pet/settings.json` (펫 위치, 보존기간, 단가 오버라이드, 자동시작, 추가 스캔 경로)
+설정 파일: `~/.config/token-chan/settings.json` (펫 위치, 보존기간, 단가 오버라이드, 자동시작, 추가 스캔 경로)
 
 ### 연결된 계정
 
@@ -233,7 +233,7 @@ idle 폴백), 대사 편집이 전부 여기서 되고, 결과는 아래 팩 폴
 폴더를 직접 만들어도 됩니다:
 
 ```
-<설정폴더>/token-pet/characters/
+<설정폴더>/token-chan/characters/
 └─ my-cat/
    ├─ idle.gif        # 필수 — 평상시
    ├─ working.gif     # 작업 중 (없으면 idle)
