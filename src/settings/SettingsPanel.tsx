@@ -722,14 +722,14 @@ export default function SettingsPanel() {
             <label className="settings-check">
               <input
                 type="checkbox"
-                checked={s.showMiniLabel}
+                checked={s.gaugeLabels}
                 onChange={(e) =>
-                  update({ showMiniLabel: e.currentTarget.checked })
+                  update({ gaugeLabels: e.currentTarget.checked })
                 }
               />
-              미니 라벨 표시{" "}
+              게이지 라벨 상시 표시{" "}
               <span className="settings-hint-inline">
-                (발밑에 소진율·남은시간 상시)
+                (끄면 마우스를 올렸을 때만)
               </span>
             </label>
 
