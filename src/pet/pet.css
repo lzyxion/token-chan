@@ -38,7 +38,7 @@
   transform-origin: 50% 100%;
 }
 
-/* 캐릭터 + 그림자 + 미니 라벨 세로 묶음 */
+/* 캐릭터 + 그림자 세로 묶음 */
 .char-col {
   display: flex;
   flex-direction: column;
@@ -94,25 +94,6 @@
   max-height: 100%;
   object-fit: contain;
   -webkit-user-drag: none;
-}
-
-/* ── 리셋까지 남은 시간 (발밑 가로 바) ──
-   소진율 링과 성격이 정반대다: 시간은 선형이고, 다 차는 순간이 리셋(=좋음)이다.
-   그래서 모양(막대)과 색(파랑)을 링과 분리해 한눈에 다른 축임을 알 수 있게 했다.
-   그림자 폭에 맞춰 캐릭터 밑에 깔리므로 세로 여백을 거의 먹지 않는다. */
-.reset-bar {
-  width: 84px;
-  height: 3px;
-  margin-top: 1px;
-  border-radius: 2px;
-  background: rgba(255, 255, 255, 0.14);
-  overflow: hidden;
-}
-.reset-bar-fill {
-  height: 100%;
-  border-radius: 2px;
-  background: #63b3e4;
-  transition: width 0.4s ease;
 }
 
 /* ── 소진율 도넛 열 (세션 5h · 주간 · 컨텍스트) ──
@@ -198,8 +179,9 @@
   }
 }
 
-/* 라벨은 캐릭터(=창)에 마우스를 올렸을 때만 보인다.
-   자리는 항상 차지하므로 나타날 때 배치가 흔들리지 않는다. */
+/* 라벨은 기본적으로 캐릭터(=창)에 마우스를 올렸을 때만 보인다.
+   자리는 항상 차지하므로 나타날 때 배치가 흔들리지 않는다.
+   (설정 "게이지 라벨 상시 표시" → .labels-on 이 항상 펼쳐 둔다) */
 .gauge-label {
   padding: 2px 5px;
   border-radius: 6px;
@@ -216,21 +198,9 @@
   font-weight: 800;
   color: rgba(232, 234, 240, 0.98);
 }
-.pet:hover .gauge-label {
+.pet:hover .gauge-label,
+.gauge.labels-on .gauge-label {
   opacity: 1;
-}
-
-/* ── 미니 라벨 (옵션) ── */
-.mini-label {
-  margin-top: -1px;
-  font-size: 9.5px;
-  font-weight: 600;
-  letter-spacing: 0.2px;
-  color: rgba(232, 234, 240, 0.8);
-  background: rgba(18, 21, 28, 0.6);
-  padding: 1px 8px;
-  border-radius: 8px;
-  white-space: nowrap;
 }
 
 .pet.poke .cat {

@@ -157,7 +157,8 @@ export interface AppSettings {
   sleepAfterMinutes: number;
   characterRules: CharacterRule[];
   disabledStates: string[];
-  showMiniLabel: boolean;
+  /** 게이지 라벨(벤더·수치·리셋) 상시 표시 — 끄면 호버할 때만 */
+  gaugeLabels: boolean;
   gaugeSide: GaugeSide;
   /** 상황 키("enter.working"·"poke"·"resetNotify" 등) → 사용자 문구 목록 (비면 기본 문구) */
   speechLines: Record<string, string[]>;

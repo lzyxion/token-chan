@@ -64,9 +64,6 @@ function ringColor(pct: number): string {
   return "#35d07f";
 }
 
-/** 5시간 블록 (분) */
-const BLOCK_MINUTES = 300;
-
 /** 활성 모델 → 캐릭터 팩 결정 (최장 접두사 매칭, 미매칭 시 기본 팩) */
 function resolvePack(
   model: string | null,
@@ -107,7 +104,7 @@ export default function Pet() {
   const [rules, setRules] = useState<CharacterRule[]>([]);
   const [defaultPack, setDefaultPack] = useState<string | null>(null);
   const [disabledStates, setDisabledStates] = useState<string[]>([]);
-  const [showMiniLabel, setShowMiniLabel] = useState(false);
+  const [gaugeLabels, setGaugeLabels] = useState(false);
   const [gaugeSide, setGaugeSide] = useState<GaugeSide>("right");
   const [speechLines, setSpeechLines] = useState<Record<string, string[]>>({});
   const [speechSets, setSpeechSets] = useState<Record<string, Record<string, string[]>>>({});
@@ -129,7 +126,7 @@ export default function Pet() {
       setRules(s.characterRules ?? []);
       setDefaultPack(s.characterPack ?? null);
       setDisabledStates(s.disabledStates ?? []);
-      setShowMiniLabel(s.showMiniLabel ?? false);
+      setGaugeLabels(s.gaugeLabels ?? false);
       setGaugeSide(s.gaugeSide ?? "right");
       setGaugeVendor(s.gaugeVendor ?? "auto");
       setSpeechLines(s.speechLines ?? {});
@@ -182,7 +179,7 @@ export default function Pet() {
   // 사용자 팩 우선, 없으면 내장 기본 이미지 팩 (그것도 없으면 CSS 캐릭터)
   const activeImages = packImages ?? DEFAULT_PACK_IMAGES;
 
-  // 미니 라벨용 리셋 카운트다운 (summary 갱신 주기(10s)에 맞춰 재계산)
+  // 세션 라벨·대사 변수용 리셋 카운트다운 (summary 갱신 주기(10s)에 맞춰 재계산)
   const resetRemainMin = useMemo(() => {
     const resets = plan?.meters?.[0]?.resets;
     if (!resets) return null;
@@ -191,13 +188,6 @@ export default function Pet() {
     return Math.max(0, Math.round((d.getTime() - Date.now()) / 60000));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [plan, summary?.generated_at]);
-
-  // 리셋까지 남은 시간 → 블록 경과율. 다 차는 순간이 곧 리셋이다.
-  // (창 크기 재계산 effect 의 의존성이라 그보다 위에서 선언해야 한다)
-  const blockElapsedPct =
-    resetRemainMin == null
-      ? null
-      : Math.round(Math.min(100, Math.max(0, (1 - resetRemainMin / BLOCK_MINUTES) * 100)));
 
   // 블록 초기화 감지: 공식 리셋 시각 문자열이 바뀌면 새 5시간 윈도우 시작 → 5분간 refreshed
   const [refreshedUntil, setRefreshedUntil] = useState(0);
@@ -262,7 +252,7 @@ export default function Pet() {
 
   // 캐릭터(팩 이미지 포함)의 실측 위치 — 말풍선을 머리 위·가로 중심에 맞추는 기준값.
   // 게이지 열 때문에 캐릭터가 창 중앙이 아니므로 중심 x도 함께 보고한다.
-  // 발밑 여백(footroom)도 같이 — 말풍선이 아래로 뒤집힐 때 그림자·미니 라벨·무대 패딩만큼
+  // 발밑 여백(footroom)도 같이 — 말풍선이 아래로 뒤집힐 때 그림자·무대 패딩만큼
   // 파고들어야 위로 띄울 때와 간격이 같아진다.
   const reportAnchor = () => {
     const el = charRef.current;
@@ -315,14 +305,12 @@ export default function Pet() {
     scale,
     packImages,
     state,
-    showMiniLabel,
     gaugeSide,
     sessionPct != null,
     weeklyPct != null,
     active?.source,
     active?.context != null,
     plan?.meters?.length,
-    blockElapsedPct != null,
   ]);
 
   // 드래그로 이동한 위치를 저장 (연속 이벤트 debounce)
@@ -451,15 +439,15 @@ export default function Pet() {
 
   // ── 도넛 게이지 열 (세션 5h · 주간 · 컨텍스트) ──
   // 셋 다 "%가 오르면 나빠진다"는 성격이 같아 같은 모양·같은 색 규칙으로 묶인다.
-  // 리셋까지 남은 시간은 성격이 반대(다 차면 좋음)라 발밑 가로 바로 분리했다.
+  // 리셋까지 남은 시간은 전용 줄 없이 세션 라벨에 텍스트로 붙인다 — 그 미터의 창이
+  // 리셋되는 시각이라 의미가 같은 줄이고, 줄을 더 쌓으면 열이 포화된다.
   // .stage 안이라 캐릭터와 같은 배율로 커지고, 라벨은 캐릭터 반대쪽(바깥)으로 뻗는다.
   const ctx = active?.context ?? null;
   const contextPct = ctx ? Math.round(ctx.used_pct) : null;
 
   /**
    * 링 한 줄. `pct`가 null 이면 **값이 없다**는 뜻이라 0%처럼 보이면 안 된다 —
-   * 점선 테두리로 "이 벤더는 이 값을 안 알려줌"과 "0%"를 구분한다.
-   * (agy 는 공식 한도가 없어 링 2·3이 늘 비어 있다)
+   * 점선 테두리로 "아직 모름"과 "0%"를 구분한다 (컨텍스트가 아직 안 잡힌 경우).
    */
   const ringRow = (key: string, pct: number | null, label: React.ReactNode) => (
     <div className="gauge-row" key={key}>
@@ -483,25 +471,27 @@ export default function Pet() {
   const meterRow = (slot: number) => {
     const m = meters[slot];
     const key = `meter${slot}`;
-    if (!m) {
-      return ringRow(key, null, <>한도 정보 없음</>);
-    }
+    // 한도를 안 주는 벤더(agy)·창이 하나뿐인 벤더(Codex free)는 빈 줄 대신 줄 자체를 숨긴다
+    if (!m) return null;
     const label = m.label.replace("Current session", "세션 5h").replace("Current week", "주간");
     return ringRow(
       key,
       m.used_pct,
       <>
         {label} <b>{m.used_pct}%</b>
+        {/* 리셋은 첫 미터(가장 짧은 창)의 것 — 그 창이 리셋되는 시각이라 같은 줄에 얹는다 */}
+        {slot === 0 && resetRemainMin != null ? <> · 리셋 {fmtMinutes(resetRemainMin)}</> : null}
       </>,
     );
   };
 
-  // 링 개수를 벤더마다 바꾸면 열 높이가 널뛰어 캐릭터 세로 중심이 흔들린다.
-  // 그래서 항상 3줄을 유지하고, 값이 없는 줄만 빈 링으로 둔다.
+  // 열 높이는 벤더의 미터 수에 따라 달라진다 — 한도 없는 벤더에 빈 링을 채워
+  // 3줄을 고정하는 것보다 짧은 열이 낫다는 판단. 창 크기는 meters.length 가
+  // 바뀔 때 다시 맞춘다 (fit effect 의존성).
   const gauges =
     gaugeSide === "off" || active == null ? null : (
-      <div className={`gauge ${gaugeSide}`}>
-        {/* 벤더 로고 — 평상시 라벨이 안 보이므로(호버 전용) 이게 벤더를 밝히는 유일한 수단이다 */}
+      <div className={`gauge ${gaugeSide}${gaugeLabels ? " labels-on" : ""}`}>
+        {/* 벤더 로고 — 라벨이 접혀 있으면(기본) 이게 벤더를 밝히는 유일한 수단이다 */}
         <div className="gauge-row" key="vendor">
           <VendorIcon
             source={active.source}
@@ -525,14 +515,6 @@ export default function Pet() {
           : ringRow("context", null, <>컨텍스트 <b>—</b></>)}
         {meterRow(0)}
         {meterRow(1)}
-      </div>
-    );
-
-  // 리셋 바: 시간은 선형이라 막대가 자연스럽고, 왼쪽에서 차올라 리셋되는 서사가 링보다 직관적이다.
-  const resetBar =
-    gaugeSide === "off" || blockElapsedPct == null ? null : (
-      <div className="reset-bar">
-        <div className="reset-bar-fill" style={{ width: `${blockElapsedPct}%` }} />
       </div>
     );
 
@@ -572,12 +554,6 @@ export default function Pet() {
           <div className="sweat">💦</div>
         </div>
         <div className="ground-shadow" />
-        {resetBar}
-        {showMiniLabel && sessionPct != null && (
-          <div className="mini-label">
-            {sessionPct}%{resetRemainMin != null ? ` · ${fmtMinutes(resetRemainMin)}` : ""}
-          </div>
-        )}
         </div>
         {gaugeSide === "right" && gauges}
       </div>

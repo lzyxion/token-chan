@@ -62,8 +62,10 @@ pub struct Settings {
     pub character_rules: Vec<CharacterRule>,
     /// 비활성화한 펫 상태 목록 (working/alert/sleep/exhausted/refreshed)
     pub disabled_states: Vec<String>,
-    /// 발밑 미니 라벨 (소진율·남은시간) 상시 표시
-    pub show_mini_label: bool,
+    /// 게이지 라벨(벤더·수치·리셋) 상시 표시 — 끄면 호버할 때만 펼쳐진다.
+    /// 예전 "발밑 미니 라벨" 설정을 전환한 것이라 옛 키를 alias 로 읽는다.
+    #[serde(alias = "showMiniLabel")]
+    pub gauge_labels: bool,
     /// 도넛 게이지 위치 — "right" | "left" | "off"
     pub gauge_side: String,
     /// 상황별 사용자 문구 — 키("enter.working"·"poke"·"resetNotify" 등) → 문구 목록.
@@ -121,7 +123,7 @@ impl Default for Settings {
             sleep_after_minutes: 30,
             character_rules: vec![],
             disabled_states: vec![],
-            show_mini_label: false,
+            gauge_labels: false,
             gauge_side: "right".into(),
             speech_lines: Default::default(),
             speech_sets: Default::default(),
@@ -164,5 +166,15 @@ pub fn save(settings: &Settings) {
     }
     if let Ok(json) = serde_json::to_string_pretty(settings) {
         let _ = std::fs::write(path, json);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    /// "발밑 미니 라벨" 시절 키가 게이지 라벨 설정으로 넘어와야 한다
+    #[test]
+    fn old_show_mini_label_key_migrates() {
+        let s: super::Settings = serde_json::from_str(r#"{"showMiniLabel": true}"#).unwrap();
+        assert!(s.gauge_labels);
     }
 }
