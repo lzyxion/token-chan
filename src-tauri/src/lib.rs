@@ -199,6 +199,7 @@ pub fn run() {
             commands::get_plan,
             commands::get_settings,
             commands::set_settings,
+            commands::set_gauge_vendor,
             commands::save_pet_position,
             commands::set_pet_scale,
             commands::fit_pet_window,

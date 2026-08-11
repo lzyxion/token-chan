@@ -71,6 +71,23 @@ pub fn set_settings(app: AppHandle, state: State<'_, AppState>, mut new_settings
     let _ = app.emit("settings-changed", &new_settings);
 }
 
+/// 게이지 벤더 전환 — 펫의 로고 클릭용 빠른 경로 (설정 창을 안 거친다)
+#[tauri::command]
+pub fn set_gauge_vendor(app: AppHandle, vendor: String) {
+    if !["auto", "claude", "codex", "antigravity"].contains(&vendor.as_str()) {
+        return;
+    }
+    let updated = {
+        let state = app.state::<AppState>();
+        let mut s = state.settings.lock().unwrap();
+        s.gauge_vendor = vendor;
+        settings::save(&s);
+        s.clone()
+    };
+    use tauri::Emitter;
+    let _ = app.emit("settings-changed", &updated);
+}
+
 /// 클릭 통과 모드 켜기/끄기 (트레이·펫 우클릭 메뉴 공용 진입점).
 /// 설정 저장 + 창 적용 + 트레이 체크 표시·설정 패널 동기화까지 한 번에 처리한다.
 pub fn set_click_through(app: &AppHandle, on: bool) {
