@@ -1,10 +1,69 @@
 //! 시스템 트레이 아이콘 + 메뉴. 창 닫기 대신 트레이에서 종료한다.
 
-use tauri::menu::{CheckMenuItem, Menu, MenuItem};
+use tauri::menu::{CheckMenuItem, IsMenuItem, Menu, MenuItem, PredefinedMenuItem, Submenu};
 use tauri::tray::TrayIconBuilder;
 use tauri::{AppHandle, Manager};
+use usage_core::model::Source;
 
-pub fn create(app: &AppHandle) -> tauri::Result<()> {
+/// "연결된 계정" 서브메뉴. 같은 계정의 설치본은 한 줄로 묶여 나오고,
+/// 체크가 곧 집계 포함 여부다.
+///
+/// `prefix` 는 펫 우클릭 메뉴에서 트레이와 id 가 겹치지 않게 붙이는 접두사.
+fn accounts_submenu(app: &AppHandle, prefix: &str) -> tauri::Result<Submenu<tauri::Wry>> {
+    let (accounts, overrides) = {
+        let state = app.state::<crate::AppState>();
+        // 두 락을 겹쳐 잡지 않는다
+        let ov = { state.settings.lock().unwrap().accounts_enabled.clone() };
+        let ac = { state.accounts.lock().unwrap().clone() };
+        (ac, ov)
+    };
+
+    let mut items: Vec<Box<dyn IsMenuItem<tauri::Wry>>> = vec![];
+    if accounts.is_empty() {
+        items.push(Box::new(MenuItem::with_id(
+            app,
+            format!("{prefix}acctnone"),
+            "발견된 계정 없음",
+            false,
+            None::<&str>,
+        )?));
+    }
+    for a in &accounts {
+        let src = match a.source {
+            Source::Claude => "Claude",
+            Source::Codex => "Codex",
+            Source::Antigravity => "AGY",
+        };
+        // 어떤 계정인지만 알면 되므로 계정명만 — 플랜·설치 수·경로는 설정 창에 있다
+        items.push(Box::new(CheckMenuItem::with_id(
+            app,
+            format!("{prefix}acct:{}", a.setting_key()),
+            format!("{src} · {}", a.label),
+            true,
+            crate::monitor::account_enabled(a, &overrides),
+            None::<&str>,
+        )?));
+    }
+    items.push(Box::new(PredefinedMenuItem::separator(app)?));
+    items.push(Box::new(MenuItem::with_id(app, format!("{prefix}acctadd:claude"), "Claude 홈 추가…", true, None::<&str>)?));
+    items.push(Box::new(MenuItem::with_id(app, format!("{prefix}acctadd:codex"), "Codex 홈 추가…", true, None::<&str>)?));
+    items.push(Box::new(MenuItem::with_id(app, format!("{prefix}acctadd:antigravity"), "AGY 홈 추가…", true, None::<&str>)?));
+    items.push(Box::new(MenuItem::with_id(app, format!("{prefix}acctrescan"), "다시 검색", true, None::<&str>)?));
+
+    let refs: Vec<&dyn IsMenuItem<tauri::Wry>> = items.iter().map(|b| b.as_ref()).collect();
+    Submenu::with_id_and_items(app, format!("{prefix}accounts"), "연결된 계정", true, &refs)
+}
+
+/// 계정 목록이 바뀌면 트레이 메뉴를 다시 만든다 (트레이는 시작 시 한 번만 만들어져서
+/// 그냥 두면 체크 상태와 목록이 낡는다). 펫 우클릭 메뉴는 열 때마다 새로 만들어 무관.
+pub fn refresh_menu(app: &AppHandle) {
+    let Some(tray) = app.tray_by_id("main") else { return };
+    if let Ok(menu) = build_tray_menu(app) {
+        let _ = tray.set_menu(Some(menu));
+    }
+}
+
+fn build_tray_menu(app: &AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
     let click_through = {
         let state = app.state::<crate::AppState>();
         let s = state.settings.lock().unwrap();
@@ -12,6 +71,7 @@ pub fn create(app: &AppHandle) -> tauri::Result<()> {
     };
     let show = MenuItem::with_id(app, "show", "펫 보이기/숨기기", true, None::<&str>)?;
     let panel = MenuItem::with_id(app, "panel", "사용량 패널 열기/닫기", true, None::<&str>)?;
+    let accounts = accounts_submenu(app, "")?;
     // 클릭 통과를 켜면 펫이 마우스를 전혀 받지 않아 우클릭으로 되돌릴 수 없다
     // → 해제 경로인 이 트레이 항목이 유일한 출구이므로 반드시 여기 있어야 한다.
     let ct = CheckMenuItem::with_id(
@@ -24,8 +84,15 @@ pub fn create(app: &AppHandle) -> tauri::Result<()> {
     )?;
     let settings_item = MenuItem::with_id(app, "settings", "설정…", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", "종료", true, None::<&str>)?;
-    let menu = Menu::with_items(app, &[&show, &panel, &ct, &settings_item, &quit])?;
+    let menu = Menu::with_items(app, &[&show, &panel, &accounts, &ct, &settings_item, &quit])?;
+    // 메뉴를 다시 만들 때마다 새 체크 항목으로 교체 — 옛 항목을 붙들고 있으면
+    // sync_click_through 가 화면에 없는 항목을 건드리게 된다
     *app.state::<crate::AppState>().tray_click_through.lock().unwrap() = Some(ct);
+    Ok(menu)
+}
+
+pub fn create(app: &AppHandle) -> tauri::Result<()> {
+    let menu = build_tray_menu(app)?;
 
     TrayIconBuilder::with_id("main")
         .icon(app.default_window_icon().expect("기본 아이콘 없음").clone())
@@ -102,8 +169,67 @@ pub fn handle_action(app: &AppHandle, action: &str) {
                 crate::commands::set_click_through(app, on);
             }
             "quit" => app.exit(0),
+            // 계정 토글 — id 의 나머지가 곧 Account::setting_key()
+            a if a.starts_with("acct:") => toggle_account(app, &a["acct:".len()..]),
+            "acctrescan" => {
+                crate::monitor::rediscover(app);
+                refresh_menu(app);
+            }
+            a if a.starts_with("acctadd:") => pick_home(app, &a["acctadd:".len()..]),
             _ => {}
     }
+}
+
+/// 계정의 집계 포함 여부를 뒤집는다.
+fn toggle_account(app: &AppHandle, setting_key: &str) {
+    let state = app.state::<crate::AppState>();
+    let accounts = { state.accounts.lock().unwrap().clone() };
+    let Some(account) = accounts.iter().find(|a| a.setting_key() == setting_key) else {
+        return;
+    };
+    let updated = {
+        let mut s = state.settings.lock().unwrap();
+        let now = crate::monitor::account_enabled(account, &s.accounts_enabled);
+        s.accounts_enabled.insert(setting_key.to_string(), !now);
+        crate::settings::save(&s);
+        s.clone()
+    };
+    refresh_menu(app);
+    use tauri::Emitter;
+    let _ = app.emit("settings-changed", &updated);
+}
+
+/// 폴더 선택으로 스캔 경로 추가. 다이얼로그는 메인 스레드를 막으면 안 되므로 별도 스레드에서.
+fn pick_home(app: &AppHandle, source: &str) {
+    use tauri_plugin_dialog::DialogExt;
+    let app = app.clone();
+    let source = source.to_string();
+    std::thread::spawn(move || {
+        let Some(picked) = app.dialog().file().blocking_pick_folder() else { return };
+        let Ok(path) = picked.into_path() else { return };
+        let path = path.display().to_string();
+
+        let updated = {
+            let state = app.state::<crate::AppState>();
+            let mut s = state.settings.lock().unwrap();
+            let list = match source.as_str() {
+                "codex" => &mut s.extra_codex_homes,
+                "antigravity" => &mut s.extra_antigravity_homes,
+                _ => &mut s.extra_claude_homes,
+            };
+            if list.iter().any(|p| p == &path) {
+                return; // 이미 있는 경로 — 중복 등록 방지
+            }
+            list.push(path);
+            crate::settings::save(&s);
+            s.clone()
+        };
+        // 새 경로가 어떤 계정인지 알아야 목록에 뜨므로 다시 발견한다
+        crate::monitor::rediscover(&app);
+        refresh_menu(&app);
+        use tauri::Emitter;
+        let _ = app.emit("settings-changed", &updated);
+    });
 }
 
 /// 트레이 메뉴의 클릭 통과 체크 표시를 현재 값에 맞춘다.
@@ -144,9 +270,10 @@ pub fn popup_pet_menu(app: &AppHandle) -> tauri::Result<()> {
         click_through,
         None::<&str>,
     )?;
+    let accounts = accounts_submenu(app, "petmenu:")?;
     let settings_item = MenuItem::with_id(app, "petmenu:settings", "설정…", true, None::<&str>)?;
     let sep = PredefinedMenuItem::separator(app)?;
     let quit = MenuItem::with_id(app, "petmenu:quit", "종료", true, None::<&str>)?;
-    let menu = Menu::with_items(app, &[&hide, &panel, &ct, &settings_item, &sep, &quit])?;
+    let menu = Menu::with_items(app, &[&hide, &panel, &accounts, &ct, &settings_item, &sep, &quit])?;
     menu.popup(pet.as_ref().window())
 }

@@ -1,7 +1,16 @@
-//! 공식 플랜 한도 미터 (`claude -p "/usage"` 출력 파싱).
+//! 공식 플랜 한도 미터.
 //!
-//! Claude Code가 자체 OAuth로 조회하는 **계정 공식** 세션/주간 소진율이다
-//! (로컬 추정치와 달리 다른 기기 사용량까지 반영됨). 모델 호출이 없어 비용 없음.
+//! 계정의 **공식** 소진율이다 — 로컬 추정치와 달리 다른 기기 사용량까지 반영된다.
+//! 소스마다 얻는 경로가 다르다:
+//!
+//! | 소스 | 경로 | 비용 |
+//! |---|---|---|
+//! | Claude | `claude -p "/usage"` 출력 파싱 (이 파일) | 프로세스 1회 실행 |
+//! | Codex | rollout 의 `token_count` → `payload.rate_limits` ([`crate::codex`]) | 0 (이미 읽는 파일) |
+//! | Antigravity | **없음** — `quota_manager` 가 서버에서 받아 메모리에만 둔다 | — |
+//!
+//! Codex 쪽이 더 좋은 경로다: 서버가 준 값이 이미 파일에 있어서 프로세스를 띄울 필요가
+//! 없고, 리셋 시각도 문자열이 아니라 unix 타임스탬프로 정확히 온다.
 //!
 //! 관찰된 출력 형식 (Claude Code 2.1.220):
 //! ```text
@@ -15,25 +24,51 @@
 use chrono::{DateTime, Utc};
 use serde::Serialize;
 
+use crate::model::Source;
+
 #[derive(Clone, Debug, Serialize, PartialEq)]
 pub struct PlanMeter {
-    /// 예: "Current session", "Current week (all models)"
+    /// 예: "Current session", "Current week (all models)", "월간"
     pub label: String,
     pub used_pct: u8,
-    /// 리셋 시각 원문 (예: "Jul 30, 7:10pm (Asia/Seoul)")
+    /// 리셋 시각 원문 (예: "Jul 30, 7:10pm (Asia/Seoul)"). 소스가 문자열로만 줄 때 쓴다.
     pub resets: String,
+    /// 소스가 정확한 시각을 준 경우 (Codex 의 `resets_at`). 있으면 이쪽이 정답이라
+    /// 프론트가 `resets` 문자열을 파싱할 필요가 없다.
+    pub resets_at: Option<DateTime<Utc>>,
 }
 
 #[derive(Clone, Debug, Serialize)]
 pub struct PlanUsage {
+    pub source: Source,
     pub meters: Vec<PlanMeter>,
+    /// 플랜 종류 등 부가 정보 (예: "free"). 없으면 빈 문자열.
+    pub detail: String,
     pub fetched_at: DateTime<Utc>,
 }
 
 impl PlanUsage {
-    /// 첫 미터(세션)의 소진율 — 캐릭터 경고 상태 판단용
+    /// 첫 미터(가장 짧은 창 = 세션)의 소진율 — 캐릭터 경고 상태 판단용
     pub fn session_pct(&self) -> Option<u8> {
         self.meters.first().map(|m| m.used_pct)
+    }
+}
+
+/// 한도 창 길이(분) → 사람이 읽는 이름.
+/// Codex 는 창을 분으로만 알려주고 이름을 주지 않는다 (관측: free 는 43,200분 = 월간,
+/// 유료는 5시간 + 주간 조합으로 알려져 있다).
+pub fn window_label(minutes: u64) -> String {
+    match minutes {
+        0 => "한도".into(),
+        60 => "1시간".into(),
+        300 => "5시간".into(),
+        1440 => "일간".into(),
+        10080 => "주간".into(),
+        43200 => "월간".into(),
+        m if m % 10080 == 0 => format!("{}주", m / 10080),
+        m if m % 1440 == 0 => format!("{}일", m / 1440),
+        m if m % 60 == 0 => format!("{}시간", m / 60),
+        m => format!("{m}분"),
     }
 }
 
@@ -65,12 +100,19 @@ pub fn parse_usage_output(text: &str, now: DateTime<Utc>) -> Option<PlanUsage> {
             .map(|i| line[i + "resets ".len()..].trim().to_string())
             .unwrap_or_default();
 
-        meters.push(PlanMeter { label, used_pct: pct.min(100), resets });
+        // Claude 는 리셋을 문자열로만 준다 — 정확한 시각은 프론트가 로컬 타임존
+        // 기준으로 해석해야 해서(`parse_reset_datetime`) 여기서 채우지 않는다.
+        meters.push(PlanMeter { label, used_pct: pct.min(100), resets, resets_at: None });
     }
     if meters.is_empty() {
         return None;
     }
-    Some(PlanUsage { meters, fetched_at: now })
+    Some(PlanUsage {
+        source: Source::Claude,
+        meters,
+        detail: String::new(),
+        fetched_at: now,
+    })
 }
 
 /// `claude -p "/usage"` 를 실행해 공식 한도를 조회.

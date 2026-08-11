@@ -161,6 +161,15 @@
   color: #8a93a5;
   font-size: 9.5px;
 }
+.plan-detail {
+  color: #6c7488;
+}
+/* 어느 CLI 세션이 움직이는지 — 본문과 같은 줄에 붙되 눈에 덜 띄게 */
+.live-sources {
+  margin-left: 6px;
+  color: #8a93a5;
+  font-size: 9.5px;
+}
 
 .bar {
   height: 5px;

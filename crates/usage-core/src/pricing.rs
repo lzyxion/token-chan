@@ -22,6 +22,10 @@ pub struct Price {
     pub cw: f64,
     /// cache read
     pub cr: f64,
+    /// 컨텍스트 창 크기(토큰). 확인된 모델에만 채워져 있고, 없으면 `context` 모듈이
+    /// 기본값에서 시작해 실제 관측치로 승격한다.
+    #[serde(default)]
+    pub ctx: Option<u64>,
 }
 
 #[derive(Deserialize)]
@@ -72,6 +76,11 @@ impl PriceTable {
             .iter()
             .find(|(prefix, _)| model.starts_with(prefix.as_str()))
             .map(|(_, p)| *p)
+    }
+
+    /// 모델의 컨텍스트 창(토큰). 단가표에 `ctx` 가 없으면 None.
+    pub fn context_window(&self, model: &str) -> Option<u64> {
+        self.lookup(model).and_then(|p| p.ctx)
     }
 
     /// 이벤트 비용(USD). 단가 미등록 모델은 None.

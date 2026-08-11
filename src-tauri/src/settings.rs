@@ -74,6 +74,24 @@ pub struct Settings {
         std::collections::HashMap<String, std::collections::HashMap<String, Vec<String>>>,
     /// 모델 접두사 → 문구 세트 매핑 (최장 접두사 우선, 미매칭 시 기본 문구)
     pub speech_rules: Vec<SpeechRule>,
+    /// 추가로 스캔할 Claude 홈 (`.claude` 디렉토리). 그 아래 `projects`/`sessions` 를 본다.
+    ///
+    /// 자동 탐지는 프로세스 환경에 의존한다 — 트레이에서 뜬 앱은 터미널의 환경변수를
+    /// 물려받지 못한다. 여기 적어 두면 실행 방식과 무관하게 항상 같은 범위를 본다.
+    /// 자동 탐지분과 겹쳐도 어댑터의 이벤트 dedup 이 중복 집계를 막는다.
+    pub extra_claude_homes: Vec<String>,
+    /// 추가로 스캔할 Codex 홈 (`CODEX_HOME` 에 해당). 그 아래 `sessions`/`archived_sessions`.
+    pub extra_codex_homes: Vec<String>,
+    /// 추가로 스캔할 Antigravity CLI(`agy`) 홈 (`antigravity-cli` 디렉토리).
+    /// 그 아래 `conversations/<uuid>.db` 를 본다.
+    pub extra_antigravity_homes: Vec<String>,
+    /// 계정별 집계 포함 여부의 **사용자 지정값**만 담는다 (`Account::setting_key()` → on/off).
+    ///
+    /// 여기 없는 계정은 기본값을 따른다: 표준 위치(홈·WSL·환경변수·직접 추가)에서 발견된
+    /// 계정은 켜고, 마커 스캔으로만 나온 처음 보는 계정은 꺼둔다. 오래된 백업이나 남의
+    /// 계정이 조용히 합산되는 게 가장 나쁜 실패 모드라서다. 같은 계정의 새 설치본은
+    /// 이미 켜진 계정에 합류하므로 자동으로 포함된다.
+    pub accounts_enabled: std::collections::HashMap<String, bool>,
 }
 
 impl Default for Settings {
@@ -103,6 +121,10 @@ impl Default for Settings {
             speech_lines: Default::default(),
             speech_sets: Default::default(),
             speech_rules: vec![],
+            extra_claude_homes: vec![],
+            extra_codex_homes: vec![],
+            extra_antigravity_homes: vec![],
+            accounts_enabled: Default::default(),
         }
     }
 }

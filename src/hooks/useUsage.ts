@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import type { LiveState, PlanUsage, Summary } from "../types";
+import type { LiveState, PlanUsage, Source, Summary } from "../types";
 
 /** 요약 데이터 구독: 초기 invoke + usage-updated 이벤트 */
 export function useSummary(): Summary | null {
@@ -22,23 +22,32 @@ export function useSummary(): Summary | null {
   return summary;
 }
 
-/** 공식 플랜 한도 구독: 초기 invoke + plan-updated 이벤트 (claude CLI 미설치 시 null 유지) */
-export function usePlan(): PlanUsage | null {
-  const [plan, setPlan] = useState<PlanUsage | null>(null);
+/**
+ * 소스별 공식 플랜 한도 구독: 초기 invoke + plan-updated 이벤트.
+ * 한도를 알 수 있는 소스만 들어온다 — Claude(CLI 설치 시)와 Codex(rollout 에 있음).
+ * agy 는 서버에서 받아 메모리에만 둬서 여기 안 들어온다.
+ */
+export function usePlans(): PlanUsage[] {
+  const [plans, setPlans] = useState<PlanUsage[]>([]);
   useEffect(() => {
     let alive = true;
-    invoke<PlanUsage | null>("get_plan").then((p) => {
-      if (alive && p) setPlan(p);
+    invoke<PlanUsage[]>("get_plan").then((p) => {
+      if (alive && p) setPlans(p);
     });
-    const un = listen<PlanUsage>("plan-updated", (e) => {
-      if (alive) setPlan(e.payload);
+    const un = listen<PlanUsage[]>("plan-updated", (e) => {
+      if (alive) setPlans(e.payload);
     });
     return () => {
       alive = false;
       un.then((f) => f());
     };
   }, []);
-  return plan;
+  return plans;
+}
+
+/** 특정 소스의 한도만 (없으면 null) */
+export function usePlanOf(source: Source): PlanUsage | null {
+  return usePlans().find((p) => p.source === source) ?? null;
 }
 
 /** 라이브 세션 상태 구독: 초기 invoke + live-state 이벤트 */

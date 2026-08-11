@@ -10,6 +10,9 @@ serde_json = "1"
 chrono = { version = "0.4", features = ["serde"] }
 walkdir = "2"
 dirs = "6"
+# Antigravity CLI 는 대화를 SQLite 로 남긴다. bundled 로 붙여야 사용자 머신에
+# sqlite3 설치를 요구하지 않는다.
+rusqlite = { version = "0.32", features = ["bundled"] }
 
 [dev-dependencies]
 tempfile = "3"

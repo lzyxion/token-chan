@@ -1,0 +1,39 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 104 96" width="104" height="96">
+  <defs>
+    <linearGradient id="shell" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#fff2e6"/><stop offset="100%" stop-color="#ffc9a3"/>
+    </linearGradient>
+    <linearGradient id="liq" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#ffb287"/><stop offset="100%" stop-color="#e2603a"/>
+    </linearGradient>
+    <clipPath id="body">
+      <path d="M6 82C6 44 24 16 52 16C80 16 98 44 98 82C98 88 88 93 52 93C16 93 6 88 6 82Z"/>
+    </clipPath>
+  </defs>
+
+  <path d="M6 82C6 44 24 16 52 16C80 16 98 44 98 82C98 88 88 93 52 93C16 93 6 88 6 82Z"
+        fill="url(#shell)" fill-opacity=".92" stroke="#b8481f" stroke-width="2.4"/>
+
+  <g clip-path="url(#body)">
+    <ellipse cx="52" cy="76" rx="58" ry="4.5" fill="#ffb287"/>
+    <rect x="-6" y="76" width="116" height="32" fill="url(#liq)"/>
+    <ellipse cx="52" cy="93" rx="46" ry="16" fill="#93381a" opacity=".3"/>
+  </g>
+
+  <ellipse cx="33" cy="37" rx="13" ry="8.5" fill="#fff" opacity=".5" transform="rotate(-24 33 37)"/>
+  <circle cx="47" cy="27" r="3.4" fill="#fff" opacity=".75"/>
+
+  <ellipse cx="24" cy="65" rx="7.5" ry="4.2" fill="#ff7a72" opacity=".5"/>
+  <ellipse cx="80" cy="65" rx="7.5" ry="4.2" fill="#ff7a72" opacity=".5"/>
+
+  <!-- 부릅뜬 눈 -->
+  <ellipse cx="37" cy="55" rx="6.8" ry="8.6" fill="#6b2a12"/>
+  <circle cx="34.4" cy="51" r="2.3" fill="#fff" opacity=".95"/>
+  <ellipse cx="67" cy="55" rx="6.8" ry="8.6" fill="#6b2a12"/>
+  <circle cx="64.4" cy="51" r="2.3" fill="#fff" opacity=".95"/>
+
+  <!-- 찌푸린 눈썹 -->
+  <path d="M29 43l11 4M75 43l-11 4" stroke="#6b2a12" stroke-width="2.6" stroke-linecap="round"/>
+
+  <path d="M45 71q7-6 14 0" fill="none" stroke="#6b2a12" stroke-width="2.4" stroke-linecap="round"/>
+</svg>
