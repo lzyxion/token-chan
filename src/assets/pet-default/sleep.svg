@@ -1,0 +1,33 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 104 96" width="104" height="96">
+  <defs>
+    <linearGradient id="shell" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#eef2fc"/><stop offset="100%" stop-color="#b9c6ea"/>
+    </linearGradient>
+    <linearGradient id="liq" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#9db6ec"/><stop offset="100%" stop-color="#526bbc"/>
+    </linearGradient>
+    <clipPath id="body">
+      <path d="M6 82C6 44 24 16 52 16C80 16 98 44 98 82C98 88 88 93 52 93C16 93 6 88 6 82Z"/>
+    </clipPath>
+  </defs>
+
+  <path d="M6 82C6 44 24 16 52 16C80 16 98 44 98 82C98 88 88 93 52 93C16 93 6 88 6 82Z"
+        fill="url(#shell)" fill-opacity=".92" stroke="#4a5a92" stroke-width="2.4"/>
+
+  <g clip-path="url(#body)">
+    <ellipse cx="52" cy="55" rx="58" ry="4.5" fill="#9db6ec"/>
+    <rect x="-6" y="55" width="116" height="52" fill="url(#liq)"/>
+    <ellipse cx="52" cy="93" rx="46" ry="16" fill="#2b3a70" opacity=".28"/>
+  </g>
+
+  <ellipse cx="33" cy="37" rx="13" ry="8.5" fill="#fff" opacity=".45" transform="rotate(-24 33 37)"/>
+  <circle cx="47" cy="27" r="3.4" fill="#fff" opacity=".7"/>
+
+  <ellipse cx="24" cy="65" rx="7.5" ry="4.2" fill="#e59ab4" opacity=".45"/>
+  <ellipse cx="80" cy="65" rx="7.5" ry="4.2" fill="#e59ab4" opacity=".45"/>
+
+  <!-- 감은 눈 -->
+  <path d="M31 55h12M61 55h12" stroke="#2e3a63" stroke-width="2.8" stroke-linecap="round"/>
+
+  <path d="M46 70q6 4 12 0" fill="none" stroke="#2e3a63" stroke-width="2.2" stroke-linecap="round"/>
+</svg>

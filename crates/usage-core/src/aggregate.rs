@@ -84,6 +84,11 @@ pub struct Summary {
     pub last_model: Option<String>,
     /// 스캔 범위에서 관측된 모든 모델명 (정렬) — 규칙 편집 도우미용
     pub observed_models: Vec<String>,
+    /// 활성 Claude 세션의 컨텍스트 창 사용량.
+    /// 트랜스크립트 파일 단위 정보라 이벤트 집계로는 만들 수 없어, 스캔 뒤
+    /// `ClaudeAdapter::context()` 결과를 채워 넣는다 (monitor.rs).
+    #[serde(default)]
+    pub context: Option<crate::context::ContextState>,
 }
 
 fn local_date(ts: DateTime<Utc>, offset: FixedOffset) -> NaiveDate {
@@ -212,6 +217,7 @@ pub fn build_summary(
         last_event_ts: events.last().map(|e| e.ts),
         last_model,
         observed_models: observed.into_iter().collect(),
+        context: None,
     }
 }
 
@@ -245,7 +251,7 @@ mod tests {
         let statuses = vec![
             (Source::Claude, SourceStatus::Ok),
             (Source::Codex, SourceStatus::Ok),
-            (Source::Gemini, SourceStatus::NoData),
+            (Source::Antigravity, SourceStatus::NoData),
         ];
         let s = build_summary(&events, &statuses, &PriceTable::builtin(), 7, now, kst);
 
@@ -267,8 +273,8 @@ mod tests {
     fn unknown_model_marks_cost_partial() {
         let kst = FixedOffset::east_opt(9 * 3600).unwrap();
         let now = DateTime::parse_from_rfc3339("2026-07-30T03:00:00Z").unwrap().with_timezone(&Utc);
-        let events = vec![ev(Source::Gemini, "gemini-99-ultra", "2026-07-30T01:00:00Z", 10)];
-        let statuses = vec![(Source::Gemini, SourceStatus::Ok)];
+        let events = vec![ev(Source::Antigravity, "gemini-99-ultra", "2026-07-30T01:00:00Z", 10)];
+        let statuses = vec![(Source::Antigravity, SourceStatus::Ok)];
         let s = build_summary(&events, &statuses, &PriceTable::builtin(), 3, now, kst);
         assert!(s.cost_partial);
         assert!(!s.models_today[0].cost_known);

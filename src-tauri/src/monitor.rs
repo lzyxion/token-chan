@@ -6,13 +6,14 @@
 //!   변경된 파일만 재파싱하므로 주기 스캔 비용은 낮다.)
 //! - 라이브 스레드(2초 주기): 세션 busy/idle → 변경 시에만 `live-state` emit
 
+use std::path::PathBuf;
 use std::time::Duration;
 
 use chrono::{Local, Utc};
 use tauri::{AppHandle, Emitter, Manager};
 use usage_core::claude::ClaudeAdapter;
 use usage_core::codex::CodexAdapter;
-use usage_core::gemini::GeminiAdapter;
+use usage_core::antigravity::AntigravityAdapter;
 use usage_core::live::read_live_state;
 use usage_core::pricing::PriceTable;
 use usage_core::{build_summary, Source, UsageEvent};
@@ -35,7 +36,88 @@ const DEFAULT_RESET_NOTIFY: &[&str] = &[
     "리셋 임박! {분}분 뒤에 충전돼 ({시각})",
 ];
 
+/// 설정의 추가 스캔 경로
+pub fn extra_homes(app: &AppHandle) -> usage_core::accounts::ExtraHomes {
+    let state = app.state::<AppState>();
+    let s = state.settings.lock().unwrap();
+    usage_core::accounts::ExtraHomes {
+        claude: s.extra_claude_homes.iter().map(PathBuf::from).collect(),
+        codex: s.extra_codex_homes.iter().map(PathBuf::from).collect(),
+        antigravity: s.extra_antigravity_homes.iter().map(PathBuf::from).collect(),
+    }
+}
+
+/// 계정을 다시 발견해 상태에 캐시한다. 마커 스캔이 수백 ms 걸리므로 자주 부르지 않는다.
+pub fn rediscover(app: &AppHandle) {
+    let extra = extra_homes(app);
+    let found = usage_core::accounts::discover(&extra, true);
+    let state = app.state::<AppState>();
+    *state.accounts.lock().unwrap() = found;
+}
+
+/// 집계에 포함할 계정인지 — 사용자가 지정했으면 그 값, 아니면 기본 규칙.
+/// 기본값이 `standard` 인 이유는 settings.rs 의 `accounts_enabled` 주석 참고.
+pub fn account_enabled(
+    a: &usage_core::accounts::Account,
+    overrides: &std::collections::HashMap<String, bool>,
+) -> bool {
+    overrides.get(&a.setting_key()).copied().unwrap_or(a.standard)
+}
+
+/// 활성 계정의 설치본에서 뽑은 스캔 루트들
+#[derive(Default)]
+pub struct EnabledRoots {
+    pub claude: Vec<PathBuf>,
+    pub codex: Vec<PathBuf>,
+    pub antigravity: Vec<PathBuf>,
+    /// Claude 라이브 세션 레지스트리 (다른 소스엔 없음)
+    pub sessions: Vec<PathBuf>,
+}
+
+fn enabled_roots(app: &AppHandle) -> EnabledRoots {
+    let state = app.state::<AppState>();
+    // 두 락을 겹쳐 잡지 않는다 — 다른 경로에서 settings 를 먼저 잡는 곳이 있어 교착 위험
+    let overrides = { state.settings.lock().unwrap().accounts_enabled.clone() };
+    let accounts = { state.accounts.lock().unwrap().clone() };
+
+    let mut r = EnabledRoots::default();
+    for a in accounts.iter().filter(|a| account_enabled(a, &overrides)) {
+        for i in &a.installs {
+            match i.source {
+                Source::Claude => {
+                    r.claude.push(i.transcript_root());
+                    if let Some(d) = i.session_dir() {
+                        r.sessions.push(d);
+                    }
+                }
+                Source::Codex => r.codex.push(i.transcript_root()),
+                Source::Antigravity => r.antigravity.push(i.transcript_root()),
+            }
+        }
+    }
+    r
+}
+
+/// 한 소스의 공식 한도를 갱신하고 프론트에 알린다.
+/// Claude 는 플랜 스레드가, Codex 는 사용량 스레드가 부르므로 소스별로만 덮어쓴다.
+fn set_plan(app: &AppHandle, plan: usage_core::plan::PlanUsage) {
+    let all = {
+        let state = app.state::<AppState>();
+        let mut list = state.plan.lock().unwrap();
+        match list.iter_mut().find(|p| p.source == plan.source) {
+            Some(slot) => *slot = plan,
+            None => list.push(plan),
+        }
+        // 소스 순서를 고정해 두면 프론트에서 줄이 튀지 않는다
+        list.sort_by_key(|p| p.source);
+        list.clone()
+    };
+    let _ = app.emit("plan-updated", &all);
+}
+
 pub fn spawn(app: AppHandle) {
+    // 첫 스캔 전에 계정을 한 번 찾아 둔다 (이후에는 설정 변경/사용자 요청 때만)
+    rediscover(&app);
     spawn_usage_thread(app.clone());
     spawn_live_thread(app.clone());
     spawn_plan_thread(app);
@@ -71,11 +153,7 @@ fn spawn_plan_thread(app: AppHandle) {
 
         loop {
             if let Some(plan) = usage_core::plan::fetch_plan_usage() {
-                {
-                    let state = app.state::<AppState>();
-                    *state.plan.lock().unwrap() = Some(plan.clone());
-                }
-                let _ = app.emit("plan-updated", &plan);
+                set_plan(&app, plan.clone());
 
                 // 리셋 임박 — OS 알림 대신 캐릭터가 직접 말한다.
                 // 문구는 활성 모델의 문구 세트 → 기본 문구 → 내장 순 (프론트 speech.ts 와 동일 규칙)
@@ -156,9 +234,14 @@ fn spawn_plan_thread(app: AppHandle) {
 
 fn spawn_usage_thread(app: AppHandle) {
     std::thread::spawn(move || {
-        let mut claude = ClaudeAdapter::with_default_roots();
-        let mut codex = CodexAdapter::with_default_roots();
-        let mut gemini = GeminiAdapter::with_default_roots();
+        // 루트는 설정(추가 스캔 경로)에 따라 달라지므로 첫 회차에 채워진다
+        let mut claude = ClaudeAdapter::new(vec![]);
+        let mut codex = CodexAdapter::new(vec![]);
+        let mut agy = AntigravityAdapter::new(vec![]);
+        let mut claude_roots: Vec<PathBuf> = vec![];
+        let mut codex_roots: Vec<PathBuf> = vec![];
+        let mut agy_roots: Vec<PathBuf> = vec![];
+        let mut first = true;
 
         loop {
             let (retention_days, price_override) = {
@@ -166,11 +249,28 @@ fn spawn_usage_thread(app: AppHandle) {
                 let s = state.settings.lock().unwrap();
                 (s.retention_days, s.price_override_path.clone())
             };
+
+            // 활성 계정이 바뀌면(토글·재검색·경로 추가) 어댑터를 새로 만든다. 파일 캐시가
+            // 비워져 다음 스캔은 전체 재파싱이지만, 설정을 건드릴 때만 일어난다.
+            let roots = enabled_roots(&app);
+            if first || roots.claude != claude_roots {
+                claude_roots = roots.claude.clone();
+                claude = ClaudeAdapter::new(roots.claude);
+            }
+            if first || roots.codex != codex_roots {
+                codex_roots = roots.codex.clone();
+                codex = CodexAdapter::new(roots.codex);
+            }
+            if first || roots.antigravity != agy_roots {
+                agy_roots = roots.antigravity.clone();
+                agy = AntigravityAdapter::new(roots.antigravity);
+            }
+            first = false;
             let since = Utc::now() - chrono::Duration::days(retention_days as i64);
 
             let c = claude.scan(since);
             let x = codex.scan(since);
-            let g = gemini.scan(since);
+            let g = agy.scan(since);
 
             let mut events: Vec<UsageEvent> = Vec::with_capacity(c.events.len() + x.events.len() + g.events.len());
             events.extend(c.events);
@@ -181,15 +281,43 @@ fn spawn_usage_thread(app: AppHandle) {
             let statuses = vec![
                 (Source::Claude, c.status),
                 (Source::Codex, x.status),
-                (Source::Gemini, g.status),
+                (Source::Antigravity, g.status),
             ];
+
+            // Codex 는 공식 한도가 rollout 안에 들어 있다 — CLI 를 띄우는 Claude 와 달리
+            // 방금 읽은 파일에서 그냥 나온다
+            if let Some(p) = codex.plan() {
+                set_plan(&app, p);
+            }
+            // 세션 레지스트리가 없는 소스의 감시 파일을 라이브 스레드에 넘긴다
+            {
+                let mut watch = vec![];
+                if let Some(p) = codex.watch_path() {
+                    watch.push((Source::Codex, p, "codex".to_string()));
+                }
+                if let Some(p) = agy.watch_path() {
+                    watch.push((Source::Antigravity, p, "agy".to_string()));
+                }
+                *app.state::<AppState>().watch.lock().unwrap() = watch;
+            }
 
             let pricing = PriceTable::with_overrides(
                 price_override.as_deref().map(std::path::Path::new),
             );
             let now = Utc::now();
             let offset = *Local::now().offset();
-            let summary = build_summary(&events, &statuses, &pricing, SUMMARY_DAYS, now, offset.into());
+            let mut summary = build_summary(&events, &statuses, &pricing, SUMMARY_DAYS, now, offset.into());
+            // 컨텍스트는 트랜스크립트 파일 단위 정보라 이벤트 집계로 안 나온다 —
+            // 어댑터가 스캔하며 모아 둔 것 중 가장 최근에 움직인 세션을 얹는다.
+            // (세 CLI 를 번갈아 쓰면 방금 만진 쪽이 게이지에 뜬다)
+            summary.context = [
+                claude.context(&pricing),
+                codex.context(&pricing),
+                agy.context(&pricing),
+            ]
+            .into_iter()
+            .flatten()
+            .max_by_key(|c| c.at);
 
             {
                 let state = app.state::<AppState>();
@@ -204,11 +332,19 @@ fn spawn_usage_thread(app: AppHandle) {
 
 fn spawn_live_thread(app: AppHandle) {
     std::thread::spawn(move || {
-        let dirs = usage_core::roots::claude_session_dirs();
         let mut prev = String::new();
         loop {
-            let now_ms = Utc::now().timestamp_millis();
-            let live = read_live_state(&dirs, now_ms);
+            // 라이브 세션도 활성 계정의 설치본만 본다 (계정을 끄면 그쪽 세션은 무시)
+            let dirs = enabled_roots(&app).sessions;
+
+            let now = Utc::now();
+            let mut live = read_live_state(&dirs, now.timestamp_millis());
+            // Claude 외 소스는 레지스트리가 없어 감시 파일 mtime 으로 유도한다.
+            // 사용량 스캔(10초)이 아니라 여기(2초)서 stat 해야 작업 시작이 늦게 안 보인다.
+            {
+                let watch = { app.state::<AppState>().watch.lock().unwrap().clone() };
+                usage_core::live::add_inferred(&mut live, &watch, now);
+            }
             let json = serde_json::to_string(&live).unwrap_or_default();
             if json != prev {
                 prev = json;

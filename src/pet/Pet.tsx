@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { useLive, usePlan, useSummary } from "../hooks/useUsage";
+import { useLive, usePlanOf, useSummary } from "../hooks/useUsage";
 import { fmtCost, fmtMinutes, fmtTokens, parseResetTime, shortModel, totalOf } from "../format";
 import type {
   AppSettings,
@@ -29,6 +29,23 @@ const DRAG_THRESHOLD_PX = 4;
 /** 이 간격 안에 다시 클릭되면 더블클릭으로 보고 두 번째 대사를 생략 */
 const DOUBLE_CLICK_MS = 400;
 
+/** 내장 기본 이미지 팩 — src/assets/pet-default/ 의 상태명 파일이 빌드에 포함되어 기본 캐릭터가 된다.
+ *  캐릭터는 전부 이미지 팩 한 가지 방식으로만 그린다 (우선순위: 사용자 팩 → 내장 팩).
+ *  기본 팩은 저장소에 함께 들어 있으므로 idle 은 항상 존재한다 — 그림만 갈아끼우면 캐릭터가 바뀐다. */
+const bundledFiles = import.meta.glob("../assets/pet-default/*.{png,webp,gif,apng,svg}", {
+  eager: true,
+  query: "?url",
+  import: "default",
+}) as Record<string, string>;
+const DEFAULT_PACK_IMAGES: CharacterImages | null = (() => {
+  const map: CharacterImages = {};
+  for (const [path, url] of Object.entries(bundledFiles)) {
+    const file = path.split("/").pop() ?? "";
+    map[file.replace(/\.[^.]+$/, "")] = url;
+  }
+  return map.idle ? map : null;
+})();
+
 /** 게이지 색상 단계 (말풍선 meterClass와 동일 기준) */
 function ringColor(pct: number): string {
   if (pct >= 85) return "#ff5d47";
@@ -36,8 +53,6 @@ function ringColor(pct: number): string {
   return "#35d07f";
 }
 
-/** 시간 게이지는 소진율과 성격이 달라(다 차면 리셋=좋음) 단계 색 대신 파랑 고정 */
-const TIME_COLOR = "#63b3e4";
 /** 5시간 블록 (분) */
 const BLOCK_MINUTES = 300;
 
@@ -68,7 +83,9 @@ function resolvePack(
 export default function Pet() {
   const live = useLive();
   const summary = useSummary();
-  const plan = usePlan();
+  // 게이지 링은 아직 Claude 한도만 쓴다. Codex 도 이제 한도를 주므로 어느 벤더를
+  // 보여줄지는 게이지 재설계에서 정한다 — 그 전까지는 동작을 바꾸지 않는다.
+  const plan = usePlanOf("claude");
   const [scale, setScale] = useState(1.0);
   const [threshold, setThreshold] = useState(0.8);
   const [weeklyThreshold, setWeeklyThreshold] = useState(0.9);
@@ -148,6 +165,9 @@ export default function Pet() {
     };
   }, [activePack]);
 
+  // 사용자 팩 우선, 없으면 내장 기본 이미지 팩 (그것도 없으면 CSS 캐릭터)
+  const activeImages = packImages ?? DEFAULT_PACK_IMAGES;
+
   // 미니 라벨용 리셋 카운트다운 (summary 갱신 주기(10s)에 맞춰 재계산)
   const resetRemainMin = useMemo(() => {
     const resets = plan?.meters?.[0]?.resets;
@@ -157,6 +177,13 @@ export default function Pet() {
     return Math.max(0, Math.round((d.getTime() - Date.now()) / 60000));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [plan, summary?.generated_at]);
+
+  // 리셋까지 남은 시간 → 블록 경과율. 다 차는 순간이 곧 리셋이다.
+  // (창 크기 재계산 effect 의 의존성이라 그보다 위에서 선언해야 한다)
+  const blockElapsedPct =
+    resetRemainMin == null
+      ? null
+      : Math.round(Math.min(100, Math.max(0, (1 - resetRemainMin / BLOCK_MINUTES) * 100)));
 
   // 블록 초기화 감지: 공식 리셋 시각 문자열이 바뀌면 새 5시간 윈도우 시작 → 5분간 refreshed
   const [refreshedUntil, setRefreshedUntil] = useState(0);
@@ -279,7 +306,8 @@ export default function Pet() {
     gaugeSide,
     sessionPct != null,
     weeklyPct != null,
-    resetRemainMin != null,
+    summary?.context != null,
+    blockElapsedPct != null,
   ]);
 
   // 드래그로 이동한 위치를 저장 (연속 이벤트 debounce)
@@ -313,6 +341,7 @@ export default function Pet() {
       오늘비용: summary ? fmtCost(summary.today_cost, summary.cost_partial) : null,
       세션: sessionPct != null ? String(sessionPct) : null,
       주간: weeklyPct != null ? String(weeklyPct) : null,
+      컨텍스트: summary?.context ? String(Math.round(summary.context.used_pct)) : null,
       리셋: resetRemainMin != null ? fmtMinutes(resetRemainMin) : null,
       리셋시각: resetAt
         ? `${String(resetAt.getHours()).padStart(2, "0")}:${String(resetAt.getMinutes()).padStart(2, "0")}`
@@ -404,56 +433,75 @@ export default function Pet() {
     void invoke("toggle_panel");
   };
 
-  // 도넛 게이지 열 (위: 세션 5h, 아래: 주간).
-  // .stage 안에 두어 캐릭터와 같은 배율로 함께 확대되고, 라벨은 캐릭터 반대쪽(바깥)으로 뻗는다.
-  // 리셋까지 남은 시간 → 블록 경과율(다 차면 리셋). 도넛은 "얼마나 지났나"를 채운다.
-  const blockElapsedPct =
-    resetRemainMin == null
-      ? null
-      : Math.round(Math.min(100, Math.max(0, (1 - resetRemainMin / BLOCK_MINUTES) * 100)));
+  // ── 도넛 게이지 열 (세션 5h · 주간 · 컨텍스트) ──
+  // 셋 다 "%가 오르면 나빠진다"는 성격이 같아 같은 모양·같은 색 규칙으로 묶인다.
+  // 리셋까지 남은 시간은 성격이 반대(다 차면 좋음)라 발밑 가로 바로 분리했다.
+  // .stage 안이라 캐릭터와 같은 배율로 커지고, 라벨은 캐릭터 반대쪽(바깥)으로 뻗는다.
+  const ctx = summary?.context ?? null;
+  const contextPct = ctx ? Math.round(ctx.used_pct) : null;
+
+  const ringRow = (key: string, pct: number | null, label: React.ReactNode) => (
+    <div className="gauge-row" key={key}>
+      <div
+        className="gauge-ring"
+        style={{
+          background:
+            pct == null
+              ? "rgba(255,255,255,0.14)"
+              : `conic-gradient(${ringColor(pct)} ${pct}%, rgba(255,255,255,0.14) 0)`,
+        }}
+      />
+      <span className="gauge-label">{label}</span>
+    </div>
+  );
+
+  // 컨텍스트 링은 라이브 세션이 없으면 값이 없다. 자리까지 빼면 열 높이가 널뛰어
+  // 캐릭터 세로 중심이 흔들리므로, 빈 링으로 자리를 지킨다("지금은 세션 없음"의 표시이기도 하다).
+  const hasPlanRings = sessionPct != null || weeklyPct != null;
 
   const gauges =
-    gaugeSide === "off" || (sessionPct == null && weeklyPct == null && blockElapsedPct == null) ? null : (
+    gaugeSide === "off" || (!hasPlanRings && ctx == null) ? null : (
       <div className={`gauge ${gaugeSide}`}>
-        {sessionPct != null && (
-          <div className="gauge-row">
-            <div
-              className="gauge-ring"
-              style={{
-                background: `conic-gradient(${ringColor(sessionPct)} ${sessionPct}%, rgba(255,255,255,0.14) 0)`,
-              }}
-            />
-            <span className="gauge-label">
+        {sessionPct != null &&
+          ringRow(
+            "session",
+            sessionPct,
+            <>
               세션 5h <b>{sessionPct}%</b>
-            </span>
-          </div>
-        )}
-        {weeklyPct != null && (
-          <div className="gauge-row">
-            <div
-              className="gauge-ring"
-              style={{
-                background: `conic-gradient(${ringColor(weeklyPct)} ${weeklyPct}%, rgba(255,255,255,0.14) 0)`,
-              }}
-            />
-            <span className="gauge-label">
+            </>,
+          )}
+        {weeklyPct != null &&
+          ringRow(
+            "weekly",
+            weeklyPct,
+            <>
               주간 <b>{weeklyPct}%</b>
-            </span>
-          </div>
-        )}
-        {blockElapsedPct != null && resetRemainMin != null && (
-          <div className="gauge-row">
-            <div
-              className="gauge-ring"
-              style={{
-                background: `conic-gradient(${TIME_COLOR} ${blockElapsedPct}%, rgba(255,255,255,0.14) 0)`,
-              }}
-            />
-            <span className="gauge-label">
-              리셋 <b>{fmtMinutes(resetRemainMin)}</b>
-            </span>
-          </div>
-        )}
+            </>,
+          )}
+        {ctx != null && contextPct != null
+          ? ringRow(
+              "context",
+              contextPct,
+              <>
+                컨텍스트 <b>{contextPct}%</b>
+                {ctx.interim ? " · 정리 중" : ""}
+              </>,
+            )
+          : ringRow(
+              "context",
+              null,
+              <>
+                컨텍스트 <b>—</b>
+              </>,
+            )}
+      </div>
+    );
+
+  // 리셋 바: 시간은 선형이라 막대가 자연스럽고, 왼쪽에서 차올라 리셋되는 서사가 링보다 직관적이다.
+  const resetBar =
+    gaugeSide === "off" || blockElapsedPct == null ? null : (
+      <div className="reset-bar">
+        <div className="reset-bar-fill" style={{ width: `${blockElapsedPct}%` }} />
       </div>
     );
 
@@ -470,48 +518,30 @@ export default function Pet() {
       <div className="stage" ref={stageRef} style={{ transform: `scale(${scale})` }}>
         {gaugeSide === "left" && gauges}
         <div className="char-col">
-        {packImages ? (
-          // 사용자 캐릭터 팩: 상태별 이미지 (idle 폴백은 백엔드에서 처리됨).
-          // 상태 모션(숨쉬기/타자/떨림)은 .pet.<state> .cat 셀렉터로 그대로 적용됨.
-          <div className="cat pack" ref={charRef}>
-            {/* 이미지 로드 전에는 높이가 0 → 로드 완료 후 여백 재측정 */}
+        {/* 캐릭터는 이미지 팩 한 가지 방식뿐 — 사용자 팩(상태 폴백은 백엔드 처리) 또는 내장 기본 팩.
+            상태 모션(숨쉬기·흔들림·폴짝)과 소품은 .pet.<state> .cat 셀렉터로 그림 위에 얹힌다. */}
+        <div className="cat pack" ref={charRef}>
+          {activeImages && (
+            /* 이미지 로드 전에는 높이가 0 → 로드 완료 후 여백 재측정 */
             <img
-              src={packImages[state] ?? packImages.idle}
+              src={activeImages[state] ?? activeImages.idle}
               alt=""
               draggable={false}
               onLoad={reportAnchor}
             />
+          )}
+          <div className="steam steam-l">💨</div>
+          <div className="steam steam-r">💨</div>
+          <div className="zzz">
+            z<span>z</span>
           </div>
-        ) : (
-          <div className="cat" ref={charRef}>
-            <div className="horn horn-l" />
-            <div className="horn horn-r" />
-            <div className="wing wing-l" />
-            <div className="wing wing-r" />
-            <div className="tail-d" />
-            <div className="body">
-              <div className="belly" />
-              <div className="eye eye-l" />
-              <div className="eye eye-r" />
-              <div className="nostril nostril-l" />
-              <div className="nostril nostril-r" />
-              <div className="mouth" />
-              <div className="cheek cheek-l" />
-              <div className="cheek cheek-r" />
-            </div>
-            <div className="steam steam-l">💨</div>
-            <div className="steam steam-r">💨</div>
-            <div className="laptop">⌨️</div>
-            <div className="zzz">
-              z<span>z</span>
-            </div>
-            <div className="alert-mark">!</div>
-            <div className="ko-mark">🪫</div>
-            <div className="sparkle">✨</div>
-            <div className="sweat">💦</div>
-          </div>
-        )}
+          <div className="alert-mark">!</div>
+          <div className="ko-mark">🪫</div>
+          <div className="sparkle">✨</div>
+          <div className="sweat">💦</div>
+        </div>
         <div className="ground-shadow" />
+        {resetBar}
         {showMiniLabel && sessionPct != null && (
           <div className="mini-label">
             {sessionPct}%{resetRemainMin != null ? ` · ${fmtMinutes(resetRemainMin)}` : ""}

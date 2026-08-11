@@ -2,9 +2,9 @@ import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import ResizeGrips from "../components/ResizeGrips";
-import { useLive, usePlan, useSummary } from "../hooks/useUsage";
+import { useLive, usePlans, useSummary } from "../hooks/useUsage";
 import { fmtCost, fmtMinutes, fmtTokens, parseResetTime, shortModel, totalOf } from "../format";
-import type { SourceStatus, SourceSummary } from "../types";
+import type { PlanUsage, Source, SourceStatus, SourceSummary } from "../types";
 import "./panel.css";
 
 function meterClass(pct: number): string {
@@ -17,8 +17,6 @@ function statusChip(status: SourceStatus) {
   switch (status.kind) {
     case "no_data":
       return <span className="chip muted">미감지</span>;
-    case "needs_setup":
-      return <span className="chip warn">설정 필요</span>;
     default:
       return null;
   }
@@ -41,13 +39,32 @@ function SourceRow({ s }: { s: SourceSummary }) {
   );
 }
 
+const SOURCE_LABEL: Record<Source, string> = {
+  claude: "Claude",
+  codex: "Codex",
+  antigravity: "AGY",
+};
+
+/** 첫 미터의 리셋 안내. Codex 는 정확한 시각(`resets_at`)을, Claude 는 원문을 준다. */
+function resetHint(p: PlanUsage): string {
+  const m = p.meters[0];
+  if (!m) return "";
+  if (m.resets_at) {
+    const d = new Date(m.resets_at);
+    const day = `${d.getMonth() + 1}/${d.getDate()}`;
+    const time = `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+    return `${m.label} 리셋 ${day} ${time}`;
+  }
+  return m.resets ? `세션 리셋 ${m.resets}` : "";
+}
+
 const PAGE_TITLES = ["요약", "소스·블록", "모델·세션"];
 
 /** 독립 창으로 뜨는 사용량 패널 — 펫 우클릭 또는 트레이 메뉴로 토글 */
 export default function UsagePanel() {
   const summary = useSummary();
   const live = useLive();
-  const plan = usePlan();
+  const plans = usePlans();
   const [page, setPage] = useState(0);
   const bodyRef = useRef<HTMLDivElement | null>(null);
 
@@ -96,12 +113,15 @@ export default function UsagePanel() {
     );
   }
 
-  const needsSetup = summary.sources.find((s) => s.status.kind === "needs_setup");
   const topModels = summary.models_today.slice(0, 5);
   const todayTotal = totalOf(summary.today);
   const maxModel = topModels.length > 0 ? totalOf(topModels[0].totals) : 0;
 
-  const officialReset = plan?.meters?.[0]?.resets ? parseResetTime(plan.meters[0].resets) : null;
+  // 5시간 블록 표시는 Claude 세션 리셋을 기준으로 삼는다 (블록 개념 자체가 Claude 것)
+  const claudePlan = plans.find((p) => p.source === "claude") ?? null;
+  const officialReset = claudePlan?.meters?.[0]?.resets
+    ? parseResetTime(claudePlan.meters[0].resets)
+    : null;
   const blockRemain = officialReset
     ? Math.max(0, Math.round((officialReset.getTime() - Date.now()) / 60000))
     : (summary.block?.remaining_minutes ?? 0);
@@ -156,10 +176,15 @@ export default function UsagePanel() {
                 </div>
               </div>
 
-              {plan && plan.meters.length > 0 && (
-                <div className="plan">
-                  <div className="plan-title">플랜 한도 (공식)</div>
-                  {plan.meters.map((m) => (
+              {/* 소스마다 한도를 얻는 경로가 달라 한 덩어리로 못 묶는다 —
+                  Claude 는 CLI 조회, Codex 는 rollout 에 실려 온다. agy 는 아예 없다. */}
+              {plans.map((p) => (
+                <div className="plan" key={p.source}>
+                  <div className="plan-title">
+                    {SOURCE_LABEL[p.source]} 한도 (공식)
+                    {p.detail && <span className="plan-detail"> · {p.detail}</span>}
+                  </div>
+                  {p.meters.map((m) => (
                     <div className="plan-row" key={m.label}>
                       <span className="plan-label">
                         {m.label
@@ -177,7 +202,7 @@ export default function UsagePanel() {
                   ))}
                   {/* 리셋까지 남은 시간도 같은 게이지로 — 다만 소진율이 아니라
                       "블록이 얼마나 지났나"라서 단계 색 대신 파란 시간 색을 쓴다 */}
-                  {officialReset && (
+                  {p.source === "claude" && officialReset && (
                     <div className="plan-row">
                       <span className="plan-label">리셋까지</span>
                       <div className="bar plan-bar">
@@ -186,11 +211,9 @@ export default function UsagePanel() {
                       <span className="plan-pct time">{fmtMinutes(blockRemain)}</span>
                     </div>
                   )}
-                  {plan.meters[0]?.resets && (
-                    <div className="plan-reset">세션 리셋 {plan.meters[0].resets}</div>
-                  )}
+                  <div className="plan-reset">{resetHint(p)}</div>
                 </div>
-              )}
+              ))}
             </>
           )}
 
@@ -205,7 +228,7 @@ export default function UsagePanel() {
               {summary.block && (
                 <div className="block">
                   <div className="block-head">
-                    <span>{plan ? "이번 블록 상세 (로컬)" : "5시간 블록"}</span>
+                    <span>{claudePlan ? "이번 블록 상세 (로컬)" : "5시간 블록"}</span>
                     <span className="block-remain">
                       {fmtMinutes(blockRemain)} 남음{officialReset ? " (공식)" : ""}
                     </span>
@@ -216,7 +239,7 @@ export default function UsagePanel() {
                   <div className="block-foot">
                     <span>{fmtTokens(totalOf(summary.block.totals))} tokens</span>
                     <span>{fmtCost(summary.block.cost, summary.block.cost_partial)}</span>
-                    {summary.block.token_ratio != null && !plan && (
+                    {summary.block.token_ratio != null && !claudePlan && (
                       <span
                         className={summary.block.token_ratio >= 0.8 ? "ratio warn-text" : "ratio"}
                       >
@@ -227,11 +250,6 @@ export default function UsagePanel() {
                 </div>
               )}
 
-              {needsSetup && needsSetup.status.kind === "needs_setup" && (
-                <div className="setup-hint">
-                  {needsSetup.label}: ~/.gemini/settings.json에 telemetry(local) 설정 필요
-                </div>
-              )}
             </>
           )}
 
@@ -270,6 +288,16 @@ export default function UsagePanel() {
                   : live.sessions.length > 0
                     ? `세션 ${live.sessions.length}개 대기 중`
                     : "실행 중인 세션 없음"}
+                {/* 어느 CLI 가 움직이는지가 정보의 핵심 — 이제 셋이 섞이므로 벤더를 밝힌다.
+                    `active` 는 파일 신선도로 유도한 것이라 `~` 로 구분 표시한다. */}
+                {live.sessions.length > 0 && (
+                  <span className="live-sources">
+                    {live.sessions
+                      .map((s) => `${SOURCE_LABEL[s.source]}${s.status === "active" ? "~" : ""}`)
+                      .filter((v, i, a) => a.indexOf(v) === i)
+                      .join(" · ")}
+                  </span>
+                )}
               </div>
             </>
           )}

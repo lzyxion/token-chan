@@ -7,7 +7,10 @@ use serde::{Deserialize, Serialize};
 pub enum Source {
     Claude,
     Codex,
-    Gemini,
+    /// Antigravity CLI (`agy`). Gemini CLI 를 대체한 도구라, 예전에 저장된 설정이
+    /// 계속 읽히도록 `gemini` 도 같은 값으로 받는다.
+    #[serde(alias = "gemini")]
+    Antigravity,
 }
 
 impl Source {
@@ -15,7 +18,7 @@ impl Source {
         match self {
             Source::Claude => "Claude Code",
             Source::Codex => "Codex CLI",
-            Source::Gemini => "Gemini CLI",
+            Source::Antigravity => "Antigravity CLI",
         }
     }
 }
@@ -49,8 +52,6 @@ pub enum SourceStatus {
     Ok,
     /// 데이터 루트/파일이 없음 (CLI 미설치 또는 미사용)
     NoData,
-    /// 사용자 설정이 필요함 (예: Gemini 텔레메트리 활성화)
-    NeedsSetup { guide: String },
 }
 
 /// 어댑터 스캔 결과

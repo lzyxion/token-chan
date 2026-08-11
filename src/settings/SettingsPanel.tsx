@@ -6,6 +6,8 @@ import type {
   AppSettings,
   CharacterRule,
   GaugeSide,
+  ScanRoot,
+  Source,
   SpeechRule,
   Summary,
 } from "../types";
@@ -23,6 +25,13 @@ const STATE_LABELS: [string, string][] = [
 ];
 
 /** 설정 탭 — 일반(창·한도·시스템) / 캐릭터(팩·상태·크기) / 대사(말풍선·문구) */
+/** 소스 id → 화면 표기. 트레이의 「연결된 계정」 항목과 같은 표기를 쓴다. */
+const SOURCE_LABEL: Record<Source, string> = {
+  claude: "Claude",
+  codex: "Codex",
+  antigravity: "AGY",
+};
+
 type Tab = "general" | "character" | "speech";
 const TABS: [Tab, string][] = [
   ["general", "일반"],
@@ -48,9 +57,16 @@ export default function SettingsPanel() {
   const [packs, setPacks] = useState<string[]>([]);
   const [observedModels, setObservedModels] = useState<string[]>([]);
   const [tab, setTab] = useState<Tab>("general");
+  const [scanRoots, setScanRoots] = useState<ScanRoot[]>([]);
   /** 문구 편집기가 보고 있는 세트 ("" = 기본 문구) */
   const [editingSet, setEditingSet] = useState("");
   const [newSetName, setNewSetName] = useState("");
+
+  const refreshScanRoots = () => {
+    invoke<ScanRoot[]>("get_scan_roots")
+      .then(setScanRoots)
+      .catch(() => setScanRoots([]));
+  };
 
   const refreshPacks = () => {
     invoke<string[]>("list_character_packs")
@@ -69,6 +85,7 @@ export default function SettingsPanel() {
       })
       .catch(() => {});
     refreshPacks();
+    refreshScanRoots();
     // 트레이 토글 등 외부 변경과 동기화 (내용 동일하면 스킵 — 입력 커서 보존)
     const un = listen<AppSettings>("settings-changed", (e) => {
       if (alive) {
@@ -266,7 +283,7 @@ export default function SettingsPanel() {
                     update({ characterPack: e.currentTarget.value || null })
                   }
                 >
-                  <option value="">기본 (치비 드래곤)</option>
+                  <option value="">기본 (젤리 슬라임)</option>
                   {packs.map((p) => (
                     <option key={p} value={p}>
                       {p}
@@ -559,7 +576,7 @@ export default function SettingsPanel() {
                 (직전과 같은 문구는 피함) · 비우면 기본 문구로 돌아갑니다.
                 <br />
                 {
-                  "{변수} 자리에 현재 값이 들어갑니다: {오늘토큰} {오늘비용} {세션} {주간} {리셋} {리셋시각} {모델}"
+                  "{변수} 자리에 현재 값이 들어갑니다: {오늘토큰} {오늘비용} {세션} {주간} {컨텍스트} {리셋} {리셋시각} {모델}"
                 }
                 <br />
                 문구 안 | 는 말풍선 줄바꿈 · 값을 아직 모르는 변수가 든 줄은
@@ -700,8 +717,8 @@ export default function SettingsPanel() {
                 </select>
               </div>
               <div className="settings-hint">
-                위 = 세션 5시간, 아래 = 주간. 캐릭터에 마우스를 올리면 라벨이
-                바깥쪽으로 펼쳐집니다
+                세션 5시간 · 주간 · 컨텍스트 3개. 캐릭터에 마우스를 올리면 라벨이
+                바깥쪽으로 펼쳐집니다. 리셋까지 남은 시간은 발밑 가로 바입니다
               </div>
             </div>
 
@@ -753,6 +770,79 @@ export default function SettingsPanel() {
               />
               로그인 시 자동 시작
             </label>
+
+            <div className="settings-group">
+              <div className="settings-label">데이터 소스 경로</div>
+              <div className="settings-hint">
+                발견된 설치본입니다. 같은 계정의 설치본은 하나로 묶여 집계되고,
+                포함 여부는 <b>펫 우클릭 → 연결된 계정</b>에서 켜고 끕니다.
+                자동 탐지가 못 찾는 경로만 아래에 직접 추가하세요 — 겹쳐도 중복
+                집계되지 않습니다.
+              </div>
+              {scanRoots.length === 0 ? (
+                <div className="settings-hint">발견된 설치본이 없습니다</div>
+              ) : (
+                <ul className="settings-rootlist">
+                  {scanRoots.map((r) => (
+                    <li key={`${r.source}:${r.path}`} className={r.enabled ? "" : "off"}>
+                      <b>{SOURCE_LABEL[r.source] ?? r.source}</b> {r.account}
+                      {r.enabled ? "" : " · 제외됨"}
+                      <div className="settings-hint-inline">
+                        <code>{r.path}</code> · {r.files}개
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+              )}
+              {(
+                [
+                  ["extraClaudeHomes", "Claude 홈 추가 (.claude 디렉토리)"],
+                  ["extraCodexHomes", "Codex 홈 추가 (CODEX_HOME 에 해당)"],
+                  ["extraAntigravityHomes", "AGY 홈 추가 (antigravity-cli 디렉토리)"],
+                ] as const
+              ).map(([key, label]) => (
+                <div key={key} className="settings-subgroup">
+                  <div className="settings-sublabel">{label}</div>
+                  {(s[key] ?? []).map((p, i) => (
+                    <div className="settings-row" key={i}>
+                      <input
+                        className="settings-input settings-input-wide"
+                        value={p}
+                        placeholder="예: D:\\other-profile\\.claude"
+                        onChange={(e) => {
+                          const next = [...(s[key] ?? [])];
+                          next[i] = e.currentTarget.value;
+                          update({ [key]: next } as Partial<AppSettings>);
+                        }}
+                      />
+                      <button
+                        className="settings-btn"
+                        onClick={() =>
+                          update({
+                            [key]: (s[key] ?? []).filter((_, j) => j !== i),
+                          } as Partial<AppSettings>)
+                        }
+                      >
+                        삭제
+                      </button>
+                    </div>
+                  ))}
+                  <button
+                    className="settings-btn"
+                    onClick={() =>
+                      update({ [key]: [...(s[key] ?? []), ""] } as Partial<AppSettings>)
+                    }
+                  >
+                    + 경로 추가
+                  </button>
+                </div>
+              ))}
+              <div className="settings-row">
+                <button className="settings-btn" onClick={refreshScanRoots}>
+                  다시 확인
+                </button>
+              </div>
+            </div>
           </>
         )}
       </div>

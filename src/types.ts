@@ -1,6 +1,6 @@
 // Rust usage-core의 Serialize 결과와 1:1 매칭 (snake_case 유지)
 
-export type Source = "claude" | "codex" | "gemini";
+export type Source = "claude" | "codex" | "antigravity";
 
 export interface Totals {
   input: number;
@@ -9,10 +9,7 @@ export interface Totals {
   cache_read: number;
 }
 
-export type SourceStatus =
-  | { kind: "ok" }
-  | { kind: "no_data" }
-  | { kind: "needs_setup"; guide: string };
+export type SourceStatus = { kind: "ok" } | { kind: "no_data" };
 
 export interface SourceSummary {
   source: Source;
@@ -48,6 +45,30 @@ export interface BlockSummary {
   token_ratio: number | null;
 }
 
+/** 가장 최근에 움직인 세션의 컨텍스트 창 사용량 (Claude·Codex 지원) */
+export interface ContextState {
+  source: Source;
+  session: string;
+  model: string;
+  /** 현재 컨텍스트 크기 (토큰) */
+  tokens: number;
+  /** 분모로 쓴 컨텍스트 창 */
+  window: number;
+  used_pct: number;
+  at: string | null;
+  /** compact 직후 다음 턴이 아직 없어 잠정값을 쓰는 중 */
+  interim: boolean;
+  /** 창 크기가 단가표가 아니라 관측치로 승격된 값인지 */
+  window_inferred: boolean;
+  compactions: number;
+  /** compact 로 버려진 누적 토큰 */
+  dropped: number;
+  /** 버려진 분량까지 합친 이 세션의 실제 대화 총량 */
+  total: number;
+  last_compact_at: string | null;
+  last_compact_trigger: string | null;
+}
+
 export interface Summary {
   generated_at: string;
   today_date: string;
@@ -63,10 +84,14 @@ export interface Summary {
   last_model: string | null;
   /** 스캔 범위에서 관측된 모델명 목록 */
   observed_models: string[];
+  /** 활성 세션의 컨텍스트 사용량 (Claude 세션이 없으면 null) */
+  context: ContextState | null;
 }
 
 export interface LiveSessionView {
+  source: Source;
   name: string;
+  /** `busy`/`idle` 은 세션 레지스트리의 정확한 값, `active` 는 파일 신선도로 유도한 값 */
   status: string;
   cwd: string;
 }
@@ -80,11 +105,18 @@ export interface LiveState {
 export interface PlanMeter {
   label: string;
   used_pct: number;
+  /** 리셋 시각 원문 (Claude). 소스가 문자열로만 줄 때 쓴다 */
   resets: string;
+  /** 소스가 정확한 시각을 준 경우 (Codex) — 있으면 `resets` 파싱이 필요 없다 */
+  resets_at: string | null;
 }
 
+/** 소스 하나의 공식 한도. Claude 는 `claude -p /usage`, Codex 는 rollout 의 `rate_limits` */
 export interface PlanUsage {
+  source: Source;
   meters: PlanMeter[];
+  /** 플랜 종류 등 (예: "free 플랜") */
+  detail: string;
   fetched_at: string;
 }
 
@@ -127,6 +159,28 @@ export interface AppSettings {
   speechSets: Record<string, Record<string, string[]>>;
   /** 모델 접두사 → 문구 세트 매핑 (최장 접두사 우선, 미매칭 시 기본 문구) */
   speechRules: SpeechRule[];
+  /** 추가로 스캔할 Claude 홈(`.claude` 디렉토리) — 자동 탐지가 환경에 좌우되는 걸 보완 */
+  extraClaudeHomes: string[];
+  /** 추가로 스캔할 Codex 홈(`CODEX_HOME` 에 해당) */
+  extraCodexHomes: string[];
+  /** 추가로 스캔할 agy 홈(`antigravity-cli` 디렉토리) */
+  extraAntigravityHomes: string[];
+}
+
+/** 발견된 설치본 하나 (`get_scan_roots`) */
+export interface ScanRoot {
+  source: Source;
+  path: string;
+  /** 그 아래에서 발견된 트랜스크립트 수 */
+  files: number;
+  /** 자동 탐지가 아니라 설정의 "추가 스캔 경로"에서 온 것인지 */
+  extra: boolean;
+  /** 이 설치본이 속한 계정 (이메일 또는 계정 id 앞자리) */
+  account: string;
+  /** 계정이 집계에 포함돼 있는지 (토글은 우클릭/트레이의 "연결된 계정") */
+  enabled: boolean;
+  /** 마커 스캔으로 찾아낸 설치본인지 */
+  discovered: boolean;
 }
 
 /** 모델 접두사(콤마 구분) → 문구 세트 매핑 규칙 (캐릭터 규칙과 같은 방식) */

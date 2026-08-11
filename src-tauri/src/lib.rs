@@ -27,8 +27,16 @@ pub struct WindowResize {
 pub struct AppState {
     pub summary: Mutex<Option<usage_core::Summary>>,
     pub live: Mutex<usage_core::live::LiveState>,
-    pub plan: Mutex<Option<usage_core::plan::PlanUsage>>,
+    /// 소스별 공식 한도. Claude 는 CLI 실행으로, Codex 는 rollout 파싱으로 채워지므로
+    /// 서로 다른 스레드가 각자 자기 소스만 갱신한다 (`monitor::set_plan`).
+    pub plan: Mutex<Vec<usage_core::plan::PlanUsage>>,
+    /// 세션 레지스트리가 없는 소스(Codex·agy)의 작업 중 판정용 감시 파일.
+    /// 사용량 스레드(10초)가 채우고 라이브 스레드(2초)가 stat 한다.
+    pub watch: Mutex<Vec<(usage_core::model::Source, std::path::PathBuf, String)>>,
     pub settings: Mutex<settings::Settings>,
+    /// 발견된 계정 목록 (설치본 포함). 마커 스캔이 수백 ms 들므로 캐시하고,
+    /// 시작 시 1회 + 사용자가 "다시 검색" 할 때만 갱신한다.
+    pub accounts: Mutex<Vec<usage_core::accounts::Account>>,
     /// 펫 웹뷰가 마지막으로 보고한 캐릭터 머리 위 여백(논리 px).
     /// 대사가 이벤트로 갑자기 떠도 꼬리 위치를 맞추기 위해 캐시한다.
     pub headroom: Mutex<f64>,
@@ -78,11 +86,15 @@ pub fn run() {
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
             None,
         ))
+        // 네이티브 메뉴에는 텍스트 입력이 없으므로, 스캔 경로 추가는 폴더 선택 다이얼로그로
+        .plugin(tauri_plugin_dialog::init())
         .manage(AppState {
             summary: Mutex::new(None),
             live: Mutex::new(usage_core::live::LiveState::default()),
-            plan: Mutex::new(None),
+            plan: Mutex::new(vec![]),
+            watch: Mutex::new(vec![]),
             settings: Mutex::new(loaded.clone()),
+            accounts: Mutex::new(vec![]),
             headroom: Mutex::new(0.0),
             footroom: Mutex::new(0.0),
             center_x: Mutex::new(None),
@@ -194,6 +206,7 @@ pub fn run() {
             commands::drag_pet,
             commands::end_pet_drag,
             commands::show_pet_menu,
+            commands::get_scan_roots,
             commands::list_character_packs,
             commands::get_character_images,
             commands::open_characters_dir,
