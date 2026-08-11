@@ -536,22 +536,63 @@ export default function Pet() {
     );
   };
 
+  // 로고 클릭 = 벤더 순환 (자동 → Claude → Codex → AGY → 자동).
+  // 설정 창을 열지 않고 게이지가 보는 벤더를 바꾼다.
+  const VENDOR_CYCLE: ("auto" | Source)[] = ["auto", "claude", "codex", "antigravity"];
+  const cycleVendor = () => {
+    const i = VENDOR_CYCLE.indexOf(gaugeVendor);
+    const next = VENDOR_CYCLE[(i + 1) % VENDOR_CYCLE.length];
+    setGaugeVendor(next);
+    void invoke("set_gauge_vendor", { vendor: next });
+  };
+
   // 열 높이는 벤더의 미터 수에 따라 달라진다 — 한도 없는 벤더에 빈 링을 채워
   // 3줄을 고정하는 것보다 짧은 열이 낫다는 판단. 창 크기는 meters.length 가
   // 바뀔 때 다시 맞춘다 (fit effect 의존성).
   const gauges =
     gaugeSide === "off" || active == null ? null : (
       <div className={`gauge ${gaugeSide}${gaugeLabels ? " labels-on" : ""}`}>
-        {/* 벤더 로고 — 라벨이 접혀 있으면(기본) 이게 벤더를 밝히는 유일한 수단이다 */}
+        {/* 벤더 로고 — 라벨이 접혀 있으면(기본) 이게 벤더를 밝히는 유일한 수단이다.
+            클릭하면 벤더 순환. 펫 전체가 드래그·클릭 반응을 받으므로(.pet * 는
+            pointer-events:none) 버튼만 이벤트를 되살리고 전파를 끊는다. */}
         <div className="gauge-row" key="vendor">
-          <VendorIcon
-            source={active.source}
-            className={`gauge-dot ${active.busy ? "busy" : ""} ${active.stale ? "stale" : ""}`}
-          />
+          <button
+            className="gauge-dot-btn"
+            onPointerDown={(e) => e.stopPropagation()}
+            onPointerUp={(e) => e.stopPropagation()}
+            onDoubleClick={(e) => e.stopPropagation()}
+            onClick={(e) => {
+              e.stopPropagation();
+              cycleVendor();
+            }}
+          >
+            <VendorIcon
+              source={active.source}
+              className={`gauge-dot ${active.busy ? "busy" : ""} ${active.stale ? "stale" : ""}`}
+            />
+          </button>
           <span className="gauge-label">
             {SOURCE_LABEL[active.source]}
             {ctx?.model ? ` · ${shortModel(ctx.model)}` : ""}
             {active.busy ? " · 작업 중" : ""}
+            {/* 고정 중 표시 — 글자 대신 핀 아이콘 (이모지는 색을 못 입혀 SVG) */}
+            {gaugeVendor !== "auto" && (
+              <svg
+                className="gauge-pin"
+                width="9"
+                height="9"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2.4"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              >
+                <path d="M12 17v5" />
+                {/* 헤드는 채운다 — 통상적인 "고정됨" 압정 모양 */}
+                <path fill="currentColor" d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6h1a2 2 0 0 0 0-4H8a2 2 0 0 0 0 4h1z" />
+              </svg>
+            )}
           </span>
         </div>
         {ctx != null && contextPct != null

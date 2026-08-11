@@ -144,6 +144,24 @@
    평상시 라벨이 안 보이므로(호버 전용) 지금 어느 CLI 를 보고 있는지 알릴 수단이
    이것뿐이다. 링 색은 이미 소진율 단계에 쓰고 있어 벤더를 실을 수 없다.
    투명 오버레이라 배경이 사용자 바탕화면이다 — 밝은 배경에서도 읽히도록 그림자를 준다. */
+/* 로고 클릭 = 벤더 순환. `.pet *` 의 pointer-events:none 을 버튼만 되살린다 */
+.pet .gauge-dot-btn {
+  pointer-events: auto;
+  background: none;
+  border: none;
+  padding: 0;
+  line-height: 0;
+  cursor: pointer;
+}
+.gauge-dot-btn:hover .gauge-dot {
+  transform: scale(1.12);
+}
+/* 벤더 고정 중 표시 핀 — 통상적인 고정 표시대로 빨강, 헤드는 채움 */
+.gauge-pin {
+  margin-left: 3px;
+  vertical-align: -1px;
+  color: #ff5d47;
+}
 .gauge-dot {
   flex: none;
   /* 링(18px) 기준 가운데로 오도록 좌우 여백을 준다 (아이콘 14px) */
