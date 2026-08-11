@@ -138,7 +138,7 @@ pub fn create(app: &AppHandle) -> tauri::Result<()> {
 
     TrayIconBuilder::with_id("main")
         .icon(app.default_window_icon().expect("기본 아이콘 없음").clone())
-        .tooltip("Token Pet — AI 토큰 사용량")
+        .tooltip("토큰쨩 — AI 토큰 사용량")
         .menu(&menu)
         .show_menu_on_left_click(true)
         .on_menu_event(|app, event| handle_action(app, event.id.as_ref()))

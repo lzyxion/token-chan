@@ -64,14 +64,14 @@ pub struct AppState {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    eprintln!("[boot] token-pet starting (pid={})", std::process::id());
+    eprintln!("[boot] token-chan starting (pid={})", std::process::id());
     // 웹뷰는 setup 보다 먼저 살아나 get_settings 를 호출한다. setup 에서 읽으면
     // 그 사이 요청이 기본값을 받아가 캐릭터 크기·팩·임계값이 전부 기본으로 굳는다
     // (프론트는 재시도하지 않음) → 반드시 manage() 전에 읽어 둔다.
     let loaded = settings::load();
     let mut builder = tauri::Builder::default();
-    // 진단용: TOKENPET_NO_SINGLE_INSTANCE=1 이면 단일 인스턴스 검사를 건너뜀
-    if std::env::var_os("TOKENPET_NO_SINGLE_INSTANCE").is_none() {
+    // 진단용: TOKENCHAN_NO_SINGLE_INSTANCE=1 이면 단일 인스턴스 검사를 건너뜀
+    if std::env::var_os("TOKENCHAN_NO_SINGLE_INSTANCE").is_none() {
         builder = builder.plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             eprintln!("[boot] second-instance signal received (기존 인스턴스가 살아있음)");
             // 두 번째 인스턴스 실행 시 기존 펫 창을 앞으로
