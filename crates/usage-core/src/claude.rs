@@ -20,6 +20,7 @@ use walkdir::WalkDir;
 use crate::context::{ContextState, RawContext};
 use crate::model::{ScanOutcome, Source, SourceStatus, UsageEvent};
 use crate::pricing::PriceTable;
+use crate::session::{dir_label, SessionRow};
 
 #[derive(Deserialize)]
 struct Row {
@@ -33,6 +34,10 @@ struct Row {
     is_sidechain: Option<bool>,
     #[serde(rename = "sessionId")]
     session_id: Option<String>,
+    /// 작업 디렉토리 — user 행마다 들어 있어 경로를 되짚어 추측할 필요가 없다
+    cwd: Option<String>,
+    #[serde(rename = "gitBranch")]
+    git_branch: Option<String>,
     /// compact 실행 시 `type:"system"` 행에 붙는 실측 메타데이터
     #[serde(rename = "compactMetadata")]
     compact: Option<CompactMeta>,
@@ -78,6 +83,8 @@ struct FileCache {
     events: Vec<ParsedEvent>,
     /// 이 트랜스크립트의 컨텍스트 상태 (서브에이전트 파일은 비어 있음)
     ctx: RawContext,
+    /// 최근 세션 목록용 (서브에이전트 파일은 None — 사용자가 연 세션이 아니다)
+    session: Option<SessionRow>,
 }
 
 pub struct ClaudeAdapter {
@@ -92,6 +99,11 @@ impl ClaudeAdapter {
 
     pub fn with_default_roots() -> Self {
         Self::new(crate::roots::claude_project_roots())
+    }
+
+    /// 최근 세션 목록. 정렬·합치기는 여러 소스를 모으는 호출부(`session::merge`)가 한다.
+    pub fn sessions(&self) -> Vec<SessionRow> {
+        self.cache.values().filter_map(|fc| fc.session.clone()).collect()
     }
 
     /// `since` 이후의 이벤트 스냅샷을 반환. 내부 파일 캐시로 변경분만 재파싱.
@@ -130,8 +142,9 @@ impl ClaudeAdapter {
                     None => true,
                 };
                 if needs_parse {
-                    let (events, ctx) = parse_transcript(path);
-                    self.cache.insert(path.to_path_buf(), FileCache { mtime, size, events, ctx });
+                    let (events, ctx, session) = parse_transcript(path);
+                    self.cache
+                        .insert(path.to_path_buf(), FileCache { mtime, size, events, ctx, session });
                 }
             }
         }
@@ -176,11 +189,13 @@ impl ClaudeAdapter {
     }
 }
 
-fn parse_transcript(path: &Path) -> (Vec<ParsedEvent>, RawContext) {
+fn parse_transcript(path: &Path) -> (Vec<ParsedEvent>, RawContext, Option<SessionRow>) {
     let mut ctx = RawContext::default();
     let Ok(content) = std::fs::read_to_string(path) else {
-        return (vec![], ctx);
+        return (vec![], ctx, None);
     };
+    let (mut cwd, mut branch) = (String::new(), String::new());
+    let (mut last_at, mut last_model, mut tokens) = (None, String::new(), 0u64);
     // 서브에이전트 트랜스크립트는 자기만의 컨텍스트를 쓴다 — 세션 게이지에 섞으면 안 된다.
     let track_ctx = !path.components().any(|c| c.as_os_str() == "subagents");
     let mut min_read: Option<u64> = None;
@@ -199,6 +214,14 @@ fn parse_transcript(path: &Path) -> (Vec<ParsedEvent>, RawContext) {
             .map(|t| t.with_timezone(&Utc));
         let sidechain = row.is_sidechain.unwrap_or(false);
         let main_chain = track_ctx && !sidechain;
+
+        // 작업 위치는 user 행에 붙는다 (세션 내내 같은 값이라 처음 본 것으로 충분)
+        if cwd.is_empty() {
+            if let Some(c) = row.cwd.as_deref().filter(|c| !c.is_empty()) {
+                cwd = c.to_string();
+                branch = row.git_branch.clone().unwrap_or_default();
+            }
+        }
 
         // compact 이벤트는 `type:"system"` 행에 실측값으로 남는다
         if let Some(cm) = row.compact {
@@ -260,6 +283,18 @@ fn parse_transcript(path: &Path) -> (Vec<ParsedEvent>, RawContext) {
         // dedup 키: message.id 우선 (전역 고유), 없으면 requestId
         let Some(dedup_key) = msg.id.or(row.request_id) else { continue };
 
+        // 세션 목록용 집계 — 메인체인 기준 (서브에이전트 모델이 대표로 뜨면 안 된다)
+        if !sidechain {
+            if last_at.map(|prev| ts >= prev).unwrap_or(true) {
+                last_at = Some(ts);
+                last_model = model.clone();
+            }
+        }
+        tokens += usage.input_tokens
+            + usage.output_tokens
+            + usage.cache_creation_input_tokens
+            + usage.cache_read_input_tokens;
+
         out.push(ParsedEvent {
             dedup_key,
             ev: UsageEvent {
@@ -283,7 +318,19 @@ fn parse_transcript(path: &Path) -> (Vec<ParsedEvent>, RawContext) {
             .unwrap_or_default()
             .to_string();
     }
-    (out, ctx)
+
+    // 서브에이전트 파일은 사용자가 연 세션이 아니라 목록에 넣지 않는다
+    let session = (track_ctx && last_at.is_some()).then(|| SessionRow {
+        source: Source::Claude,
+        id: ctx.session.clone(),
+        label: if cwd.is_empty() { ctx.session.chars().take(8).collect() } else { dir_label(&cwd) },
+        cwd,
+        model: last_model,
+        branch,
+        at: last_at.unwrap(),
+        tokens,
+    });
+    (out, ctx, session)
 }
 
 #[cfg(test)]

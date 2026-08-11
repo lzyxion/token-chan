@@ -30,6 +30,7 @@ use crate::context::{ContextState, RawContext};
 use crate::model::{ScanOutcome, Source, SourceStatus, UsageEvent};
 use crate::plan::{window_label, PlanMeter, PlanUsage};
 use crate::pricing::PriceTable;
+use crate::session::{dir_label, SessionRow};
 
 #[derive(Default, Clone, Copy, PartialEq)]
 struct Counters {
@@ -87,6 +88,8 @@ struct FileCache {
     /// 파일이 마지막으로 쓰인 시각 — Codex 에는 Claude 같은 세션 레지스트리가 없어
     /// 작업 중 판정을 이 신선도로 유도한다
     written_at: DateTime<Utc>,
+    /// 최근 세션 목록용
+    session: Option<SessionRow>,
 }
 
 pub struct CodexAdapter {
@@ -138,10 +141,10 @@ impl CodexAdapter {
                         None => true,
                     };
                     if needs {
-                        let (events, ctx, limits) = parse_rollout(path);
+                        let (events, ctx, limits, session) = parse_rollout(path);
                         self.cache.insert(
                             path.to_path_buf(),
-                            FileCache { mtime, size, events, ctx, limits, written_at: mtime_dt },
+                            FileCache { mtime, size, events, ctx, limits, written_at: mtime_dt, session },
                         );
                     } else if let Some(fc) = self.cache.get_mut(path) {
                         // 내용이 그대로여도 mtime 은 갱신될 수 있다 (동일 크기 재기록)
@@ -195,6 +198,11 @@ impl CodexAdapter {
             .filter_map(|fc| fc.limits.as_ref())
             .max_by_key(|(at, _)| *at)
             .map(|(_, p)| p.clone())
+    }
+
+    /// 최근 세션 목록
+    pub fn sessions(&self) -> Vec<SessionRow> {
+        self.cache.values().filter_map(|fc| fc.session.clone()).collect()
     }
 
     /// 스캔한 rollout 중 가장 최근에 쓰인 시각 — 작업 중 판정용
@@ -255,11 +263,14 @@ fn parse_rate_limits(v: &Value, at: DateTime<Utc>) -> Option<PlanUsage> {
     })
 }
 
-type Rollout = (Vec<ParsedEvent>, RawContext, Option<(DateTime<Utc>, PlanUsage)>);
+type Rollout = (Vec<ParsedEvent>, RawContext, Option<(DateTime<Utc>, PlanUsage)>, Option<SessionRow>);
 
 fn parse_rollout(path: &Path) -> Rollout {
     let mut ctx = RawContext::default();
     let mut limits: Option<(DateTime<Utc>, PlanUsage)> = None;
+    // 작업 위치는 session_meta 에 있다 — 지금까지 읽고 버리던 값이다
+    let mut cwd = String::new();
+    let (mut last_at, mut tokens) = (None, 0u64);
     // 세션 id 는 dedup 키의 뿌리다. session_meta 가 1행이라 token_count 보다 항상 먼저 나오지만,
     // 없더라도 파일명에 uuid 가 들어 있어 같은 rollout 의 복사본끼리는 같은 값이 된다.
     let mut session = path
@@ -267,7 +278,7 @@ fn parse_rollout(path: &Path) -> Rollout {
         .and_then(|s| s.to_str())
         .unwrap_or_default()
         .to_string();
-    let Ok(content) = std::fs::read_to_string(path) else { return (vec![], ctx, limits) };
+    let Ok(content) = std::fs::read_to_string(path) else { return (vec![], ctx, limits, None) };
     let mut out = vec![];
     let mut prev_total = Counters::default();
     let mut model: Option<String> = None;
@@ -293,6 +304,9 @@ fn parse_rollout(path: &Path) -> Rollout {
         if ty == "session_meta" || p_ty == "session_meta" {
             if let Some(id) = payload.get("id").and_then(Value::as_str) {
                 session = id.to_string();
+            }
+            if let Some(c) = payload.get("cwd").and_then(Value::as_str).filter(|c| !c.is_empty()) {
+                cwd = c.to_string();
             }
             continue;
         }
@@ -384,6 +398,11 @@ fn parse_rollout(path: &Path) -> Rollout {
             delta.cache_write,
             delta.cached
         );
+        if last_at.map(|prev| ts >= prev).unwrap_or(true) {
+            last_at = Some(ts);
+        }
+        tokens += input + output + delta.cache_write + delta.cached;
+
         out.push(ParsedEvent {
             dedup_key,
             ev: UsageEvent {
@@ -401,7 +420,18 @@ fn parse_rollout(path: &Path) -> Rollout {
     }
 
     ctx.session = session;
-    (out, ctx, limits)
+    let row = last_at.map(|at| SessionRow {
+        source: Source::Codex,
+        id: ctx.session.clone(),
+        label: if cwd.is_empty() { ctx.session.chars().take(8).collect() } else { dir_label(&cwd) },
+        cwd,
+        model: model.unwrap_or_default(),
+        // Codex 는 브랜치를 안 남긴다
+        branch: String::new(),
+        at,
+        tokens,
+    });
+    (out, ctx, limits, row)
 }
 
 #[cfg(test)]

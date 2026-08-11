@@ -34,17 +34,6 @@ export interface DailyRow {
   cost: number;
 }
 
-export interface BlockSummary {
-  start: string;
-  end: string;
-  totals: Totals;
-  cost: number;
-  cost_partial: boolean;
-  remaining_minutes: number;
-  time_ratio: number;
-  token_ratio: number | null;
-}
-
 /** 가장 최근에 움직인 세션의 컨텍스트 창 사용량 (Claude·Codex 지원) */
 export interface ContextState {
   source: Source;
@@ -69,6 +58,20 @@ export interface ContextState {
   last_compact_trigger: string | null;
 }
 
+/** 최근 세션 한 줄 — 어느 프로젝트에서 얼마나 태웠나 */
+export interface SessionRow {
+  source: Source;
+  id: string;
+  /** agy 는 대화 제목(첫 사용자 메시지), 나머지는 작업 폴더 이름 */
+  label: string;
+  cwd: string;
+  model: string;
+  /** git 브랜치 — Claude 만 알려준다 */
+  branch: string;
+  at: string;
+  tokens: number;
+}
+
 export interface Summary {
   generated_at: string;
   today_date: string;
@@ -78,14 +81,15 @@ export interface Summary {
   sources: SourceSummary[];
   models_today: ModelRow[];
   daily: DailyRow[];
-  block: BlockSummary | null;
   last_event_ts: string | null;
   /** 최근 메인체인 이벤트의 모델 (활성 모델) */
   last_model: string | null;
   /** 스캔 범위에서 관측된 모델명 목록 */
   observed_models: string[];
-  /** 활성 세션의 컨텍스트 사용량 (Claude 세션이 없으면 null) */
-  context: ContextState | null;
+  /** 소스별 활성 세션의 컨텍스트 사용량 (최근 세션이 있는 소스만) */
+  contexts: ContextState[];
+  /** 최근 세션 (소스 합쳐 최근순) */
+  sessions: SessionRow[];
 }
 
 export interface LiveSessionView {
@@ -165,6 +169,8 @@ export interface AppSettings {
   extraCodexHomes: string[];
   /** 추가로 스캔할 agy 홈(`antigravity-cli` 디렉토리) */
   extraAntigravityHomes: string[];
+  /** 게이지에 태울 벤더 — 링이 3개뿐이라 한 벤더만 보여준다 */
+  gaugeVendor: "auto" | Source;
 }
 
 /** 발견된 설치본 하나 (`get_scan_roots`) */

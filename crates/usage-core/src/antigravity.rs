@@ -63,6 +63,7 @@ use crate::context::{ContextState, RawContext};
 use crate::model::{ScanOutcome, Source, SourceStatus, UsageEvent};
 use crate::pricing::PriceTable;
 use crate::protobuf::Message;
+use crate::session::{dir_label, from_file_uri, SessionRow};
 
 /// 잠긴 DB 를 기다리는 한도. agy 가 쓰는 중이면 잠깐 뒤 풀리고, 안 풀려도
 /// 다음 스캔에서 다시 시도하므로 길게 잡을 이유가 없다.
@@ -83,6 +84,8 @@ struct FileCache {
     /// DB·WAL 중 마지막으로 쓰인 시각 — agy 에는 세션 레지스트리가 없어
     /// 작업 중 판정을 이 신선도로 유도한다
     written_at: DateTime<Utc>,
+    /// 최근 세션 목록용 (제목·작업 위치 포함)
+    session: Option<SessionRow>,
 }
 
 pub struct AntigravityAdapter {
@@ -125,9 +128,11 @@ impl AntigravityAdapter {
                 if needs {
                     // 잠겨서 못 읽으면 이전 캐시를 유지한다 — 지워 버리면 agy 가 도는 동안
                     // 사용량이 통째로 사라져 보인다
-                    if let Some((events, ctx)) = parse_conversation(&path) {
-                        self.cache
-                            .insert(path.clone(), FileCache { stamp, events, ctx, written_at });
+                    if let Some((events, ctx, session)) = parse_conversation(&path) {
+                        self.cache.insert(
+                            path.clone(),
+                            FileCache { stamp, events, ctx, written_at, session },
+                        );
                     }
                 } else if let Some(fc) = self.cache.get_mut(&path) {
                     fc.written_at = written_at;
@@ -170,6 +175,11 @@ impl AntigravityAdapter {
         ))
     }
 
+    /// 최근 대화 목록. 제목·작업 위치까지 `parse_conversation` 이 채워 둔다.
+    pub fn sessions(&self) -> Vec<SessionRow> {
+        self.cache.values().filter_map(|fc| fc.session.clone()).collect()
+    }
+
     /// 스캔한 대화 DB 중 가장 최근에 쓰인 시각 — 작업 중 판정용.
     ///
     /// `presence/<uuid>.lock` 이 있어서 그쪽이 나아 보이지만 쓸 수 없다. 실측에서 agy
@@ -195,6 +205,32 @@ impl AntigravityAdapter {
     }
 }
 
+/// 대화의 제목과 작업 위치 — **첫 스텝(첫 사용자 입력)** 에서 뽑는다.
+///
+/// `conversation_summaries.db` 에도 `preview` 가 있지만 실측에서 대화 5건 중 1건만
+/// 들어 있었다 (요약 DB 갱신이 늦다). 첫 스텝은 5건 **전부**에 있어 이쪽이 맞다.
+///
+/// ```text
+/// 19.2       첫 사용자 메시지  ← 제목
+/// 19.12.12   작업 위치 (file:// URI)
+/// ```
+fn first_step_meta(conn: &Connection) -> (String, String) {
+    let Ok(mut stmt) = conn.prepare("select step_payload from steps order by idx limit 1") else {
+        return (String::new(), String::new());
+    };
+    let blob: Option<Vec<u8>> = stmt.query_row([], |r| r.get(0)).ok();
+    let Some(blob) = blob else { return (String::new(), String::new()) };
+    let step = Message::new(&blob);
+    let Some(input) = step.msg(19) else { return (String::new(), String::new()) };
+    let title = input.str(2).unwrap_or_default().trim().to_string();
+    let workspace = input
+        .msg(12)
+        .and_then(|m| m.str(12))
+        .map(from_file_uri)
+        .unwrap_or_default();
+    (title, workspace)
+}
+
 /// `.db` + `-wal` 의 (mtime, size) 를 합친 변경 감지용 서명
 fn db_stamp(path: &Path) -> Option<(SystemTime, u64, SystemTime, u64)> {
     let m = std::fs::metadata(path).ok()?;
@@ -208,7 +244,7 @@ fn db_stamp(path: &Path) -> Option<(SystemTime, u64, SystemTime, u64)> {
 
 /// 대화 DB 하나를 읽어 이벤트와 컨텍스트를 뽑는다.
 /// 열지 못하거나(잠김·손상) 스키마가 다르면 `None` — 호출부가 이전 값을 유지한다.
-fn parse_conversation(path: &Path) -> Option<(Vec<ParsedEvent>, RawContext)> {
+fn parse_conversation(path: &Path) -> Option<(Vec<ParsedEvent>, RawContext, Option<SessionRow>)> {
     // 읽기 전용으로 연다. agy 가 쓰는 중이어도 읽기는 대개 통과한다.
     let conn = Connection::open_with_flags(
         path,
@@ -225,7 +261,14 @@ fn parse_conversation(path: &Path) -> Option<(Vec<ParsedEvent>, RawContext)> {
     // 파일명이 곧 대화 uuid — 복사본끼리도 같은 값이라 세션 식별에 그대로 쓴다
     let session = path.file_stem().and_then(|s| s.to_str()).unwrap_or_default().to_string();
     let mut ctx = RawContext { session: session.clone(), ..Default::default() };
+    let (title, workspace) = first_step_meta(&conn);
+
     let mut out = vec![];
+    let (mut last_at, mut last_model, mut tokens) = (None, String::new(), 0u64);
+    // 대화 끝에 **모델도 사용량도 없이 컨텍스트만 있는 행**이 붙는다 (실측 idx 4:
+    // 1.19 없음 / 1.4 전부 0 / 1.9.10.1 = 28,980). 그 행이 컨텍스트 대표가 되므로
+    // 모델을 그때그때 읽으면 "미상"으로 떨어진다 → 마지막으로 본 모델을 물려준다.
+    let mut known_model: Option<String> = None;
 
     for row in rows {
         let Ok((idx, blob)) = row else { continue };
@@ -240,7 +283,10 @@ fn parse_conversation(path: &Path) -> Option<(Vec<ParsedEvent>, RawContext)> {
         }) else {
             continue;
         };
-        let model = rec.str(19).unwrap_or("gemini-unknown").to_string();
+        if let Some(m) = rec.str(19).filter(|m| !m.is_empty()) {
+            known_model = Some(m.to_string());
+        }
+        let model = known_model.clone().unwrap_or_else(|| "gemini-unknown".into());
 
         // ── 컨텍스트 ──
         // 첫 행은 시스템 프롬프트·툴 정의가 아직 안 잡혀 있어 값이 엉터리다 (실측 164).
@@ -273,6 +319,12 @@ fn parse_conversation(path: &Path) -> Option<(Vec<ParsedEvent>, RawContext)> {
             .map(String::from)
             .unwrap_or_else(|| format!("{session}#{idx}"));
 
+        if last_at.map(|prev| ts >= prev).unwrap_or(true) {
+            last_at = Some(ts);
+            last_model = model.clone();
+        }
+        tokens += input + output + cache_read;
+
         out.push(ParsedEvent {
             dedup_key,
             ev: UsageEvent {
@@ -291,7 +343,23 @@ fn parse_conversation(path: &Path) -> Option<(Vec<ParsedEvent>, RawContext)> {
         });
     }
 
-    Some((out, ctx))
+    let row = last_at.map(|at| SessionRow {
+        source: Source::Antigravity,
+        id: session.clone(),
+        label: if !title.is_empty() {
+            title
+        } else if !workspace.is_empty() {
+            dir_label(&workspace)
+        } else {
+            session.chars().take(8).collect()
+        },
+        cwd: workspace,
+        model: last_model,
+        branch: String::new(),
+        at,
+        tokens,
+    });
+    Some((out, ctx, row))
 }
 
 #[cfg(test)]
@@ -312,6 +380,10 @@ mod tests {
     }
 
     fn blob(r: &Row) -> Vec<u8> {
+        blob_with_model(r, "gemini-3.6-flash")
+    }
+
+    fn blob_with_model(r: &Row, model: &str) -> Vec<u8> {
         let mut usage = [
             field_varint(2, r.input),
             field_varint(3, r.output),
@@ -326,12 +398,11 @@ mod tests {
         let ctx = [field_varint(1, r.ctx_tokens), field_varint(4, r.window)].concat();
         let gen9 = [field_bytes(4, &time), field_bytes(10, &ctx)].concat();
 
-        let rec = [
-            field_bytes(4, &usage),
-            field_bytes(9, &gen9),
-            field_bytes(19, b"gemini-3.6-flash"),
-        ]
-        .concat();
+        let mut rec = [field_bytes(4, &usage), field_bytes(9, &gen9)].concat();
+        // 빈 문자열이면 1.19 필드를 아예 안 넣는다 (실데이터의 꼬리 행과 같은 모양)
+        if !model.is_empty() {
+            rec.extend(field_bytes(19, model.as_bytes()));
+        }
         field_bytes(1, &rec)
     }
 
@@ -358,6 +429,30 @@ mod tests {
             Row { idx: 1, input: 2436, output: 139, cached: 16284, req_id: "C9B5av", secs: 1_786_368_011, ctx_tokens: 26_506, window: 256_000 },
             Row { idx: 2, input: 2187, output: 994, cached: 28518, req_id: "jNB5aq", secs: 1_786_368_139, ctx_tokens: 37_829, window: 256_000 },
         ]
+    }
+
+    /// 행마다 모델명을 달리 줄 수 있는 변형 (빈 문자열 = 1.19 필드 자체가 없음)
+    fn home_with_models(rows: &[Row], models: &[&str]) -> (tempfile::TempDir, PathBuf) {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path().join("antigravity-cli");
+        std::fs::create_dir_all(home.join("conversations")).unwrap();
+        let db = home.join("conversations/0f232cbb-b515-46e8-a6ca-f60532dca6d7.db");
+        let conn = Connection::open(&db).unwrap();
+        conn.execute(
+            "create table gen_metadata (idx integer primary key, data blob, size integer default 0)",
+            [],
+        )
+        .unwrap();
+        for (i, r) in rows.iter().enumerate() {
+            let m = models.get(i).copied().unwrap_or("gemini-3.6-flash");
+            conn.execute(
+                "insert into gen_metadata (idx, data) values (?1, ?2)",
+                rusqlite::params![r.idx, blob_with_model(r, m)],
+            )
+            .unwrap();
+        }
+        drop(conn);
+        (dir, home)
     }
 
     fn home_with(rows: &[Row]) -> (tempfile::TempDir, PathBuf) {
@@ -404,6 +499,32 @@ mod tests {
         assert_eq!(c.window, 256_000, "로그가 알려준 창을 그대로 써야 함");
         assert!(!c.window_inferred);
         assert!(!c.interim);
+    }
+
+    /// 대화 끝에는 **모델도 사용량도 없이 컨텍스트만 있는 행**이 붙는다 (실측 idx 4).
+    /// 그 행이 컨텍스트 대표가 되므로, 모델을 물려받지 않으면 게이지·카드에 "미상"이 뜬다.
+    #[test]
+    fn trailing_context_only_row_keeps_the_last_known_model() {
+        let mut rows = sample();
+        rows.push(Row {
+            idx: 3,
+            input: 0,
+            output: 0,
+            cached: 0,
+            req_id: "TAIL",
+            secs: 1_786_368_200,
+            ctx_tokens: 40_000,
+            window: 256_000,
+        });
+        let (_d, home) = home_with_models(&rows, &["gemini-3.6-flash", "gemini-3.6-flash", "gemini-3.6-flash", ""]);
+
+        let mut a = AntigravityAdapter::new(vec![home]);
+        let out = a.scan(DateTime::UNIX_EPOCH.into());
+        assert_eq!(out.events.len(), 3, "사용량 0인 꼬리 행은 이벤트가 아니다");
+
+        let c = a.context(&PriceTable::builtin()).unwrap();
+        assert_eq!(c.tokens, 40_000, "꼬리 행이 가장 최신 컨텍스트다");
+        assert_eq!(c.model, "gemini-3.6-flash", "모델 필드가 없어도 미상으로 떨어지면 안 됨");
     }
 
     /// 첫 행 하나뿐인 대화는 컨텍스트를 만들어내면 안 된다 — 164/256,000 = 0.06% 라는

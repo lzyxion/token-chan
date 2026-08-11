@@ -85,6 +85,11 @@ pub struct Settings {
     /// 추가로 스캔할 Antigravity CLI(`agy`) 홈 (`antigravity-cli` 디렉토리).
     /// 그 아래 `conversations/<uuid>.db` 를 본다.
     pub extra_antigravity_homes: Vec<String>,
+    /// 게이지에 태울 벤더: `auto` | `claude` | `codex` | `antigravity`.
+    ///
+    /// 게이지는 링 3개뿐이라 벤더 하나만 보여준다. `auto` 는 지금 작업 중인 쪽을
+    /// 따라가지만, 한 벤더만 지켜보고 싶은 경우를 위해 고정할 수 있게 둔다.
+    pub gauge_vendor: String,
     /// 계정별 집계 포함 여부의 **사용자 지정값**만 담는다 (`Account::setting_key()` → on/off).
     ///
     /// 여기 없는 계정은 기본값을 따른다: 표준 위치(홈·WSL·환경변수·직접 추가)에서 발견된
@@ -124,6 +129,7 @@ impl Default for Settings {
             extra_claude_homes: vec![],
             extra_codex_homes: vec![],
             extra_antigravity_homes: vec![],
+            gauge_vendor: "auto".into(),
             accounts_enabled: Default::default(),
         }
     }

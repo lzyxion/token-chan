@@ -6,7 +6,6 @@
 pub mod accounts;
 pub mod aggregate;
 pub mod antigravity;
-pub mod blocks;
 pub mod claude;
 pub mod codex;
 pub mod context;
@@ -16,6 +15,7 @@ pub mod plan;
 pub mod pricing;
 pub mod protobuf;
 pub mod roots;
+pub mod session;
 
 pub use aggregate::{build_summary, Summary};
 pub use context::ContextState;

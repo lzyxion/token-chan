@@ -24,7 +24,12 @@ const USAGE_INTERVAL: Duration = Duration::from_secs(10);
 const LIVE_INTERVAL: Duration = Duration::from_secs(2);
 /// 공식 플랜 한도(`claude -p "/usage"`) 폴링 주기 — CLI 프로세스를 띄우므로 여유 있게
 const PLAN_INTERVAL: Duration = Duration::from_secs(300);
-const SUMMARY_DAYS: usize = 14;
+/// 일별 집계 기간 — 통계 페이지의 잔디(13주 격자)를 채울 만큼 길어야 한다.
+/// 91일이면 마지막 열이 이번 주가 되도록 주 단위로 딱 떨어진다.
+/// 기본 보존기간(90일)을 넘는 날은 자연히 0으로 나온다.
+const SUMMARY_DAYS: usize = 91;
+/// 최근 세션 목록에 실을 개수 — 패널 한 페이지에 들어가는 만큼
+const RECENT_SESSIONS: usize = 8;
 
 /// 리셋 임박 기본 문구 — 프론트 speech.ts `DEFAULT_LINES.resetNotify` 와 동일하게 유지.
 /// 여기서 치환하는 변수는 `{분}`·`{시각}` 뿐이다.
@@ -116,8 +121,16 @@ fn set_plan(app: &AppHandle, plan: usage_core::plan::PlanUsage) {
 }
 
 pub fn spawn(app: AppHandle) {
-    // 첫 스캔 전에 계정을 한 번 찾아 둔다 (이후에는 설정 변경/사용자 요청 때만)
-    rediscover(&app);
+    // 계정 발견을 **setup 에서 하면 안 된다** — 마커 스캔이 파일시스템을 훑고,
+    // 느린 경로가 하나라도 끼면 창이 뜨기 전에 앱이 통째로 멈춘다.
+    // (실측: 멈춘 WSL 배포판 때문에 4분간 얼어붙음)
+    // 별도 스레드로 돌리면 창은 즉시 뜨고 계정 목록만 잠깐 뒤에 채워진다.
+    let discover_app = app.clone();
+    std::thread::spawn(move || {
+        rediscover(&discover_app);
+        // 목록이 채워졌으니 트레이 메뉴를 다시 만든다 (빈 상태로 만들어졌으므로)
+        crate::tray::refresh_menu(&discover_app);
+    });
     spawn_usage_thread(app.clone());
     spawn_live_thread(app.clone());
     spawn_plan_thread(app);
@@ -310,14 +323,20 @@ fn spawn_usage_thread(app: AppHandle) {
             // 컨텍스트는 트랜스크립트 파일 단위 정보라 이벤트 집계로 안 나온다 —
             // 어댑터가 스캔하며 모아 둔 것 중 가장 최근에 움직인 세션을 얹는다.
             // (세 CLI 를 번갈아 쓰면 방금 만진 쪽이 게이지에 뜬다)
-            summary.context = [
+            // 어느 벤더를 게이지에 태울지는 프론트가 정하므로 여기서 고르지 않는다
+            summary.contexts = [
                 claude.context(&pricing),
                 codex.context(&pricing),
                 agy.context(&pricing),
             ]
             .into_iter()
             .flatten()
-            .max_by_key(|c| c.at);
+            .collect();
+            // 최근 세션 — 소스별 목록을 합쳐 최근순 상위 N개만
+            summary.sessions = usage_core::session::merge(
+                [claude.sessions(), codex.sessions(), agy.sessions()].concat(),
+                RECENT_SESSIONS,
+            );
 
             {
                 let state = app.state::<AppState>();
