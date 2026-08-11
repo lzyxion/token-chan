@@ -206,7 +206,6 @@ pub fn run() {
             commands::drag_pet,
             commands::end_pet_drag,
             commands::show_pet_menu,
-            commands::get_scan_roots,
             commands::list_character_packs,
             commands::get_character_images,
             commands::open_characters_dir,

@@ -10,12 +10,22 @@ use usage_core::model::Source;
 ///
 /// `prefix` 는 펫 우클릭 메뉴에서 트레이와 id 가 겹치지 않게 붙이는 접두사.
 fn accounts_submenu(app: &AppHandle, prefix: &str) -> tauri::Result<Submenu<tauri::Wry>> {
-    let (accounts, overrides) = {
+    let (accounts, overrides, extras) = {
         let state = app.state::<crate::AppState>();
         // 두 락을 겹쳐 잡지 않는다
-        let ov = { state.settings.lock().unwrap().accounts_enabled.clone() };
+        let (ov, ex) = {
+            let s = state.settings.lock().unwrap();
+            (
+                s.accounts_enabled.clone(),
+                [
+                    ("claude", s.extra_claude_homes.clone()),
+                    ("codex", s.extra_codex_homes.clone()),
+                    ("antigravity", s.extra_antigravity_homes.clone()),
+                ],
+            )
+        };
         let ac = { state.accounts.lock().unwrap().clone() };
-        (ac, ov)
+        (ac, ov, ex)
     };
 
     let mut items: Vec<Box<dyn IsMenuItem<tauri::Wry>>> = vec![];
@@ -34,7 +44,7 @@ fn accounts_submenu(app: &AppHandle, prefix: &str) -> tauri::Result<Submenu<taur
             Source::Codex => "Codex",
             Source::Antigravity => "AGY",
         };
-        // 어떤 계정인지만 알면 되므로 계정명만 — 플랜·설치 수·경로는 설정 창에 있다
+        // 어떤 계정인지만 알면 되므로 계정명만 표시한다
         items.push(Box::new(CheckMenuItem::with_id(
             app,
             format!("{prefix}acct:{}", a.setting_key()),
@@ -49,6 +59,36 @@ fn accounts_submenu(app: &AppHandle, prefix: &str) -> tauri::Result<Submenu<taur
     items.push(Box::new(MenuItem::with_id(app, format!("{prefix}acctadd:codex"), "Codex 홈 추가…", true, None::<&str>)?));
     items.push(Box::new(MenuItem::with_id(app, format!("{prefix}acctadd:antigravity"), "AGY 홈 추가…", true, None::<&str>)?));
     items.push(Box::new(MenuItem::with_id(app, format!("{prefix}acctrescan"), "다시 검색", true, None::<&str>)?));
+
+    // 직접 추가한 경로의 삭제 — 설정 창에서 데이터 소스 UI 를 없앴으므로 여기가 유일한 제거 경로
+    let mut del_items: Vec<Box<dyn IsMenuItem<tauri::Wry>>> = vec![];
+    for (src, list) in &extras {
+        let disp = match *src {
+            "codex" => "Codex",
+            "antigravity" => "AGY",
+            _ => "Claude",
+        };
+        for p in list.iter().filter(|p| !p.trim().is_empty()) {
+            del_items.push(Box::new(MenuItem::with_id(
+                app,
+                format!("{prefix}acctdel:{src}:{p}"),
+                format!("{disp} · {p}"),
+                true,
+                None::<&str>,
+            )?));
+        }
+    }
+    if !del_items.is_empty() {
+        let del_refs: Vec<&dyn IsMenuItem<tauri::Wry>> =
+            del_items.iter().map(|b| b.as_ref()).collect();
+        items.push(Box::new(Submenu::with_id_and_items(
+            app,
+            format!("{prefix}acctdelmenu"),
+            "추가한 경로 제거",
+            true,
+            &del_refs,
+        )?));
+    }
 
     let refs: Vec<&dyn IsMenuItem<tauri::Wry>> = items.iter().map(|b| b.as_ref()).collect();
     Submenu::with_id_and_items(app, format!("{prefix}accounts"), "연결된 계정", true, &refs)
@@ -176,6 +216,7 @@ pub fn handle_action(app: &AppHandle, action: &str) {
                 refresh_menu(app);
             }
             a if a.starts_with("acctadd:") => pick_home(app, &a["acctadd:".len()..]),
+            a if a.starts_with("acctdel:") => remove_home(app, &a["acctdel:".len()..]),
             _ => {}
     }
 }
@@ -230,6 +271,33 @@ fn pick_home(app: &AppHandle, source: &str) {
         use tauri::Emitter;
         let _ = app.emit("settings-changed", &updated);
     });
+}
+
+/// 직접 추가한 스캔 경로를 지운다. `arg` 는 "<source>:<경로>" —
+/// 경로에 든 콜론(드라이브 문자)은 첫 콜론에서만 갈라 문제없다.
+fn remove_home(app: &AppHandle, arg: &str) {
+    let Some((source, path)) = arg.split_once(':') else { return };
+    let updated = {
+        let state = app.state::<crate::AppState>();
+        let mut s = state.settings.lock().unwrap();
+        let list = match source {
+            "codex" => &mut s.extra_codex_homes,
+            "antigravity" => &mut s.extra_antigravity_homes,
+            _ => &mut s.extra_claude_homes,
+        };
+        let before = list.len();
+        list.retain(|p| p != path);
+        if list.len() == before {
+            return; // 메뉴가 낡아 이미 지워진 경로 — 저장/재탐색 불필요
+        }
+        crate::settings::save(&s);
+        s.clone()
+    };
+    // 지운 경로의 계정이 목록에서 빠지도록 다시 발견한다
+    crate::monitor::rediscover(app);
+    refresh_menu(app);
+    use tauri::Emitter;
+    let _ = app.emit("settings-changed", &updated);
 }
 
 /// 트레이 메뉴의 클릭 통과 체크 표시를 현재 값에 맞춘다.

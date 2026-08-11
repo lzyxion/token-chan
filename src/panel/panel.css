@@ -150,16 +150,16 @@
 }
 
 /* 잔디 — 열=주, 행=요일.
-   폭에 맞춰 늘리되(1fr) 칸을 12px 로 **제한**한다. 안 그러면 13주 × 274px 에서
-   칸이 19px 까지 커져 격자만 150px 을 먹고 아래 막대그래프가 밀려난다.
-   남는 폭은 가운데 정렬로 흡수한다. */
+   열 수와 최대 폭은 컴포넌트가 인라인으로 준다 (보존기간에 따라 4~26주로 변한다).
+   `margin: 0 auto` 로 주가 적을 때 남는 폭을 가운데 정렬로 흡수한다 — 칸을 키우면
+   격자만 150px 을 먹고 아래 차트가 밀려난다. */
 .grass-grid {
   display: grid;
   grid-template-rows: repeat(7, 1fr);
   grid-auto-flow: column;
-  grid-auto-columns: minmax(0, 12px);
-  justify-content: center;
   gap: 2px;
+  margin: 0 auto;
+  width: 100%;
 }
 .grass-cell {
   aspect-ratio: 1;
@@ -168,6 +168,13 @@
 }
 .grass-cell.empty {
   background: none;
+}
+/* 기록이 시작되기 전 날 — "그날 안 씀"(lv0)과 **반드시** 달라 보여야 한다.
+   CLI 를 깔기도 전 날짜가 0 과 같은 모양이면 안 쓴 것처럼 읽힌다.
+   게이지의 점선 링과 같은 규칙: 채우지 않고 테두리만 남긴다. */
+.grass-cell.nodata {
+  background: none;
+  border: 1px dashed rgba(255, 255, 255, 0.1);
 }
 /* 색이 진할수록 많이 썼다는 뜻 — 경고가 아니라 양이라서 단계 색(주황·빨강)을 쓰지 않는다 */
 .grass-cell.lv0 {

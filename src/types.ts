@@ -81,6 +81,8 @@ export interface Summary {
   sources: SourceSummary[];
   models_today: ModelRow[];
   daily: DailyRow[];
+  /** 스캔 범위에서 가장 오래된 이벤트 — 잔디의 "기록 없음" 경계 */
+  first_event_ts: string | null;
   last_event_ts: string | null;
   /** 최근 메인체인 이벤트의 모델 (활성 모델) */
   last_model: string | null;
@@ -171,22 +173,6 @@ export interface AppSettings {
   extraAntigravityHomes: string[];
   /** 게이지에 태울 벤더 — 링이 3개뿐이라 한 벤더만 보여준다 */
   gaugeVendor: "auto" | Source;
-}
-
-/** 발견된 설치본 하나 (`get_scan_roots`) */
-export interface ScanRoot {
-  source: Source;
-  path: string;
-  /** 그 아래에서 발견된 트랜스크립트 수 */
-  files: number;
-  /** 자동 탐지가 아니라 설정의 "추가 스캔 경로"에서 온 것인지 */
-  extra: boolean;
-  /** 이 설치본이 속한 계정 (이메일 또는 계정 id 앞자리) */
-  account: string;
-  /** 계정이 집계에 포함돼 있는지 (토글은 우클릭/트레이의 "연결된 계정") */
-  enabled: boolean;
-  /** 마커 스캔으로 찾아낸 설치본인지 */
-  discovered: boolean;
 }
 
 /** 모델 접두사(콤마 구분) → 문구 세트 매핑 규칙 (캐릭터 규칙과 같은 방식) */
