@@ -165,7 +165,8 @@ fn spawn_plan_thread(app: AppHandle) {
                 set_plan(&app, plan.clone());
 
                 // 리셋 임박 — OS 알림 대신 캐릭터가 직접 말한다.
-                // 문구는 활성 모델의 문구 세트 → 기본 문구 → 내장 순 (프론트 speech.ts 와 동일 규칙)
+                // 문구는 활성 캐릭터 팩의 speech.json → 기본 문구 → 내장 순
+                // (대사는 캐릭터의 속성 — 프론트 Pet 의 폴백 체인과 동일 규칙)
                 let (notify_min, custom_lines) = {
                     let state = app.state::<AppState>();
                     let model = state
@@ -175,30 +176,32 @@ fn spawn_plan_thread(app: AppHandle) {
                         .as_ref()
                         .and_then(|sum| sum.last_model.clone());
                     let s = state.settings.lock().unwrap();
-                    let set_lines = model
+                    // 활성 팩 = 모델 → 캐릭터 규칙(최장 접두사) → 기본 팩 (프론트 resolvePack 과 동일)
+                    let pack = model
                         .as_deref()
                         .and_then(|m| {
-                            // 최장 접두사 매칭 (캐릭터 팩 규칙과 동일)
                             let mut best_len = 0usize;
                             let mut best: Option<&str> = None;
-                            for r in &s.speech_rules {
-                                if r.set.is_empty() {
+                            for r in &s.character_rules {
+                                if r.pack.is_empty() {
                                     continue;
                                 }
                                 for p in r.prefixes.split(',').map(str::trim).filter(|p| !p.is_empty()) {
                                     if m.starts_with(p) && p.len() > best_len {
                                         best_len = p.len();
-                                        best = Some(r.set.as_str());
+                                        best = Some(r.pack.as_str());
                                     }
                                 }
                             }
-                            best
+                            best.map(String::from)
                         })
-                        .and_then(|name| s.speech_sets.get(name))
-                        .and_then(|set| set.get("resetNotify"))
-                        .filter(|v| v.iter().any(|l| !l.trim().is_empty()))
-                        .cloned();
-                    let lines = set_lines.or_else(|| s.speech_lines.get("resetNotify").cloned());
+                        .or_else(|| s.character_pack.clone());
+                    let pack_lines = pack
+                        .as_deref()
+                        .and_then(crate::settings::load_pack_speech)
+                        .and_then(|mut sp| sp.remove("resetNotify"))
+                        .filter(|v| v.iter().any(|l| !l.trim().is_empty()));
+                    let lines = pack_lines.or_else(|| s.speech_lines.get("resetNotify").cloned());
                     (s.reset_notify_minutes, lines)
                 };
                 if notify_min > 0 {

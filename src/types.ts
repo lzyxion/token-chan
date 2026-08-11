@@ -145,11 +145,14 @@ export interface AppSettings {
   autostart: boolean;
   petScale: number;
   weeklyAlertThreshold: number;
+  /** 컨텍스트 경고 임계값 (0..1) — 활성 벤더 컨텍스트 사용률 기준 (compact 임박) */
+  contextAlertThreshold: number;
   resetNotifyMinutes: number;
   clickThrough: boolean;
   panelPos: [number, number] | null;
   panelSize: [number, number] | null;
   settingsSize: [number, number] | null;
+  studioSize: [number, number] | null;
   speechEnabled: boolean;
   speechDurationMs: number;
   startHidden: boolean;
@@ -160,12 +163,9 @@ export interface AppSettings {
   /** 게이지 라벨(벤더·수치·리셋) 상시 표시 — 끄면 호버할 때만 */
   gaugeLabels: boolean;
   gaugeSide: GaugeSide;
-  /** 상황 키("enter.working"·"poke"·"resetNotify" 등) → 사용자 문구 목록 (비면 기본 문구) */
+  /** 상황 키("enter.working"·"poke"·"resetNotify" 등) → 사용자 문구 목록 (비면 내장 기본).
+   *  캐릭터별 말투는 여기가 아니라 팩 폴더의 `speech.json` (`get_character_speech`) */
   speechLines: Record<string, string[]>;
-  /** 이름 붙은 문구 세트(모델별 말투) — 세트에 없는 상황은 speechLines → 내장 기본 순 폴백 */
-  speechSets: Record<string, Record<string, string[]>>;
-  /** 모델 접두사 → 문구 세트 매핑 (최장 접두사 우선, 미매칭 시 기본 문구) */
-  speechRules: SpeechRule[];
   /** 추가로 스캔할 Claude 홈(`.claude` 디렉토리) — 자동 탐지가 환경에 좌우되는 걸 보완 */
   extraClaudeHomes: string[];
   /** 추가로 스캔할 Codex 홈(`CODEX_HOME` 에 해당) */
@@ -176,10 +176,10 @@ export interface AppSettings {
   gaugeVendor: "auto" | Source;
 }
 
-/** 모델 접두사(콤마 구분) → 문구 세트 매핑 규칙 (캐릭터 규칙과 같은 방식) */
-export interface SpeechRule {
-  prefixes: string;
-  set: string;
+/** 팩별 동작 설정 (`characters/<팩>/pack.json`) — 없으면 모든 상태 사용 */
+export interface PackConfig {
+  /** 끈 상태 목록 (working/alert/…) — 꺼진 상태는 idle 로 폴백 */
+  disabledStates: string[];
 }
 
 /** 도넛 게이지 위치 — off면 표시하지 않음 */

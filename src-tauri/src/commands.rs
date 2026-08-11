@@ -37,11 +37,13 @@ pub fn set_settings(app: AppHandle, state: State<'_, AppState>, mut new_settings
     new_settings.pet_scale = new_settings.pet_scale.clamp(0.5, 2.5);
     new_settings.alert_threshold = new_settings.alert_threshold.clamp(0.1, 1.0);
     new_settings.weekly_alert_threshold = new_settings.weekly_alert_threshold.clamp(0.1, 1.0);
+    new_settings.context_alert_threshold = new_settings.context_alert_threshold.clamp(0.1, 1.0);
     new_settings.speech_duration_ms = new_settings.speech_duration_ms.clamp(1000, 15000);
-    // panelPos·panelSize·settingsSize는 패널이 편집하지 않음 — 드래그/리사이즈 저장과의 경합 방지
+    // panelPos·panelSize·settingsSize·studioSize는 패널이 편집하지 않음 — 드래그/리사이즈 저장과의 경합 방지
     new_settings.panel_pos = old.panel_pos;
     new_settings.panel_size = old.panel_size;
     new_settings.settings_size = old.settings_size;
+    new_settings.studio_size = old.studio_size;
     new_settings.reset_notify_minutes = new_settings.reset_notify_minutes.min(120);
     new_settings.sleep_after_minutes = new_settings.sleep_after_minutes.clamp(1, 480);
 
@@ -318,6 +320,8 @@ fn resize_target(label: &str) -> Option<(&'static str, f64, f64)> {
     match label {
         "panel" => Some(("panel", 260.0, 180.0)),
         "settings" => Some(("settings", 280.0, 240.0)),
+        // 2열 레이아웃이라 이보다 좁으면 우측 열이 못 산다
+        "studio" => Some(("studio", 460.0, 340.0)),
         _ => None,
     }
 }
@@ -441,6 +445,7 @@ pub fn save_window_size(state: State<'_, AppState>, label: String, width: u32, h
     match label.as_str() {
         "panel" => s.panel_size = Some((width, height)),
         "settings" => s.settings_size = Some((width, height)),
+        "studio" => s.studio_size = Some((width, height)),
         _ => return,
     }
     settings::save(&s);
@@ -581,6 +586,241 @@ fn find_state_file(pack_dir: &std::path::Path, state: &str) -> Option<std::path:
         .find(|p| p.is_file())
 }
 
+/// 팩 폴더의 대사 파일 (`characters/<팩>/speech.json`). 없으면 None — 기본 문구 폴백.
+/// 대사는 캐릭터의 속성이라 설정이 아닌 팩 폴더에서 이미지와 함께 관리한다.
+#[tauri::command]
+pub fn get_character_speech(
+    pack: String,
+) -> Option<std::collections::HashMap<String, Vec<String>>> {
+    settings::load_pack_speech(&pack)
+}
+
+/// 팩 대사 저장 — 설정 창 편집기의 쓰기 경로. 실질 문구가 있는 키만 남기고,
+/// 전부 비면 파일을 지워 팩 폴더를 깨끗하게 유지한다. 대사 파일은 설정 파일 밖이라
+/// settings-changed 로는 전파되지 않으므로 전용 이벤트로 펫에게 알린다.
+#[tauri::command]
+pub fn set_character_speech(
+    app: AppHandle,
+    pack: String,
+    lines: std::collections::HashMap<String, Vec<String>>,
+) {
+    let Some(path) = settings::pack_speech_path(&pack) else { return };
+    let lines: std::collections::HashMap<String, Vec<String>> = lines
+        .into_iter()
+        .filter(|(_, v)| v.iter().any(|l| !l.trim().is_empty()))
+        .collect();
+    if lines.is_empty() {
+        let _ = std::fs::remove_file(&path);
+    } else if let Ok(json) = serde_json::to_string_pretty(&lines) {
+        let _ = std::fs::write(&path, json);
+    }
+    use tauri::Emitter;
+    let _ = app.emit("character-speech-changed", &pack);
+}
+
+/// 팩별 동작 설정 (`characters/<팩>/pack.json`). 없으면 기본값(모든 상태 사용).
+#[tauri::command]
+pub fn get_character_config(pack: String) -> settings::PackConfig {
+    settings::load_pack_config(&pack)
+}
+
+/// 팩 설정 저장 — 기본값(끈 상태 없음)이면 파일을 지워 폴더를 깨끗하게 유지한다.
+#[tauri::command]
+pub fn set_character_config(app: AppHandle, pack: String, config: settings::PackConfig) {
+    let Some(path) = settings::pack_config_path(&pack) else { return };
+    if config.disabled_states.is_empty() {
+        let _ = std::fs::remove_file(&path);
+    } else if let Ok(json) = serde_json::to_string_pretty(&config) {
+        let _ = std::fs::write(&path, json);
+    }
+    use tauri::Emitter;
+    let _ = app.emit("character-config-changed", &pack);
+}
+
+/// 새 팩 폴더 생성. idle 이미지를 넣기 전까지 펫에서는 선택 불가(목록 필터)지만,
+/// 스튜디오에서는 `list_character_dirs` 로 보여 이어서 채울 수 있다.
+#[tauri::command]
+pub fn create_character_pack(name: String) -> Result<(), String> {
+    let name = name.trim().to_string();
+    let Some(root) = settings::characters_dir() else {
+        return Err("설정 폴더를 찾을 수 없습니다".into());
+    };
+    let Some(dir) = settings::pack_dir(&name) else {
+        return Err("팩 이름에 쓸 수 없는 문자가 있습니다".into());
+    };
+    if dir.exists() {
+        return Err("이미 있는 팩 이름입니다".into());
+    }
+    let _ = std::fs::create_dir_all(root);
+    std::fs::create_dir(&dir).map_err(|e| e.to_string())
+}
+
+/// 팩 이름 변경. 폴더만 바꾸면 설정이 옛 이름을 가리켜 낡으므로,
+/// 선택된 팩(characterPack)과 모델별 규칙(characterRules)의 참조도 함께 고친다.
+#[tauri::command]
+pub fn rename_character_pack(app: AppHandle, old: String, new: String) -> Result<(), String> {
+    let new = new.trim().to_string();
+    let (Some(old_dir), Some(new_dir)) = (settings::pack_dir(&old), settings::pack_dir(&new))
+    else {
+        return Err("팩 이름에 쓸 수 없는 문자가 있습니다".into());
+    };
+    if old == new {
+        return Ok(());
+    }
+    if !old_dir.is_dir() {
+        return Err("이미 없는 팩입니다".into());
+    }
+    if new_dir.exists() {
+        return Err("이미 있는 팩 이름입니다".into());
+    }
+    std::fs::rename(&old_dir, &new_dir).map_err(|e| e.to_string())?;
+
+    let updated = {
+        let state = app.state::<AppState>();
+        let mut s = state.settings.lock().unwrap();
+        if s.character_pack.as_deref() == Some(old.as_str()) {
+            s.character_pack = Some(new.clone());
+        }
+        for r in &mut s.character_rules {
+            if r.pack == old {
+                r.pack = new.clone();
+            }
+        }
+        settings::save(&s);
+        s.clone()
+    };
+    use tauri::Emitter;
+    let _ = app.emit("settings-changed", &updated);
+    let _ = app.emit("character-images-changed", &new);
+    Ok(())
+}
+
+/// 팩 폴더 삭제 — 영구 삭제가 아니라 **휴지통**으로 보낸다. 이미지·대사·설정이
+/// 통째로 사라지는 작업이라, 확인창 대신 되돌릴 수 있는 경로를 택했다.
+#[tauri::command]
+pub fn delete_character_pack(app: AppHandle, pack: String) -> Result<(), String> {
+    let Some(dir) = settings::pack_dir(&pack) else {
+        return Err("잘못된 팩 이름입니다".into());
+    };
+    if !dir.is_dir() {
+        return Err("이미 없는 팩입니다".into());
+    }
+    trash::delete(&dir).map_err(|e| e.to_string())?;
+    use tauri::Emitter;
+    let _ = app.emit("character-images-changed", &pack);
+    Ok(())
+}
+
+/// 스튜디오 좌측 목록용 — idle 이 아직 없는(미완성) 팩 폴더까지 전부
+#[tauri::command]
+pub fn list_character_dirs() -> Vec<String> {
+    let Some(root) = settings::characters_dir() else { return vec![] };
+    let Ok(entries) = std::fs::read_dir(&root) else { return vec![] };
+    let mut dirs: Vec<String> = entries
+        .filter_map(|e| e.ok())
+        .filter(|e| e.path().is_dir())
+        .filter_map(|e| e.file_name().to_str().map(String::from))
+        .collect();
+    dirs.sort();
+    dirs
+}
+
+/// 원본 이미지를 팩 폴더에 `<상태>.<확장자>` 로 복사. 같은 상태의 다른 확장자
+/// 파일은 지운다 — 탐색 우선순위(CHAR_EXTS)가 옛 파일을 계속 집는 걸 막는다.
+fn copy_state_image(dir: &std::path::Path, state: &str, src: &std::path::Path) -> bool {
+    let Some(ext) = src
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(str::to_lowercase)
+        .filter(|e| CHAR_EXTS.contains(&e.as_str()))
+    else {
+        return false;
+    };
+    for other in CHAR_EXTS.iter().filter(|e| **e != ext) {
+        let _ = std::fs::remove_file(dir.join(format!("{state}.{other}")));
+    }
+    std::fs::copy(src, dir.join(format!("{state}.{ext}"))).is_ok()
+}
+
+/// 상태 이미지 첨부 — 파일 선택 다이얼로그를 별도 스레드에서 띄운다
+/// (메인 스레드를 막으면 안 된다).
+#[tauri::command]
+pub fn import_state_image(app: AppHandle, pack: String, state: String) {
+    if !CHAR_STATES.contains(&state.as_str()) {
+        return;
+    }
+    let Some(dir) = settings::pack_dir(&pack) else { return };
+    use tauri_plugin_dialog::DialogExt;
+    std::thread::spawn(move || {
+        let picked = app
+            .dialog()
+            .file()
+            .add_filter("이미지", &CHAR_EXTS)
+            .blocking_pick_file();
+        let Some(picked) = picked else { return };
+        let Ok(src) = picked.into_path() else { return };
+        if copy_state_image(&dir, &state, &src) {
+            use tauri::Emitter;
+            let _ = app.emit("character-images-changed", &pack);
+        }
+    });
+}
+
+/// 드래그&드롭용 — 다이얼로그 없이 주어진 경로의 이미지를 상태 슬롯에 등록
+#[tauri::command]
+pub fn import_state_image_from_path(
+    app: AppHandle,
+    pack: String,
+    state: String,
+    path: String,
+) -> Result<(), String> {
+    if !CHAR_STATES.contains(&state.as_str()) {
+        return Err("알 수 없는 상태입니다".into());
+    }
+    let Some(dir) = settings::pack_dir(&pack) else {
+        return Err("잘못된 팩 이름입니다".into());
+    };
+    if !copy_state_image(&dir, &state, std::path::Path::new(&path)) {
+        return Err("이미지 파일이 아니거나 복사에 실패했습니다 (gif·webp·apng·png·svg)".into());
+    }
+    use tauri::Emitter;
+    let _ = app.emit("character-images-changed", &pack);
+    Ok(())
+}
+
+/// 상태 이미지 제거 (모든 확장자) — 그 상태는 idle 폴백으로 돌아간다.
+/// 확인 없이 바로 지운다 — 스튜디오 썸네일이 즉시 폴백으로 바뀌어 결과가 눈에 보인다.
+#[tauri::command]
+pub fn remove_state_image(app: AppHandle, pack: String, state: String) {
+    if !CHAR_STATES.contains(&state.as_str()) {
+        return;
+    }
+    let Some(dir) = settings::pack_dir(&pack) else { return };
+    for ext in CHAR_EXTS {
+        let _ = std::fs::remove_file(dir.join(format!("{state}.{ext}")));
+    }
+    use tauri::Emitter;
+    let _ = app.emit("character-images-changed", &pack);
+}
+
+/// 캐릭터 스튜디오 창 — 저장된 크기로 주 모니터 중앙에 표시
+#[tauri::command]
+pub fn open_studio(app: AppHandle) {
+    let Some(w) = app.get_webview_window("studio") else { return };
+    clear_window_resize(&app, "studio");
+    let saved = {
+        let state = app.state::<AppState>();
+        let s = state.settings.lock().unwrap();
+        s.studio_size
+    };
+    if let Some((ww, wh)) = saved {
+        let _ = w.set_size(tauri::PhysicalSize::new(ww, wh));
+    }
+    let _ = w.center();
+    let _ = w.show();
+    let _ = w.set_focus();
+}
+
 /// characters 디렉토리에서 유효한 팩(idle 이미지가 있는 폴더) 목록
 #[tauri::command]
 pub fn list_character_packs() -> Vec<String> {
@@ -596,6 +836,23 @@ pub fn list_character_packs() -> Vec<String> {
     packs
 }
 
+/// 이미지 파일 → data URL (20MB 상한 — 데스크톱 펫 이미지로는 과대한 크기 방지)
+fn image_data_url(p: &std::path::Path) -> Option<String> {
+    use base64::Engine;
+    let mime = match p.extension()?.to_str()? {
+        "gif" => "image/gif",
+        "webp" => "image/webp",
+        "apng" => "image/apng",
+        "svg" => "image/svg+xml",
+        _ => "image/png",
+    };
+    let bytes = std::fs::read(p).ok()?;
+    if bytes.len() > 20 * 1024 * 1024 {
+        return None;
+    }
+    Some(format!("data:{mime};base64,{}", base64::engine::general_purpose::STANDARD.encode(bytes)))
+}
+
 /// 지정한(또는 기본 선택된) 팩의 상태별 이미지를 data URL 로 반환.
 /// 없는 상태는 idle 로 폴백. 팩 미지정/무효 시 None (기본 CSS 고양이 사용).
 #[tauri::command]
@@ -603,37 +860,39 @@ pub fn get_character_images(
     state: State<'_, AppState>,
     pack: Option<String>,
 ) -> Option<std::collections::HashMap<String, String>> {
-    use base64::Engine;
-
     let pack = pack.or_else(|| state.settings.lock().unwrap().character_pack.clone())?;
     let dir = settings::characters_dir()?.join(&pack);
     let idle = find_state_file(&dir, "idle")?; // idle 필수
 
-    let to_data_url = |p: &std::path::Path| -> Option<String> {
-        let mime = match p.extension()?.to_str()? {
-            "gif" => "image/gif",
-            "webp" => "image/webp",
-            "apng" => "image/apng",
-            "svg" => "image/svg+xml",
-            _ => "image/png",
-        };
-        let bytes = std::fs::read(p).ok()?;
-        // 데스크톱 펫 이미지로는 과대한 크기 방지 (20MB)
-        if bytes.len() > 20 * 1024 * 1024 {
-            return None;
-        }
-        Some(format!("data:{mime};base64,{}", base64::engine::general_purpose::STANDARD.encode(bytes)))
-    };
-
-    let idle_url = to_data_url(&idle)?;
+    let idle_url = image_data_url(&idle)?;
     let mut map = std::collections::HashMap::new();
     for st in CHAR_STATES {
         let url = find_state_file(&dir, st)
-            .and_then(|p| to_data_url(&p))
+            .and_then(|p| image_data_url(&p))
             .unwrap_or_else(|| idle_url.clone());
         map.insert(st.to_string(), url);
     }
     Some(map)
+}
+
+/// 스튜디오용 — 상태별 **자기 파일**만 (idle 폴백 없음, 없는 상태는 None).
+/// 펫 렌더링용 `get_character_images` 는 폴백을 채워 주므로 "이 상태에 진짜
+/// 이미지가 있나"를 구분할 수 없다 — 편집기는 그 구분이 본질이다.
+/// idle 이 없는 미완성 팩도 있는 그대로 보여준다.
+#[tauri::command]
+pub fn get_state_images(
+    pack: String,
+) -> std::collections::HashMap<String, Option<String>> {
+    let mut map = std::collections::HashMap::new();
+    let dir = settings::pack_dir(&pack);
+    for st in CHAR_STATES {
+        let url = dir
+            .as_deref()
+            .and_then(|d| find_state_file(d, st))
+            .and_then(|p| image_data_url(&p));
+        map.insert(st.to_string(), url);
+    }
+    map
 }
 
 /// characters 폴더를 만들고 OS 파일 탐색기로 열기

@@ -13,14 +13,6 @@ pub struct CharacterRule {
     pub pack: String,
 }
 
-/// 모델 접두사(콤마 구분) → 문구 세트 이름 매핑 규칙 (캐릭터 규칙과 같은 최장 접두사 우선)
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
-#[serde(default, rename_all = "camelCase")]
-pub struct SpeechRule {
-    pub prefixes: String,
-    pub set: String,
-}
-
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Settings {
@@ -38,6 +30,8 @@ pub struct Settings {
     pub pet_scale: f64,
     /// 주간 한도 경고 임계값 (0..1) — 공식 주간 % 기준
     pub weekly_alert_threshold: f64,
+    /// 컨텍스트 경고 임계값 (0..1) — 활성 벤더의 컨텍스트 사용률 기준 (compact 임박)
+    pub context_alert_threshold: f64,
     /// 블록 리셋 임박 대사 (분 전, 0 = 끔) — OS 알림이 아니라 말풍선으로 나간다
     pub reset_notify_minutes: u32,
     /// 클릭 통과 모드 — 펫이 마우스에 전혀 반응하지 않음 (트레이에서만 해제)
@@ -48,6 +42,8 @@ pub struct Settings {
     pub panel_size: Option<(u32, u32)>,
     /// 설정 창 크기 (물리 픽셀) — 사용자가 조절한 크기를 기억
     pub settings_size: Option<(u32, u32)>,
+    /// 캐릭터 스튜디오 창 크기 (물리 픽셀)
+    pub studio_size: Option<(u32, u32)>,
     /// 상황별 대사 말풍선 사용
     pub speech_enabled: bool,
     /// 대사 말풍선 표시 시간 (ms)
@@ -70,12 +66,8 @@ pub struct Settings {
     pub gauge_side: String,
     /// 상황별 사용자 문구 — 키("enter.working"·"poke"·"resetNotify" 등) → 문구 목록.
     /// 비어 있으면 내장 기본 문구. `{변수}` 는 표시 시점에 값으로 치환된다.
+    /// 캐릭터별 말투는 여기가 아니라 팩 폴더의 `speech.json` 에 있다 (`pack_speech`).
     pub speech_lines: std::collections::HashMap<String, Vec<String>>,
-    /// 이름 붙은 문구 세트(모델별 말투) — 세트에 없는 상황은 speech_lines → 내장 기본 순 폴백
-    pub speech_sets:
-        std::collections::HashMap<String, std::collections::HashMap<String, Vec<String>>>,
-    /// 모델 접두사 → 문구 세트 매핑 (최장 접두사 우선, 미매칭 시 기본 문구)
-    pub speech_rules: Vec<SpeechRule>,
     /// 추가로 스캔할 Claude 홈 (`.claude` 디렉토리). 그 아래 `projects`/`sessions` 를 본다.
     ///
     /// 자동 탐지는 프로세스 환경에 의존한다 — 트레이에서 뜬 앱은 터미널의 환경변수를
@@ -111,11 +103,13 @@ impl Default for Settings {
             autostart: false,
             pet_scale: 1.0,
             weekly_alert_threshold: 0.9,
+            context_alert_threshold: 0.9,
             reset_notify_minutes: 15,
             click_through: false,
             panel_pos: None,
             panel_size: None,
             settings_size: None,
+            studio_size: None,
             speech_enabled: true,
             speech_duration_ms: 4000,
             start_hidden: false,
@@ -126,8 +120,6 @@ impl Default for Settings {
             gauge_labels: false,
             gauge_side: "right".into(),
             speech_lines: Default::default(),
-            speech_sets: Default::default(),
-            speech_rules: vec![],
             extra_claude_homes: vec![],
             extra_codex_homes: vec![],
             extra_antigravity_homes: vec![],
@@ -140,6 +132,55 @@ impl Default for Settings {
 /// 사용자 캐릭터 팩 루트 (`<config>/token-pet/characters/<팩이름>/idle.gif ...`)
 pub fn characters_dir() -> Option<std::path::PathBuf> {
     dirs::config_dir().map(|d| d.join("token-pet").join("characters"))
+}
+
+/// 팩 이름이 경로로 오용되지 못하게 막는다 (디렉토리 목록에서 온 이름만 유효).
+fn valid_pack_name(pack: &str) -> bool {
+    !pack.is_empty() && !pack.contains(['/', '\\']) && pack != ".." && pack != "."
+}
+
+/// 팩 폴더 경로 (이름 검증 포함)
+pub fn pack_dir(pack: &str) -> Option<PathBuf> {
+    if !valid_pack_name(pack) {
+        return None;
+    }
+    characters_dir().map(|d| d.join(pack))
+}
+
+/// 팩 폴더의 대사 파일 경로 — 대사는 캐릭터의 속성이라 이미지와 같은 폴더에서 관리한다
+pub fn pack_speech_path(pack: &str) -> Option<PathBuf> {
+    pack_dir(pack).map(|d| d.join("speech.json"))
+}
+
+/// 팩의 `speech.json` (상황 키 → 문구 목록). 없거나 못 읽으면 None — 기본 문구로 폴백.
+pub fn load_pack_speech(
+    pack: &str,
+) -> Option<std::collections::HashMap<String, Vec<String>>> {
+    let path = pack_speech_path(pack)?;
+    let text = std::fs::read_to_string(path).ok()?;
+    serde_json::from_str(&text).ok()
+}
+
+/// 팩별 동작 설정 (`characters/<팩>/pack.json`) — 지금은 상태 사용 여부만.
+/// 캐릭터마다 쓸 수 있는 상태(이미지·연출)가 달라서 팩의 속성으로 둔다.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct PackConfig {
+    /// 끈 상태 목록 (working/alert/…) — 꺼진 상태는 idle 로 폴백
+    pub disabled_states: Vec<String>,
+}
+
+pub fn pack_config_path(pack: &str) -> Option<PathBuf> {
+    pack_dir(pack).map(|d| d.join("pack.json"))
+}
+
+/// 팩 설정. 파일이 없으면 기본값(모든 상태 사용) — 전역 설정을 상속하지 않는다.
+/// 캐릭터가 자기 설정을 온전히 들고 다녀야 폴더 공유가 자기완결이 된다.
+pub fn load_pack_config(pack: &str) -> PackConfig {
+    pack_config_path(pack)
+        .and_then(|p| std::fs::read_to_string(p).ok())
+        .and_then(|t| serde_json::from_str(&t).ok())
+        .unwrap_or_default()
 }
 
 /// 펫 창 **초기** 크기 (논리 px). 웹뷰가 뜨는 즉시 실측 크기로 다시 맞추므로

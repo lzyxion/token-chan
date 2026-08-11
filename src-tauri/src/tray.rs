@@ -122,9 +122,11 @@ fn build_tray_menu(app: &AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
         click_through,
         None::<&str>,
     )?;
+    let studio = MenuItem::with_id(app, "studio", "캐릭터 스튜디오…", true, None::<&str>)?;
     let settings_item = MenuItem::with_id(app, "settings", "설정…", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", "종료", true, None::<&str>)?;
-    let menu = Menu::with_items(app, &[&show, &panel, &accounts, &ct, &settings_item, &quit])?;
+    let menu =
+        Menu::with_items(app, &[&show, &panel, &accounts, &ct, &studio, &settings_item, &quit])?;
     // 메뉴를 다시 만들 때마다 새 체크 항목으로 교체 — 옛 항목을 붙들고 있으면
     // sync_click_through 가 화면에 없는 항목을 건드리게 된다
     *app.state::<crate::AppState>().tray_click_through.lock().unwrap() = Some(ct);
@@ -174,6 +176,7 @@ pub fn handle_action(app: &AppHandle, action: &str) {
             "panel" => {
                 let _ = crate::commands::toggle_panel(app.clone());
             }
+            "studio" => crate::commands::open_studio(app.clone()),
             "settings" => {
                 // 설정 패널을 트레이 근처(주 모니터 우하단)에 표시
                 if let Some(w) = app.get_webview_window("settings") {
@@ -339,9 +342,13 @@ pub fn popup_pet_menu(app: &AppHandle) -> tauri::Result<()> {
         None::<&str>,
     )?;
     let accounts = accounts_submenu(app, "petmenu:")?;
+    let studio = MenuItem::with_id(app, "petmenu:studio", "캐릭터 스튜디오…", true, None::<&str>)?;
     let settings_item = MenuItem::with_id(app, "petmenu:settings", "설정…", true, None::<&str>)?;
     let sep = PredefinedMenuItem::separator(app)?;
     let quit = MenuItem::with_id(app, "petmenu:quit", "종료", true, None::<&str>)?;
-    let menu = Menu::with_items(app, &[&hide, &panel, &accounts, &ct, &settings_item, &sep, &quit])?;
+    let menu = Menu::with_items(
+        app,
+        &[&hide, &panel, &accounts, &ct, &studio, &settings_item, &sep, &quit],
+    )?;
     menu.popup(pet.as_ref().window())
 }
