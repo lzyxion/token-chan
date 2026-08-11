@@ -1,8 +1,8 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "pet/bubble/panel/settings 창이 사용하는 권한",
-  "windows": ["pet", "bubble", "panel", "settings"],
+  "description": "pet/bubble/panel/settings/studio 창이 사용하는 권한",
+  "windows": ["pet", "bubble", "panel", "settings", "studio"],
   "permissions": [
     "core:default",
     "core:window:allow-start-dragging",

@@ -6,42 +6,18 @@ import type {
   AppSettings,
   CharacterRule,
   GaugeSide,
-  SpeechRule,
   Summary,
 } from "../types";
 import ResizeGrips from "../components/ResizeGrips";
-import { DEFAULT_LINES } from "../pet/speech";
 import "./settings.css";
 
-const STATE_LABELS: [string, string][] = [
-  ["working", "작업"],
-  ["alert", "경고"],
-  ["sleep", "잠"],
-  ["exhausted", "소진"],
-  ["refreshed", "초기화"],
-  ["poke", "클릭 반응"],
-];
+/** 설정 탭 — 일반(창·한도·말풍선·시스템) / 캐릭터(팩·규칙·크기).
+ *  상태 사용·이미지·대사 편집은 캐릭터 스튜디오(전용 창)가 맡는다. */
 
-/** 설정 탭 — 일반(창·한도·시스템) / 캐릭터(팩·상태·크기) / 대사(말풍선·문구) */
-
-type Tab = "general" | "character" | "speech";
+type Tab = "general" | "character";
 const TABS: [Tab, string][] = [
   ["general", "일반"],
   ["character", "캐릭터"],
-  ["speech", "대사"],
-];
-
-/** 문구 편집기에 노출할 상황 (키는 speech.ts DEFAULT_LINES · settings.speechLines 와 동일) */
-const SPEECH_SITUATIONS: [string, string][] = [
-  ["enter.working", "작업 시작"],
-  ["leave.working", "작업 종료"],
-  ["enter.alert", "한도 경고"],
-  ["enter.exhausted", "토큰 소진"],
-  ["enter.refreshed", "블록 초기화"],
-  ["enter.sleep", "잠들 때"],
-  ["leave.sleep", "깨어날 때"],
-  ["poke", "클릭 반응 (사용량 보고)"],
-  ["resetNotify", "리셋 임박 (변수: {분}·{시각}만)"],
 ];
 
 export default function SettingsPanel() {
@@ -49,9 +25,6 @@ export default function SettingsPanel() {
   const [packs, setPacks] = useState<string[]>([]);
   const [observedModels, setObservedModels] = useState<string[]>([]);
   const [tab, setTab] = useState<Tab>("general");
-  /** 문구 편집기가 보고 있는 세트 ("" = 기본 문구) */
-  const [editingSet, setEditingSet] = useState("");
-  const [newSetName, setNewSetName] = useState("");
 
   const refreshPacks = () => {
     invoke<string[]>("list_character_packs")
@@ -147,88 +120,6 @@ export default function SettingsPanel() {
     update({
       characterRules: (s.characterRules ?? []).filter((_, j) => j !== i),
     });
-  /** 문구 편집 — editingSet 이 비면 기본 문구(speechLines), 아니면 그 세트(speechSets) */
-  const updateSpeechKey = (key: string, raw: string) => {
-    if (!editingSet) {
-      const map = { ...(s.speechLines ?? {}) };
-      if (raw === "") {
-        delete map[key];
-      } else {
-        map[key] = raw.split("\n");
-      }
-      update({ speechLines: map });
-    } else {
-      const sets = { ...(s.speechSets ?? {}) };
-      const cur = { ...(sets[editingSet] ?? {}) };
-      if (raw === "") {
-        delete cur[key];
-      } else {
-        cur[key] = raw.split("\n");
-      }
-      sets[editingSet] = cur;
-      update({ speechSets: sets });
-    }
-  };
-  const addSpeechSet = () => {
-    const name = newSetName.trim();
-    if (!name || (s.speechSets ?? {})[name]) return;
-    update({ speechSets: { ...(s.speechSets ?? {}), [name]: {} } });
-    setNewSetName("");
-    setEditingSet(name);
-  };
-  const removeSpeechSet = () => {
-    if (!editingSet) return;
-    const sets = { ...(s.speechSets ?? {}) };
-    delete sets[editingSet];
-    // 세트를 지우면 그 세트를 가리키던 규칙도 함께 정리
-    update({
-      speechSets: sets,
-      speechRules: (s.speechRules ?? []).filter((r) => r.set !== editingSet),
-    });
-    setEditingSet("");
-  };
-  const updateSpeechRule = (i: number, patch: Partial<SpeechRule>) => {
-    const rules = [...(s.speechRules ?? [])];
-    rules[i] = { ...rules[i], ...patch };
-    update({ speechRules: rules });
-  };
-  const addSpeechRule = () =>
-    update({
-      speechRules: [...(s.speechRules ?? []), { prefixes: "", set: "" }],
-    });
-  const removeSpeechRule = (i: number) =>
-    update({ speechRules: (s.speechRules ?? []).filter((_, j) => j !== i) });
-
-  const speechSetNames = Object.keys(s.speechSets ?? {});
-  /** 편집 중 대상의 현재 값 / placeholder(폴백 문구) */
-  const speechValue = (key: string): string =>
-    (editingSet
-      ? s.speechSets?.[editingSet]?.[key]
-      : s.speechLines?.[key]
-    )?.join("\n") ?? "";
-  const speechPlaceholder = (key: string): string => {
-    if (editingSet && s.speechLines?.[key]?.some((l) => l.trim())) {
-      return (s.speechLines[key] ?? []).join("\n");
-    }
-    return (DEFAULT_LINES[key] ?? []).join("\n");
-  };
-  /** 지금 실제로 쓰이는 후보 개수. 빈 줄을 걸러 남는 게 없으면 폴백 문구가 후보 —
-   *  런타임 linesFor 와 같은 판정이라 편집기 표시와 실제 동작이 어긋나지 않는다. */
-  const nonBlank = (raw: string): number =>
-    raw.split("\n").filter((l) => l.trim()).length;
-  const speechCount = (key: string): number =>
-    nonBlank(speechValue(key)) || nonBlank(speechPlaceholder(key));
-
-  const toggleState = (key: string, enabled: boolean) => {
-    const cur = new Set(s.disabledStates ?? []);
-    if (enabled) {
-      cur.delete(key);
-    } else {
-      cur.add(key);
-    }
-    update({ disabledStates: [...cur] });
-  };
-
   return (
     <div className="settings-root">
       <ResizeGrips />
@@ -281,17 +172,18 @@ export default function SettingsPanel() {
                 >
                   ↻
                 </button>
+              </div>
+              <div className="settings-row">
                 <button
                   className="settings-btn"
-                  onClick={() => void invoke("open_characters_dir")}
+                  onClick={() => void invoke("open_studio")}
                 >
-                  폴더 열기
+                  캐릭터 스튜디오 열기…
                 </button>
               </div>
               <div className="settings-hint">
-                characters/&lt;팩이름&gt;/ 에
-                idle(필수)·working·alert·sleep·exhausted·refreshed.(gif|png|webp)
-                — 투명 배경
+                캐릭터 만들기·상태별 이미지·상태 사용·대사 편집은 전부
+                스튜디오에서 합니다
               </div>
             </div>
 
@@ -354,26 +246,6 @@ export default function SettingsPanel() {
                   </div>
                 </>
               )}
-            </div>
-
-            <div className="settings-group">
-              <div className="settings-label">
-                상태 사용 (끄면 해당 상태 대신 idle 유지)
-              </div>
-              <div className="state-toggles">
-                {STATE_LABELS.map(([key, label]) => (
-                  <label key={key} className="settings-check inline">
-                    <input
-                      type="checkbox"
-                      checked={!(s.disabledStates ?? []).includes(key)}
-                      onChange={(e) =>
-                        toggleState(key, e.currentTarget.checked)
-                      }
-                    />
-                    {label}
-                  </label>
-                ))}
-              </div>
             </div>
 
             <div className="settings-group">
@@ -455,6 +327,36 @@ export default function SettingsPanel() {
 
             <div className="settings-group">
               <div className="settings-label">
+                위험 한도 · 컨텍스트{" "}
+                <b className="warn-b">
+                  {Math.round((s.contextAlertThreshold ?? 0.9) * 100)}%
+                </b>
+              </div>
+              <div className="settings-row">
+                <span className="settings-min">10%</span>
+                <input
+                  type="range"
+                  min={10}
+                  max={100}
+                  step={5}
+                  value={Math.round((s.contextAlertThreshold ?? 0.9) * 100)}
+                  onChange={(e) =>
+                    update({
+                      contextAlertThreshold:
+                        parseInt(e.currentTarget.value, 10) / 100,
+                    })
+                  }
+                />
+                <span className="settings-max">100%</span>
+              </div>
+              <div className="settings-hint">
+                활성 벤더의 컨텍스트가 이만큼 차면 경고 — 곧 압축(compact)되거나
+                창이 바닥난다는 뜻입니다
+              </div>
+            </div>
+
+            <div className="settings-group">
+              <div className="settings-label">
                 잠자기 진입 시간 <b>{s.sleepAfterMinutes}분</b>
               </div>
               <div className="settings-row">
@@ -508,11 +410,7 @@ export default function SettingsPanel() {
                 권장
               </div>
             </div>
-          </>
-        )}
 
-        {tab === "speech" && (
-          <>
             <div className="settings-group">
               <label className="settings-check">
                 <input
@@ -548,136 +446,7 @@ export default function SettingsPanel() {
                 <span className="settings-max">15s</span>
               </div>
               <div className="settings-hint">
-                상태를 끄면(캐릭터 탭 &quot;상태 사용&quot;) 그 상황의 대사도
-                함께 사라집니다
-              </div>
-            </div>
-
-            <div className="settings-group">
-              <div className="settings-label">상황별 문구 편집</div>
-              <div className="settings-hint">
-                한 줄에 문구 하나 — 여러 줄을 쓰면 그중 하나가 무작위로 나옵니다
-                (직전과 같은 문구는 피함) · 비우면 기본 문구로 돌아갑니다.
-                <br />
-                {
-                  "{변수} 자리에 현재 값이 들어갑니다: {오늘토큰} {오늘비용} {세션} {주간} {컨텍스트} {리셋} {리셋시각} {모델}"
-                }
-                <br />
-                문구 안 | 는 말풍선 줄바꿈 · 값을 아직 모르는 변수가 든 줄은
-                생략됩니다
-              </div>
-
-              <div className="settings-label">편집 대상</div>
-              <div className="settings-row">
-                <select
-                  className="settings-select"
-                  value={editingSet}
-                  onChange={(e) => setEditingSet(e.currentTarget.value)}
-                >
-                  <option value="">기본 문구 (모든 모델)</option>
-                  {speechSetNames.map((n) => (
-                    <option key={n} value={n}>
-                      세트: {n}
-                    </option>
-                  ))}
-                </select>
-                {editingSet && (
-                  <button
-                    className="settings-btn"
-                    onClick={removeSpeechSet}
-                    title="이 세트와 규칙 삭제"
-                  >
-                    세트 삭제
-                  </button>
-                )}
-              </div>
-              <div className="settings-row">
-                <input
-                  className="settings-input"
-                  placeholder="새 문구 세트 이름 (예: 갓지피티)"
-                  value={newSetName}
-                  onChange={(e) => setNewSetName(e.currentTarget.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") addSpeechSet();
-                  }}
-                />
-                <button className="settings-btn" onClick={addSpeechSet}>
-                  + 세트
-                </button>
-              </div>
-              {editingSet && (
-                <div className="settings-hint">
-                  세트에서 비워 둔 상황은 기본 문구를 그대로 씁니다 (흐린 글씨 =
-                  지금 폴백되는 문구)
-                </div>
-              )}
-
-              {SPEECH_SITUATIONS.map(([key, label]) => (
-                <div className="settings-speech-item" key={key}>
-                  <div className="settings-speech-head">
-                    <span className="settings-hint">{label}</span>
-                    <span className="settings-hint">
-                      {speechCount(key) > 1
-                        ? `${speechCount(key)}개 중 무작위`
-                        : "1개 (여러 줄로 늘려보세요)"}
-                    </span>
-                  </div>
-                  <textarea
-                    className="settings-textarea"
-                    rows={4}
-                    spellCheck={false}
-                    placeholder={speechPlaceholder(key)}
-                    value={speechValue(key)}
-                    onChange={(e) =>
-                      updateSpeechKey(key, e.currentTarget.value)
-                    }
-                  />
-                </div>
-              ))}
-
-              <div className="settings-label">
-                모델별 문구 규칙 (최장 접두사 우선)
-              </div>
-              {(s.speechRules ?? []).map((r, i) => (
-                <div className="settings-row" key={i}>
-                  <input
-                    className="settings-input"
-                    placeholder="접두사 (예: gpt, o3)"
-                    value={r.prefixes}
-                    onChange={(e) =>
-                      updateSpeechRule(i, { prefixes: e.currentTarget.value })
-                    }
-                  />
-                  <select
-                    className="settings-select rule-pack"
-                    value={r.set}
-                    onChange={(e) =>
-                      updateSpeechRule(i, { set: e.currentTarget.value })
-                    }
-                  >
-                    <option value="">세트 선택</option>
-                    {speechSetNames.map((n) => (
-                      <option key={n} value={n}>
-                        {n}
-                      </option>
-                    ))}
-                  </select>
-                  <button
-                    className="settings-btn"
-                    onClick={() => removeSpeechRule(i)}
-                  >
-                    ✕
-                  </button>
-                </div>
-              ))}
-              <div className="settings-row">
-                <button className="settings-btn" onClick={addSpeechRule}>
-                  + 규칙 추가
-                </button>
-              </div>
-              <div className="settings-hint">
-                활성 모델이 접두사와 맞으면 그 세트의 문구로 말합니다 (캐릭터
-                규칙과 같은 방식) · 리셋 임박 대사도 함께 따라갑니다
+                문구 내용은 캐릭터 스튜디오(캐릭터 탭)에서 편집합니다
               </div>
             </div>
           </>

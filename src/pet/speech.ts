@@ -1,4 +1,4 @@
-import type { PetState, SpeechRule } from "../types";
+import type { PetState } from "../types";
 
 /**
  * 상황(상태 전이·클릭 반응) → 캐릭터 대사.
@@ -137,25 +137,8 @@ export function speechFor(
   return null;
 }
 
-/** 활성 모델 → 문구 세트 이름. 캐릭터 팩 규칙과 같은 최장 접두사 매칭, 미매칭 시 null(기본 문구) */
-export function resolveSpeechSet(model: string | null, rules: SpeechRule[]): string | null {
-  if (!model) return null;
-  let bestLen = -1;
-  let best: string | null = null;
-  for (const r of rules) {
-    if (!r.set) continue;
-    for (const p of r.prefixes.split(",").map((x) => x.trim()).filter(Boolean)) {
-      if (model.startsWith(p) && p.length > bestLen) {
-        bestLen = p.length;
-        best = r.set;
-      }
-    }
-  }
-  return best;
-}
-
-/** 기본 문구 위에 세트 문구를 상황별로 덮어쓴다 — 실질 문구(공백 아님)가 있는 키만.
- *  세트에서 비워 둔 상황은 기본 문구 → 내장 기본 순으로 폴백된다. */
+/** 기본 문구 위에 캐릭터 팩 문구를 상황별로 덮어쓴다 — 실질 문구(공백 아님)가 있는 키만.
+ *  팩에서 비워 둔 상황은 기본 문구 → 내장 기본 순으로 폴백된다. */
 export function mergeLines(
   base: Record<string, string[]> | undefined,
   over: Record<string, string[]> | undefined,

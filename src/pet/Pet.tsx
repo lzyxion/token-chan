@@ -19,11 +19,12 @@ import type {
   CharacterImages,
   CharacterRule,
   GaugeSide,
+  PackConfig,
   PetState,
-  SpeechRule,
   Source,
 } from "../types";
-import { interpolate, linesFor, mergeLines, pick, resolveSpeechSet, speechFor } from "./speech";
+import { interpolate, linesFor, mergeLines, pick, speechFor } from "./speech";
+import { DEFAULT_PACK_IMAGES } from "./defaultPack";
 import "./pet.css";
 
 /** 머리 위로 소품(`!`·`zzz`·`✨`)이 뜨는 상태 — 그때만 위쪽 여백을 잡는다 */
@@ -39,23 +40,6 @@ const POKE_MS = 1800;
 const DRAG_THRESHOLD_PX = 4;
 /** 이 간격 안에 다시 클릭되면 더블클릭으로 보고 두 번째 대사를 생략 */
 const DOUBLE_CLICK_MS = 400;
-
-/** 내장 기본 이미지 팩 — src/assets/pet-default/ 의 상태명 파일이 빌드에 포함되어 기본 캐릭터가 된다.
- *  캐릭터는 전부 이미지 팩 한 가지 방식으로만 그린다 (우선순위: 사용자 팩 → 내장 팩).
- *  기본 팩은 저장소에 함께 들어 있으므로 idle 은 항상 존재한다 — 그림만 갈아끼우면 캐릭터가 바뀐다. */
-const bundledFiles = import.meta.glob("../assets/pet-default/*.{png,webp,gif,apng,svg}", {
-  eager: true,
-  query: "?url",
-  import: "default",
-}) as Record<string, string>;
-const DEFAULT_PACK_IMAGES: CharacterImages | null = (() => {
-  const map: CharacterImages = {};
-  for (const [path, url] of Object.entries(bundledFiles)) {
-    const file = path.split("/").pop() ?? "";
-    map[file.replace(/\.[^.]+$/, "")] = url;
-  }
-  return map.idle ? map : null;
-})();
 
 /** 게이지 색상 단계 (말풍선 meterClass와 동일 기준) */
 function ringColor(pct: number): string {
@@ -99,6 +83,7 @@ export default function Pet() {
   const [scale, setScale] = useState(1.0);
   const [threshold, setThreshold] = useState(0.8);
   const [weeklyThreshold, setWeeklyThreshold] = useState(0.9);
+  const [ctxThreshold, setCtxThreshold] = useState(0.9);
   const [packImages, setPackImages] = useState<CharacterImages | null>(null);
   const [sleepAfterMin, setSleepAfterMin] = useState(30);
   const [rules, setRules] = useState<CharacterRule[]>([]);
@@ -107,8 +92,10 @@ export default function Pet() {
   const [gaugeLabels, setGaugeLabels] = useState(false);
   const [gaugeSide, setGaugeSide] = useState<GaugeSide>("right");
   const [speechLines, setSpeechLines] = useState<Record<string, string[]>>({});
-  const [speechSets, setSpeechSets] = useState<Record<string, Record<string, string[]>>>({});
-  const [speechRules, setSpeechRules] = useState<SpeechRule[]>([]);
+  /** 활성 팩의 speech.json (없으면 null → 기본 문구) — 대사는 캐릭터의 속성 */
+  const [packSpeech, setPackSpeech] = useState<Record<string, string[]> | null>(null);
+  /** 활성 팩의 pack.json 끈 상태 목록 (기본 캐릭터면 null → 전역 disabledStates) */
+  const [packDisabled, setPackDisabled] = useState<string[] | null>(null);
   const packCacheRef = useRef<Map<string, CharacterImages | null>>(new Map());
   const charRef = useRef<HTMLDivElement | null>(null);
   const stageRef = useRef<HTMLDivElement | null>(null);
@@ -122,6 +109,7 @@ export default function Pet() {
       if (s.petScale) setScale(s.petScale);
       if (s.alertThreshold) setThreshold(s.alertThreshold);
       if (s.weeklyAlertThreshold) setWeeklyThreshold(s.weeklyAlertThreshold);
+      if (s.contextAlertThreshold) setCtxThreshold(s.contextAlertThreshold);
       if (s.sleepAfterMinutes) setSleepAfterMin(s.sleepAfterMinutes);
       setRules(s.characterRules ?? []);
       setDefaultPack(s.characterPack ?? null);
@@ -130,8 +118,6 @@ export default function Pet() {
       setGaugeSide(s.gaugeSide ?? "right");
       setGaugeVendor(s.gaugeVendor ?? "auto");
       setSpeechLines(s.speechLines ?? {});
-      setSpeechSets(s.speechSets ?? {});
-      setSpeechRules(s.speechRules ?? []);
       // 설정 변경 시 팩 파일이 바뀌었을 수 있으므로 이미지 캐시 무효화
       packCacheRef.current.clear();
     };
@@ -179,6 +165,48 @@ export default function Pet() {
   // 사용자 팩 우선, 없으면 내장 기본 이미지 팩 (그것도 없으면 CSS 캐릭터)
   const activeImages = packImages ?? DEFAULT_PACK_IMAGES;
 
+  // 활성 팩의 대사(speech.json)·동작 설정(pack.json) — 이미지처럼 팩이 바뀔 때
+  // 로드하고, 스튜디오가 저장하면 이벤트로 다시 읽는다. 파일이 작아 캐시는 두지 않는다.
+  useEffect(() => {
+    let alive = true;
+    const load = () => {
+      if (!activePack) {
+        setPackSpeech(null);
+        setPackDisabled(null);
+        return;
+      }
+      invoke<Record<string, string[]> | null>("get_character_speech", { pack: activePack })
+        .then((v) => {
+          if (alive) setPackSpeech(v);
+        })
+        .catch(() => {
+          if (alive) setPackSpeech(null);
+        });
+      invoke<PackConfig>("get_character_config", { pack: activePack })
+        .then((v) => {
+          if (alive) setPackDisabled(v?.disabledStates ?? []);
+        })
+        .catch(() => {
+          if (alive) setPackDisabled(null);
+        });
+    };
+    load();
+    const unSpeech = listen<string>("character-speech-changed", (e) => {
+      if (e.payload === activePack) load();
+    });
+    const unConfig = listen<string>("character-config-changed", (e) => {
+      if (e.payload === activePack) load();
+    });
+    return () => {
+      alive = false;
+      unSpeech.then((f) => f());
+      unConfig.then((f) => f());
+    };
+  }, [activePack]);
+
+  // 상태 사용은 캐릭터의 속성 — 팩이면 pack.json, 기본 캐릭터면 전역 설정
+  const effectiveDisabled = packDisabled ?? disabledStates;
+
   // 세션 라벨·대사 변수용 리셋 카운트다운 (summary 갱신 주기(10s)에 맞춰 재계산)
   const resetRemainMin = useMemo(() => {
     const resets = plan?.meters?.[0]?.resets;
@@ -219,18 +247,23 @@ export default function Pet() {
   const fatigue = Math.min(1, Math.max(0, (sessionPct ?? 0) / 100));
 
   const state: PetState = useMemo(() => {
-    const off = new Set(disabledStates); // 사용자가 끈 상태는 건너뜀 (idle 취급)
+    const off = new Set(effectiveDisabled); // 캐릭터에서 끈 상태는 건너뜀 (idle 취급)
 
     // 방금 클릭했다면 무엇보다 먼저 반응을 보여준다 (짧게 지나감)
     if (Date.now() < pokeUntil && !off.has("poke")) return "poke";
     // 한도 완전 소진 — 작업 중이어도 최우선 표시
     if (sessionPct != null && sessionPct >= 100 && !off.has("exhausted")) return "exhausted";
     if (live.busy && !off.has("working")) return "working";
-    // 경고: 공식 세션 % ≥ 세션 한도 또는 공식 주간 % ≥ 주간 한도.
-    // 공식 한도가 없는 벤더는 경고하지 않는다 (근거 없이 겁주지 않는다).
+    // 경고: 공식 세션 % ≥ 세션 한도, 공식 주간 % ≥ 주간 한도, 또는
+    // 활성 벤더 컨텍스트 ≥ 컨텍스트 한도 (compact 임박 — agy 처럼 공식
+    // 한도가 없는 벤더도 컨텍스트는 직접 주는 값이라 경고 근거가 된다).
+    // 공식 한도는 없는 벤더면 겁주지 않는다 (추정치로 경고하지 않는다).
+    const ctxPct = active?.context?.used_pct ?? null;
     const alert =
-      sessionPct != null &&
-      (sessionPct >= threshold * 100 || (weeklyPct != null && weeklyPct >= weeklyThreshold * 100));
+      (sessionPct != null &&
+        (sessionPct >= threshold * 100 ||
+          (weeklyPct != null && weeklyPct >= weeklyThreshold * 100))) ||
+      (ctxPct != null && ctxPct >= ctxThreshold * 100);
     if (alert && !off.has("alert")) return "alert";
     if (Date.now() < refreshedUntil && !off.has("refreshed")) return "refreshed";
     const last = summary?.last_event_ts ? Date.parse(summary.last_event_ts) : null;
@@ -244,10 +277,12 @@ export default function Pet() {
     plan,
     threshold,
     weeklyThreshold,
+    ctxThreshold,
+    active,
     refreshedUntil,
     pokeUntil,
     sleepAfterMin,
-    disabledStates,
+    effectiveDisabled,
   ]);
 
   // 캐릭터(팩 이미지 포함)의 실측 위치 — 말풍선을 머리 위·가로 중심에 맞추는 기준값.
@@ -329,11 +364,26 @@ export default function Pet() {
     };
   }, []);
 
-  // 활성 모델의 문구 세트를 기본 문구 위에 덮은 실효 문구 — 캐릭터 팩 규칙과 같은 매칭
-  const effectiveSpeechLines = useMemo(() => {
-    const set = resolveSpeechSet(summary?.last_model ?? null, speechRules);
-    return mergeLines(speechLines, set ? speechSets[set] : undefined);
-  }, [summary?.last_model, speechRules, speechSets, speechLines]);
+  // 활성 캐릭터 팩의 대사를 기본 문구 위에 덮은 실효 문구 —
+  // 말투가 외모(팩)를 따라가므로 캐릭터와 대사가 어긋날 수 없다
+  const effectiveSpeechLines = useMemo(
+    () => mergeLines(speechLines, packSpeech ?? undefined),
+    [speechLines, packSpeech],
+  );
+
+  // 스튜디오 ▶ 테스트 — 문구를 실제 경로(변수 치환 → 말풍선) 그대로 말해본다.
+  // 리스너는 한 번만 걸고 최신 값은 ref 로 본다 (speechVars 가 렌더마다 새 클로저라서).
+  const speechVarsRef = useRef<() => Record<string, string | null>>(() => ({}));
+  useEffect(() => {
+    const un = listen<string>("test-speech", (e) => {
+      // 값을 모르는 변수 때문에 전부 생략되면 원문이라도 보여준다 — 테스트니까
+      const text = interpolate(e.payload, speechVarsRef.current()) ?? e.payload.split("|").join("\n");
+      void invoke("show_speech", { text });
+    });
+    return () => {
+      un.then((f) => f());
+    };
+  }, []);
 
   // 문구 템플릿의 `{변수}` 에 넣을 표시 시점 값 (null = 아직 모르는 값 → 그 줄 생략)
   const speechVars = (): Record<string, string | null> => {
@@ -353,6 +403,7 @@ export default function Pet() {
       모델: summary?.last_model ? shortModel(summary.last_model) : null,
     };
   };
+  speechVarsRef.current = speechVars;
 
   // 상태 전이를 대사로. 데이터가 오기 전 상태(무활동=sleep)는 신뢰할 수 없으므로
   // 첫 summary 도착 후부터 추적하고, 그 첫 상태 자체는 대사 없이 기준으로만 삼는다.
