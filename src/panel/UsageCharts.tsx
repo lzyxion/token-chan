@@ -1,8 +1,12 @@
 import { fmtCost, fmtTokens, shortModel, totalOf } from "../format";
 import type { DailyRow, ModelRow } from "../types";
 
-/** 잔디 격자의 주 수. 91일이라 마지막 열이 이번 주가 되도록 딱 떨어진다. */
-const WEEKS = 13;
+/**
+ * 칸 하나가 차지하는 최대 폭(칸 12 + 간격 2). 주 수는 백엔드가 보존기간에서
+ * 정해 보내므로(`aggregate::daily_window`) 여기서 고정하지 않는다 — 대신 이 값으로
+ * 격자 최대 폭을 계산해, 주가 적으면 가운데 정렬하고 많으면 칸이 알아서 줄어든다.
+ */
+const CELL_MAX = 14;
 /** 0(없음) + 4단계. GitHub 잔디와 같은 규칙 — 색이 진할수록 많이 썼다는 뜻이고
  *  경고가 아니다(패널의 주황·빨강과 달리 단계 색을 쓰지 않는 이유). */
 const LEVELS = 4;
@@ -11,6 +15,20 @@ const LEVELS = 4;
 function localDate(iso: string): Date {
   const [y, m, d] = iso.split("-").map(Number);
   return new Date(y, m - 1, d);
+}
+
+/**
+ * 실제로 기록이 있는 날 수 — 첫 이벤트가 있던 날부터 오늘까지.
+ *
+ * 격자 기간(보존기간에서 유도)과 다를 수 있다. CLI 를 최근에 깔았으면 앞쪽은
+ * 데이터가 존재할 수 없는 날이다. 합계 라벨을 격자 기간으로 붙이면
+ * "84일에 42.3M" 으로 읽혀 일평균을 잘못 계산하게 되므로, 잔디 범례와 이 값을 공유한다.
+ */
+export function recordedDays(daily: DailyRow[], firstEvent: string | null): number {
+  if (!firstEvent) return daily.length;
+  const d = new Date(firstEvent);
+  const started = new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+  return daily.filter((r) => localDate(r.date).getTime() >= started).length;
 }
 
 function levelOf(v: number, max: number): number {
@@ -24,22 +42,52 @@ function levelOf(v: number, max: number): number {
  * 마지막 날이 오늘이라 오른쪽 아래가 현재다. 첫 주는 일요일부터 시작하도록 앞을
  * 빈칸으로 채워야 요일 행이 맞는다.
  */
-export function UsageHeatmap({ daily }: { daily: DailyRow[] }) {
+export function UsageHeatmap({
+  daily,
+  firstEvent,
+}: {
+  daily: DailyRow[];
+  /** 가장 오래된 이벤트 시각. 이전 날짜는 "안 씀"이 아니라 **기록이 없던 날**이다. */
+  firstEvent: string | null;
+}) {
   if (daily.length === 0) return null;
-  const days = daily.slice(-WEEKS * 7);
+  const days = daily;
   const max = Math.max(...days.map((d) => totalOf(d.totals)));
+
+  // 기록이 시작된 날. 이전 칸을 0 과 같은 모양으로 그리면 CLI 를 깔기도 전 날짜까지
+  // "그날 안 썼음"으로 보인다 — 격자 모양은 그대로 두고 칸 모양만 다르게 한다.
+  const startedAt = firstEvent ? new Date(firstEvent) : null;
+  const started = startedAt
+    ? new Date(startedAt.getFullYear(), startedAt.getMonth(), startedAt.getDate()).getTime()
+    : null;
+  const recorded = recordedDays(days, firstEvent);
 
   // 첫 날의 요일만큼 앞을 비워 열/행을 맞춘다 (0=일)
   const pad = localDate(days[0].date).getDay();
   const cells: (DailyRow | null)[] = [...Array(pad).fill(null), ...days];
+  const weeks = Math.ceil(cells.length / 7);
 
   return (
     <div className="grass">
-      {/* grid-auto-flow: column 이라 셀이 세로(요일)로 먼저 채워진다 = GitHub 과 같은 배치 */}
-      <div className="grass-grid">
+      {/* grid-auto-flow: column 이라 셀이 세로(요일)로 먼저 채워진다 = GitHub 과 같은 배치.
+          열 수를 인라인으로 주는 이유: 칸 크기를 CSS 에 12px 로 박으면 주가 많을 때
+          (보존기간을 늘리면 최대 26주) 격자가 카드를 넘쳐 잘린다. 1fr + 최대 폭으로
+          두면 주가 적으면 가운데 정렬되고 많으면 칸이 알아서 줄어든다. */}
+      <div
+        className="grass-grid"
+        style={{
+          gridTemplateColumns: `repeat(${weeks}, minmax(0, 1fr))`,
+          maxWidth: weeks * CELL_MAX,
+        }}
+      >
         {cells.map((d, i) => {
           if (!d) return <span className="grass-cell empty" key={`pad${i}`} />;
           const total = totalOf(d.totals);
+          if (started != null && localDate(d.date).getTime() < started) {
+            return (
+              <span className="grass-cell nodata" key={d.date} title={`${d.date} · 기록 없음`} />
+            );
+          }
           return (
             <span
               key={d.date}
@@ -50,7 +98,10 @@ export function UsageHeatmap({ daily }: { daily: DailyRow[] }) {
         })}
       </div>
       <div className="grass-legend">
-        <span>{days.length}일</span>
+        {/* 격자는 91칸이지만 기록은 그중 일부뿐일 수 있다 — 둘을 같이 밝힌다 */}
+        <span>
+          {recorded < days.length ? `기록 ${recorded}일 / ${days.length}일` : `${days.length}일`}
+        </span>
         <span className="grass-scale">
           적음
           {Array.from({ length: LEVELS + 1 }, (_, i) => (

@@ -6,11 +6,9 @@ import type {
   AppSettings,
   CharacterRule,
   GaugeSide,
-  ScanRoot,
   SpeechRule,
   Summary,
 } from "../types";
-import { SOURCE_LABEL } from "../format";
 import ResizeGrips from "../components/ResizeGrips";
 import { DEFAULT_LINES } from "../pet/speech";
 import "./settings.css";
@@ -51,16 +49,9 @@ export default function SettingsPanel() {
   const [packs, setPacks] = useState<string[]>([]);
   const [observedModels, setObservedModels] = useState<string[]>([]);
   const [tab, setTab] = useState<Tab>("general");
-  const [scanRoots, setScanRoots] = useState<ScanRoot[]>([]);
   /** 문구 편집기가 보고 있는 세트 ("" = 기본 문구) */
   const [editingSet, setEditingSet] = useState("");
   const [newSetName, setNewSetName] = useState("");
-
-  const refreshScanRoots = () => {
-    invoke<ScanRoot[]>("get_scan_roots")
-      .then(setScanRoots)
-      .catch(() => setScanRoots([]));
-  };
 
   const refreshPacks = () => {
     invoke<string[]>("list_character_packs")
@@ -79,7 +70,6 @@ export default function SettingsPanel() {
       })
       .catch(() => {});
     refreshPacks();
-    refreshScanRoots();
     // 트레이 토글 등 외부 변경과 동기화 (내용 동일하면 스킵 — 입력 커서 보존)
     const un = listen<AppSettings>("settings-changed", (e) => {
       if (alive) {
@@ -727,29 +717,7 @@ export default function SettingsPanel() {
                   </select>
                 </div>
               )}
-              <div className="settings-hint">
-                링이 3개뿐이라 <b>벤더 하나</b>만 보여줍니다 — 맨 위 로고가 어느 CLI인지
-                알려주고, 작업 중이면 로고가 깜빡입니다.
-                아래는 컨텍스트 · 그 벤더의 공식 한도 2개 순입니다. 점선 링은 0%가 아니라
-                <b> 그 벤더가 안 알려주는 값</b>입니다 (AGY는 공식 한도가 없습니다).
-                캐릭터에 마우스를 올리면 라벨이 바깥쪽으로 펼쳐지고, 리셋까지 남은 시간은
-                발밑 가로 바입니다
-              </div>
             </div>
-
-            <label className="settings-check">
-              <input
-                type="checkbox"
-                checked={s.clickThrough}
-                onChange={(e) =>
-                  update({ clickThrough: e.currentTarget.checked })
-                }
-              />
-              클릭 통과 모드{" "}
-              <span className="settings-hint-inline">
-                (우클릭·드래그 불가, 패널은 트레이로)
-              </span>
-            </label>
 
             <label className="settings-check">
               <input
@@ -786,77 +754,9 @@ export default function SettingsPanel() {
               로그인 시 자동 시작
             </label>
 
-            <div className="settings-group">
-              <div className="settings-label">데이터 소스 경로</div>
-              <div className="settings-hint">
-                발견된 설치본입니다. 같은 계정의 설치본은 하나로 묶여 집계되고,
-                포함 여부는 <b>펫 우클릭 → 연결된 계정</b>에서 켜고 끕니다.
-                자동 탐지가 못 찾는 경로만 아래에 직접 추가하세요 — 겹쳐도 중복
-                집계되지 않습니다.
-              </div>
-              {scanRoots.length === 0 ? (
-                <div className="settings-hint">발견된 설치본이 없습니다</div>
-              ) : (
-                <ul className="settings-rootlist">
-                  {scanRoots.map((r) => (
-                    <li key={`${r.source}:${r.path}`} className={r.enabled ? "" : "off"}>
-                      <b>{SOURCE_LABEL[r.source] ?? r.source}</b> {r.account}
-                      {r.enabled ? "" : " · 제외됨"}
-                      <div className="settings-hint-inline">
-                        <code>{r.path}</code> · {r.files}개
-                      </div>
-                    </li>
-                  ))}
-                </ul>
-              )}
-              {(
-                [
-                  ["extraClaudeHomes", "Claude 홈 추가 (.claude 디렉토리)"],
-                  ["extraCodexHomes", "Codex 홈 추가 (CODEX_HOME 에 해당)"],
-                  ["extraAntigravityHomes", "AGY 홈 추가 (antigravity-cli 디렉토리)"],
-                ] as const
-              ).map(([key, label]) => (
-                <div key={key} className="settings-subgroup">
-                  <div className="settings-sublabel">{label}</div>
-                  {(s[key] ?? []).map((p, i) => (
-                    <div className="settings-row" key={i}>
-                      <input
-                        className="settings-input settings-input-wide"
-                        value={p}
-                        placeholder="예: D:\\other-profile\\.claude"
-                        onChange={(e) => {
-                          const next = [...(s[key] ?? [])];
-                          next[i] = e.currentTarget.value;
-                          update({ [key]: next } as Partial<AppSettings>);
-                        }}
-                      />
-                      <button
-                        className="settings-btn"
-                        onClick={() =>
-                          update({
-                            [key]: (s[key] ?? []).filter((_, j) => j !== i),
-                          } as Partial<AppSettings>)
-                        }
-                      >
-                        삭제
-                      </button>
-                    </div>
-                  ))}
-                  <button
-                    className="settings-btn"
-                    onClick={() =>
-                      update({ [key]: [...(s[key] ?? []), ""] } as Partial<AppSettings>)
-                    }
-                  >
-                    + 경로 추가
-                  </button>
-                </div>
-              ))}
-              <div className="settings-row">
-                <button className="settings-btn" onClick={refreshScanRoots}>
-                  다시 확인
-                </button>
-              </div>
+            <div className="settings-hint">
+              데이터 소스(계정 켜고 끄기·홈 경로 추가/제거)는{" "}
+              <b>펫 우클릭 → 연결된 계정</b>에서 관리합니다
             </div>
           </>
         )}

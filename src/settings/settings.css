@@ -265,48 +265,7 @@
   font-size: 11px;
 }
 
-/* ── 데이터 소스 경로 ──
-   지금 스캔 중인 루트 목록 + 사용자가 직접 추가한 경로 편집. */
-.settings-rootlist {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 3px;
-}
-.settings-rootlist li {
-  color: #c6ccd8;
-  font-size: 10px;
-  line-height: 1.45;
-  word-break: break-all;
-}
-.settings-rootlist b {
-  color: #ffd479;
-  text-transform: uppercase;
-  font-size: 9px;
-  letter-spacing: 0.4px;
-}
-.settings-rootlist code {
-  color: #e8eaf0;
-  font-size: 10px;
-}
-
-.settings-subgroup {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  margin-top: 4px;
-}
 .settings-sublabel {
   color: #8a93a5;
   font-size: 10px;
-}
-/* 경로는 길어서 입력칸을 최대한 넓게 */
-.settings-input-wide {
-  flex: 4;
-}
-/* 집계에서 제외된 계정의 설치본 */
-.settings-rootlist li.off {
-  opacity: 0.45;
 }

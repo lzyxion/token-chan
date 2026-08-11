@@ -3,7 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import ResizeGrips from "../components/ResizeGrips";
 import VendorIcon from "../components/VendorIcon";
-import { ModelMix, UsageHeatmap, WeekBars } from "./UsageCharts";
+import { ModelMix, recordedDays, UsageHeatmap, WeekBars } from "./UsageCharts";
 import { useLive, usePlans, useSummary } from "../hooks/useUsage";
 import {
   fmtAgo,
@@ -190,6 +190,9 @@ export default function UsagePanel() {
   // 일별 값이 이미 다 와 있어 서버 왕복을 늘릴 이유가 없다.
   const periodTotal = summary.daily.reduce((s, d) => s + totalOf(d.totals), 0);
   const periodCost = summary.daily.reduce((s, d) => s + d.cost, 0);
+  // 격자 기간이 아니라 **기록이 있는 날 수**로 라벨을 단다 — 앞쪽이 통째로 기록 없는
+  // 구간이면 "84일에 42.3M" 으로 읽혀 일평균을 잘못 계산하게 된다 (잔디 범례와 같은 값).
+  const recorded = recordedDays(summary.daily, summary.first_event_ts);
 
   // 지금 돌고 있는 벤더들 (busy 는 세션 레지스트리, active 는 파일 신선도로 유도한 값)
   const busySources = new Set(
@@ -274,7 +277,9 @@ export default function UsagePanel() {
                   </span>
                 </div>
                 <div className="total-item">
-                  <span className="total-label">{summary.daily.length}일</span>
+                  {/* 격자 기간(84일)이 아니라 기록이 있는 날 수를 쓴다 —
+                      기록 전 구간까지 포함한 숫자로 나누면 일평균이 어긋난다 */}
+                  <span className="total-label">{recorded}일</span>
                   <span className="total-tokens">{fmtTokens(periodTotal)}</span>
                   <span className="total-cost">{fmtCost(periodCost)}</span>
                 </div>
@@ -288,7 +293,7 @@ export default function UsagePanel() {
 
               <div className="chart-block">
                 <div className="chart-title">일별 사용량</div>
-                <UsageHeatmap daily={summary.daily} />
+                <UsageHeatmap daily={summary.daily} firstEvent={summary.first_event_ts} />
               </div>
 
               <div className="chart-block">

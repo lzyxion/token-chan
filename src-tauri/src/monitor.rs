@@ -24,10 +24,6 @@ const USAGE_INTERVAL: Duration = Duration::from_secs(10);
 const LIVE_INTERVAL: Duration = Duration::from_secs(2);
 /// 공식 플랜 한도(`claude -p "/usage"`) 폴링 주기 — CLI 프로세스를 띄우므로 여유 있게
 const PLAN_INTERVAL: Duration = Duration::from_secs(300);
-/// 일별 집계 기간 — 통계 페이지의 잔디(13주 격자)를 채울 만큼 길어야 한다.
-/// 91일이면 마지막 열이 이번 주가 되도록 주 단위로 딱 떨어진다.
-/// 기본 보존기간(90일)을 넘는 날은 자연히 0으로 나온다.
-const SUMMARY_DAYS: usize = 91;
 /// 최근 세션 목록에 실을 개수 — 패널 한 페이지에 들어가는 만큼
 const RECENT_SESSIONS: usize = 8;
 
@@ -319,7 +315,9 @@ fn spawn_usage_thread(app: AppHandle) {
             );
             let now = Utc::now();
             let offset = *Local::now().offset();
-            let mut summary = build_summary(&events, &statuses, &pricing, SUMMARY_DAYS, now, offset.into());
+            // 잔디 격자 기간은 보존기간에서 유도한다 (아는 범위를 넘겨 그리면 빈칸이 거짓말이 된다)
+            let days = usage_core::aggregate::daily_window(retention_days);
+            let mut summary = build_summary(&events, &statuses, &pricing, days, now, offset.into());
             // 컨텍스트는 트랜스크립트 파일 단위 정보라 이벤트 집계로 안 나온다 —
             // 어댑터가 스캔하며 모아 둔 것 중 가장 최근에 움직인 세션을 얹는다.
             // (세 CLI 를 번갈아 쓰면 방금 만진 쪽이 게이지에 뜬다)

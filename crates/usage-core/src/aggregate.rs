@@ -63,6 +63,10 @@ pub struct Summary {
     pub sources: Vec<SourceSummary>,
     pub models_today: Vec<ModelRow>,
     pub daily: Vec<DailyRow>,
+    /// 스캔 범위에서 **가장 오래된** 이벤트 시각.
+    /// 잔디에서 "그날 안 씀"과 "그때는 기록 자체가 없음"을 가르는 경계다 —
+    /// 둘 다 0 으로 그리면 CLI 를 설치하기 전 날짜까지 "안 씀"으로 보인다.
+    pub first_event_ts: Option<DateTime<Utc>>,
     pub last_event_ts: Option<DateTime<Utc>>,
     /// 가장 최근 메인체인(서브에이전트 제외) 이벤트의 모델 — "활성 모델" 캐릭터 매핑용
     pub last_model: Option<String>,
@@ -86,6 +90,21 @@ impl Summary {
     pub fn latest_context(&self) -> Option<&crate::context::ContextState> {
         self.contexts.iter().max_by_key(|c| c.at)
     }
+}
+
+/// 잔디 격자가 덮을 일수 — **보존기간에서 유도**한다.
+///
+/// 예전엔 91일 고정이었는데, 보존기간을 30일로 줄이면 격자 61칸이 데이터가 존재할 수
+/// 없는 날로 남고 늘려도 91일까지만 보였다. 보존기간이 곧 "우리가 아는 범위"이므로
+/// 그걸 따라가는 게 맞다.
+///
+/// 주 단위로 떨어뜨리는 이유는 격자가 7행이라서다 — 어중간하면 마지막 열이 잘린다.
+/// 하한 4주: 그보다 짧으면 흐름이 안 보인다. 상한 26주: 패널 폭(약 274px)에서
+/// 그 이상은 칸이 실오라기가 된다.
+pub fn daily_window(retention_days: u32) -> usize {
+    const MIN_WEEKS: u32 = 4;
+    const MAX_WEEKS: u32 = 26;
+    ((retention_days / 7).clamp(MIN_WEEKS, MAX_WEEKS) * 7) as usize
 }
 
 fn local_date(ts: DateTime<Utc>, offset: FixedOffset) -> NaiveDate {
@@ -191,6 +210,7 @@ pub fn build_summary(
         sources,
         models_today,
         daily,
+        first_event_ts: events.first().map(|e| e.ts),
         last_event_ts: events.last().map(|e| e.ts),
         last_model,
         observed_models: observed.into_iter().collect(),
@@ -202,6 +222,22 @@ pub fn build_summary(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn daily_window_follows_retention_in_whole_weeks() {
+        // 기본값 90일 → 12주 (예전 고정값 91일과 거의 같다)
+        assert_eq!(daily_window(90), 84);
+        // 짧게 줄이면 격자도 줄어든다 — 데이터가 있을 수 없는 칸을 남기지 않는다
+        assert_eq!(daily_window(30), 28);
+        assert_eq!(daily_window(7), 28, "하한 4주");
+        assert_eq!(daily_window(1), 28, "하한 4주");
+        // 길게 늘려도 패널 폭에 들어가는 만큼만
+        assert_eq!(daily_window(365), 182, "상한 26주");
+        // 항상 주 단위로 떨어진다 (격자가 7행이라 어중간하면 마지막 열이 잘린다)
+        for d in [1u32, 13, 45, 88, 200, 1000] {
+            assert_eq!(daily_window(d) % 7, 0, "retention={d}");
+        }
+    }
 
     fn ev(source: Source, model: &str, ts: &str, output: u64) -> UsageEvent {
         UsageEvent {
