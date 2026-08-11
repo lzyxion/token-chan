@@ -2,9 +2,20 @@ import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import ResizeGrips from "../components/ResizeGrips";
+import VendorIcon from "../components/VendorIcon";
+import { ModelMix, UsageHeatmap, WeekBars } from "./UsageCharts";
 import { useLive, usePlans, useSummary } from "../hooks/useUsage";
-import { fmtCost, fmtMinutes, fmtTokens, parseResetTime, shortModel, totalOf } from "../format";
-import type { PlanUsage, Source, SourceStatus, SourceSummary } from "../types";
+import {
+  fmtAgo,
+  fmtCost,
+  fmtRemaining,
+  fmtTokens,
+  parseResetTime,
+  shortModel,
+  SOURCE_LABEL,
+  totalOf,
+} from "../format";
+import type { ContextState, PlanMeter, PlanUsage, SourceStatus, SourceSummary } from "../types";
 import "./panel.css";
 
 function meterClass(pct: number): string {
@@ -22,43 +33,103 @@ function statusChip(status: SourceStatus) {
   }
 }
 
-function SourceRow({ s }: { s: SourceSummary }) {
+/** 게이지 한 줄: `라벨 | 바 | % | 리셋`. 컨텍스트와 한도가 같은 격자를 써야
+ *  한 벤더의 소진율이 세로로 정렬돼 한눈에 비교된다. */
+function MeterRow({
+  label,
+  pct,
+  resetAt,
+  title,
+}: {
+  label: string;
+  pct: number;
+  resetAt?: Date | null;
+  title?: string;
+}) {
+  return (
+    <div className="vendor-row" title={title}>
+      <span className="vendor-key">{label}</span>
+      <div className="bar plan-bar">
+        <div className={`bar-fill meter ${meterClass(pct)}`} style={{ width: `${pct}%` }} />
+      </div>
+      <span className={`plan-pct ${meterClass(pct)}`}>{pct}%</span>
+      <span className="vendor-reset">{resetAt ? fmtRemaining(resetAt) : ""}</span>
+    </div>
+  );
+}
+
+/** 미터의 리셋 시각 — Codex 는 정확한 타임스탬프, Claude 는 문자열 파싱 */
+function meterReset(m: PlanMeter): Date | null {
+  if (m.resets_at) return new Date(m.resets_at);
+  return m.resets ? parseResetTime(m.resets) : null;
+}
+
+/**
+ * 벤더 카드 — 게이지가 벤더 하나만 보여주므로, 벤더 비교는 여기가 유일한 자리다.
+ * 한 벤더에 대해 알 수 있는 것(모델·컨텍스트·공식 한도·리셋·오늘 사용량)을 한 덩어리로 모은다.
+ */
+function VendorCard({
+  s,
+  context,
+  plan,
+  active,
+  busy,
+}: {
+  s: SourceSummary;
+  context: ContextState | null;
+  plan: PlanUsage | null;
+  active: boolean;
+  busy: boolean;
+}) {
   const total = totalOf(s.today);
   const chip = statusChip(s.status);
+  const pct = context ? Math.round(context.used_pct) : null;
+  const meters = plan?.meters ?? [];
   return (
-    <div className="source-row">
-      <span className={`dot ${s.source}`} />
-      <span className="source-label">{s.label}</span>
-      {chip ?? (
-        <>
-          <span className="source-tokens">{fmtTokens(total)}</span>
-          <span className="source-cost">{fmtCost(s.today_cost, s.cost_partial)}</span>
-        </>
+    <div className={`vendor-card ${active ? "active" : ""}`}>
+      {/* 오늘 사용량을 머리줄 오른쪽에 붙여 카드에서 한 줄을 없앴다 —
+          벤더 3개가 스크롤 없이 들어가야 "한눈에 비교"가 성립한다.
+          컨텍스트 토큰 수(76K/200K)는 바와 % 가 이미 말하고 있어 툴팁으로 내렸다. */}
+      <div className="vendor-head">
+        <VendorIcon source={s.source} size={13} className={busy ? "busy" : ""} />
+        <span className="source-label">{SOURCE_LABEL[s.source]}</span>
+        {context?.model && <span className="vendor-model">{shortModel(context.model)}</span>}
+        {busy && <span className="chip busy-chip">작업 중</span>}
+        {chip}
+        <span className="vendor-today">
+          <b>{fmtTokens(total)}</b> {fmtCost(s.today_cost, s.cost_partial)}
+        </span>
+      </div>
+      {pct != null && context && (
+        <MeterRow
+          label="컨텍스트"
+          pct={pct}
+          title={`${context.tokens.toLocaleString()} / ${context.window.toLocaleString()} 토큰${
+            context.interim ? " (정리 중)" : ""
+          }`}
+        />
+      )}
+      {meters.map((m) => (
+        <MeterRow
+          key={m.label}
+          label={m.label.replace("Current session", "세션 5h").replace("Current week", "주간")}
+          pct={m.used_pct}
+          resetAt={meterReset(m)}
+          title={m.resets_at ? new Date(m.resets_at).toLocaleString() : m.resets}
+        />
+      ))}
+      {/* 빈칸으로 두면 "로딩 중"으로 읽힌다 — 값을 안 주는 소스라는 걸 밝힌다
+          (게이지에서 점선 링으로 구분한 것과 같은 이유) */}
+      {meters.length === 0 && s.status.kind === "ok" && (
+        <div className="vendor-nolimit">공식 한도 없음</div>
       )}
     </div>
   );
 }
 
-const SOURCE_LABEL: Record<Source, string> = {
-  claude: "Claude",
-  codex: "Codex",
-  antigravity: "AGY",
-};
 
-/** 첫 미터의 리셋 안내. Codex 는 정확한 시각(`resets_at`)을, Claude 는 원문을 준다. */
-function resetHint(p: PlanUsage): string {
-  const m = p.meters[0];
-  if (!m) return "";
-  if (m.resets_at) {
-    const d = new Date(m.resets_at);
-    const day = `${d.getMonth() + 1}/${d.getDate()}`;
-    const time = `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
-    return `${m.label} 리셋 ${day} ${time}`;
-  }
-  return m.resets ? `세션 리셋 ${m.resets}` : "";
-}
 
-const PAGE_TITLES = ["요약", "소스·블록", "모델·세션"];
+const PAGE_TITLES = ["현황", "통계·사용량", "최근 세션"];
 
 /** 독립 창으로 뜨는 사용량 패널 — 펫 우클릭 또는 트레이 메뉴로 토글 */
 export default function UsagePanel() {
@@ -115,19 +186,21 @@ export default function UsagePanel() {
 
   const topModels = summary.models_today.slice(0, 5);
   const todayTotal = totalOf(summary.today);
-  const maxModel = topModels.length > 0 ? totalOf(topModels[0].totals) : 0;
+  // 잔디가 덮는 기간(= summary.daily) 전체 합계. 백엔드에 따로 담지 않고 여기서 더한다 —
+  // 일별 값이 이미 다 와 있어 서버 왕복을 늘릴 이유가 없다.
+  const periodTotal = summary.daily.reduce((s, d) => s + totalOf(d.totals), 0);
+  const periodCost = summary.daily.reduce((s, d) => s + d.cost, 0);
 
-  // 5시간 블록 표시는 Claude 세션 리셋을 기준으로 삼는다 (블록 개념 자체가 Claude 것)
-  const claudePlan = plans.find((p) => p.source === "claude") ?? null;
-  const officialReset = claudePlan?.meters?.[0]?.resets
-    ? parseResetTime(claudePlan.meters[0].resets)
+  // 지금 돌고 있는 벤더들 (busy 는 세션 레지스트리, active 는 파일 신선도로 유도한 값)
+  const busySources = new Set(
+    live.sessions.filter((s) => s.status === "busy" || s.status === "active").map((s) => s.source),
+  );
+  // 게이지가 보여주는 벤더와 같은 기준 — 작업 중 우선, 없으면 마지막으로 움직인 세션.
+  // 게이지와 달리 여기선 깜빡임이 문제되지 않아 히스테리시스를 걸지 않는다.
+  const latestContext = summary.contexts.length
+    ? summary.contexts.reduce((a, b) => ((a.at ?? "") >= (b.at ?? "") ? a : b))
     : null;
-  const blockRemain = officialReset
-    ? Math.max(0, Math.round((officialReset.getTime() - Date.now()) / 60000))
-    : (summary.block?.remaining_minutes ?? 0);
-  const blockRatio = officialReset
-    ? Math.min(1, Math.max(0, 1 - blockRemain / 300))
-    : (summary.block?.time_ratio ?? 0);
+  const activeSource = [...busySources][0] ?? latestContext?.source ?? null;
 
   const pageCount = PAGE_TITLES.length;
   const prev = () => setPage((p) => (p + pageCount - 1) % pageCount);
@@ -158,148 +231,103 @@ export default function UsagePanel() {
         >
           ✕
         </button>
+        {/* 비용은 통계 페이지의 토큰 총합 옆으로 옮겼다 — 헤더에 두면 어느 페이지에서든
+            떠 있어서 벤더별 비용과 헷갈린다 */}
         <div className="head" data-tauri-drag-region="deep">
           <span className="title">{PAGE_TITLES[page]}</span>
           <span className="date">{summary.today_date.slice(5).replace("-", "/")}</span>
-          <span className="cost">{fmtCost(summary.today_cost, summary.cost_partial)}</span>
         </div>
 
         <div className="page-body" ref={bodyRef}>
           {page === 0 && (
-            <>
-              <div className="grand">
-                <span className="grand-tokens">{fmtTokens(todayTotal)}</span>
-                <span className="grand-unit">tokens</span>
-                <div className="grand-mini">
-                  입력 {fmtTokens(summary.today.input)} · 출력 {fmtTokens(summary.today.output)} ·
-                  캐시 {fmtTokens(summary.today.cache_write + summary.today.cache_read)}
-                </div>
-              </div>
-
-              {/* 소스마다 한도를 얻는 경로가 달라 한 덩어리로 못 묶는다 —
-                  Claude 는 CLI 조회, Codex 는 rollout 에 실려 온다. agy 는 아예 없다. */}
-              {plans.map((p) => (
-                <div className="plan" key={p.source}>
-                  <div className="plan-title">
-                    {SOURCE_LABEL[p.source]} 한도 (공식)
-                    {p.detail && <span className="plan-detail"> · {p.detail}</span>}
-                  </div>
-                  {p.meters.map((m) => (
-                    <div className="plan-row" key={m.label}>
-                      <span className="plan-label">
-                        {m.label
-                          .replace("Current session", "세션(5h)")
-                          .replace("Current week", "주간")}
-                      </span>
-                      <div className="bar plan-bar">
-                        <div
-                          className={`bar-fill meter ${meterClass(m.used_pct)}`}
-                          style={{ width: `${m.used_pct}%` }}
-                        />
-                      </div>
-                      <span className={`plan-pct ${meterClass(m.used_pct)}`}>{m.used_pct}%</span>
-                    </div>
-                  ))}
-                  {/* 리셋까지 남은 시간도 같은 게이지로 — 다만 소진율이 아니라
-                      "블록이 얼마나 지났나"라서 단계 색 대신 파란 시간 색을 쓴다 */}
-                  {p.source === "claude" && officialReset && (
-                    <div className="plan-row">
-                      <span className="plan-label">리셋까지</span>
-                      <div className="bar plan-bar">
-                        <div className="bar-fill time" style={{ width: `${blockRatio * 100}%` }} />
-                      </div>
-                      <span className="plan-pct time">{fmtMinutes(blockRemain)}</span>
-                    </div>
-                  )}
-                  <div className="plan-reset">{resetHint(p)}</div>
-                </div>
-              ))}
-            </>
+            /* 활성 벤더를 맨 위로 — 게이지가 보여주는 게 이것이라 시선이 먼저 닿아야 한다 */
+            <div className="sources">
+              {[...summary.sources]
+                .sort(
+                  (a, b) => Number(b.source === activeSource) - Number(a.source === activeSource),
+                )
+                .map((s) => (
+                  <VendorCard
+                    key={s.source}
+                    s={s}
+                    context={summary.contexts.find((c) => c.source === s.source) ?? null}
+                    plan={plans.find((p) => p.source === s.source) ?? null}
+                    active={s.source === activeSource}
+                    busy={busySources.has(s.source)}
+                  />
+                ))}
+            </div>
           )}
 
           {page === 1 && (
             <>
-              <div className="sources">
-                {summary.sources.map((s) => (
-                  <SourceRow key={s.source} s={s} />
-                ))}
+              {/* 오늘만 크게 두면 바로 아래 91일 잔디와 기간이 뒤섞여 읽힌다 —
+                  큰 숫자를 전체 합계로 오해하기 딱 좋다. 둘을 나란히 놓아 기간을 못 박는다.
+                  기간 합계는 통계 페이지에 원래 있어야 할 값이기도 하다
+                  (지금까지는 잔디를 눈으로 훑어야 총량을 짐작할 수 있었다). */}
+              <div className="totals">
+                <div className="total-item">
+                  <span className="total-label">오늘</span>
+                  <span className="total-tokens">{fmtTokens(todayTotal)}</span>
+                  <span className="total-cost">
+                    {fmtCost(summary.today_cost, summary.cost_partial)}
+                  </span>
+                </div>
+                <div className="total-item">
+                  <span className="total-label">{summary.daily.length}일</span>
+                  <span className="total-tokens">{fmtTokens(periodTotal)}</span>
+                  <span className="total-cost">{fmtCost(periodCost)}</span>
+                </div>
+              </div>
+              {/* 어느 기간의 내역인지 앞에 못 박는다 (위 두 숫자와 헷갈리지 않게) */}
+              <div className="grand-mini">
+                오늘 · 입력 {fmtTokens(summary.today.input)} · 출력{" "}
+                {fmtTokens(summary.today.output)} · 캐시{" "}
+                {fmtTokens(summary.today.cache_write + summary.today.cache_read)}
               </div>
 
-              {summary.block && (
-                <div className="block">
-                  <div className="block-head">
-                    <span>{claudePlan ? "이번 블록 상세 (로컬)" : "5시간 블록"}</span>
-                    <span className="block-remain">
-                      {fmtMinutes(blockRemain)} 남음{officialReset ? " (공식)" : ""}
-                    </span>
-                  </div>
-                  <div className="bar">
-                    <div className="bar-fill time" style={{ width: `${blockRatio * 100}%` }} />
-                  </div>
-                  <div className="block-foot">
-                    <span>{fmtTokens(totalOf(summary.block.totals))} tokens</span>
-                    <span>{fmtCost(summary.block.cost, summary.block.cost_partial)}</span>
-                    {summary.block.token_ratio != null && !claudePlan && (
-                      <span
-                        className={summary.block.token_ratio >= 0.8 ? "ratio warn-text" : "ratio"}
-                      >
-                        최대 블록 대비 {Math.round(summary.block.token_ratio * 100)}%
-                      </span>
-                    )}
-                  </div>
+              <div className="chart-block">
+                <div className="chart-title">일별 사용량</div>
+                <UsageHeatmap daily={summary.daily} />
+              </div>
+
+              <div className="chart-block">
+                <div className="chart-title">최근 7일</div>
+                <WeekBars daily={summary.daily} />
+              </div>
+
+              {topModels.length > 0 && (
+                <div className="chart-block">
+                  <div className="chart-title">오늘 모델</div>
+                  <ModelMix models={summary.models_today} />
                 </div>
               )}
-
             </>
           )}
 
           {page === 2 && (
-            <>
-              {topModels.length > 0 ? (
-                <div className="models">
-                  {topModels.map((m) => (
-                    <div className="model-row" key={`${m.source}-${m.model}`}>
-                      <span className="model-name">{shortModel(m.model)}</span>
-                      <div className="model-bar">
-                        <div
-                          className={`model-fill ${m.source}`}
-                          style={{
-                            width: `${maxModel > 0 ? (totalOf(m.totals) / maxModel) * 100 : 0}%`,
-                          }}
-                        />
-                      </div>
-                      <span className="model-tokens">{fmtTokens(totalOf(m.totals))}</span>
-                    </div>
-                  ))}
-                </div>
+            <div className="sessions">
+              {summary.sessions.length === 0 ? (
+                <div className="empty-hint">최근 세션이 없습니다</div>
               ) : (
-                <div className="empty-hint">오늘 사용된 모델이 없습니다</div>
+                summary.sessions.map((r) => (
+                  <div className="session-row" key={`${r.source}:${r.id}`} title={r.cwd || r.id}>
+                    <VendorIcon
+                      source={r.source}
+                      size={12}
+                      className={busySources.has(r.source) ? "busy" : ""}
+                    />
+                    <span className="session-label">{r.label}</span>
+                    <span className="session-ago">{fmtAgo(r.at)}</span>
+                    <span className="session-meta">
+                      {shortModel(r.model)}
+                      {r.branch && ` · ${r.branch}`}
+                    </span>
+                    <span className="session-tokens">{fmtTokens(r.tokens)}</span>
+                  </div>
+                ))
               )}
-
-              {summary.last_model && (
-                <div className="active-model">
-                  활성 모델: <b>{shortModel(summary.last_model)}</b>
-                </div>
-              )}
-
-              <div className={`live ${live.busy ? "busy" : ""}`}>
-                {live.busy
-                  ? `⚙ 작업 중 세션 ${live.busy_count}개`
-                  : live.sessions.length > 0
-                    ? `세션 ${live.sessions.length}개 대기 중`
-                    : "실행 중인 세션 없음"}
-                {/* 어느 CLI 가 움직이는지가 정보의 핵심 — 이제 셋이 섞이므로 벤더를 밝힌다.
-                    `active` 는 파일 신선도로 유도한 것이라 `~` 로 구분 표시한다. */}
-                {live.sessions.length > 0 && (
-                  <span className="live-sources">
-                    {live.sessions
-                      .map((s) => `${SOURCE_LABEL[s.source]}${s.status === "active" ? "~" : ""}`)
-                      .filter((v, i, a) => a.indexOf(v) === i)
-                      .join(" · ")}
-                  </span>
-                )}
-              </div>
-            </>
+            </div>
           )}
         </div>
 

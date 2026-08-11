@@ -2,8 +2,18 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { useLive, usePlanOf, useSummary } from "../hooks/useUsage";
-import { fmtCost, fmtMinutes, fmtTokens, parseResetTime, shortModel, totalOf } from "../format";
+import { useLive, usePlans, useSummary } from "../hooks/useUsage";
+import { useActiveVendor } from "../hooks/useActiveVendor";
+import VendorIcon from "../components/VendorIcon";
+import {
+  fmtCost,
+  fmtMinutes,
+  fmtTokens,
+  parseResetTime,
+  shortModel,
+  SOURCE_LABEL,
+  totalOf,
+} from "../format";
 import type {
   AppSettings,
   CharacterImages,
@@ -11,6 +21,7 @@ import type {
   GaugeSide,
   PetState,
   SpeechRule,
+  Source,
 } from "../types";
 import { interpolate, linesFor, mergeLines, pick, resolveSpeechSet, speechFor } from "./speech";
 import "./pet.css";
@@ -83,9 +94,11 @@ function resolvePack(
 export default function Pet() {
   const live = useLive();
   const summary = useSummary();
-  // 게이지 링은 아직 Claude 한도만 쓴다. Codex 도 이제 한도를 주므로 어느 벤더를
-  // 보여줄지는 게이지 재설계에서 정한다 — 그 전까지는 동작을 바꾸지 않는다.
-  const plan = usePlanOf("claude");
+  const plans = usePlans();
+  const [gaugeVendor, setGaugeVendor] = useState<"auto" | Source>("auto");
+  // 게이지는 링이 3개뿐이라 벤더 하나만 태운다. 어느 벤더인지는 벤더 점으로 밝힌다.
+  const active = useActiveVendor(summary, live, plans, gaugeVendor);
+  const plan = active?.plan ?? null;
   const [scale, setScale] = useState(1.0);
   const [threshold, setThreshold] = useState(0.8);
   const [weeklyThreshold, setWeeklyThreshold] = useState(0.9);
@@ -118,6 +131,7 @@ export default function Pet() {
       setDisabledStates(s.disabledStates ?? []);
       setShowMiniLabel(s.showMiniLabel ?? false);
       setGaugeSide(s.gaugeSide ?? "right");
+      setGaugeVendor(s.gaugeVendor ?? "auto");
       setSpeechLines(s.speechLines ?? {});
       setSpeechSets(s.speechSets ?? {});
       setSpeechRules(s.speechRules ?? []);
@@ -209,11 +223,10 @@ export default function Pet() {
   const weeklyPct =
     (plan?.meters?.find((m) => /week/i.test(m.label) && /all/i.test(m.label)) ?? plan?.meters?.[1])
       ?.used_pct ?? null;
-  /// 컨디션(피로도) 0..1 — 공식 세션 % 우선, 없으면 로컬 블록 추정
-  const fatigue = Math.min(
-    1,
-    Math.max(0, (sessionPct ?? (summary?.block?.token_ratio ?? 0) * 100) / 100),
-  );
+  /// 컨디션(피로도) 0..1 — 활성 벤더의 공식 세션 %.
+  /// 공식 한도를 안 주는 벤더(agy)를 보고 있으면 피로도가 없다. 추정치로 캐릭터를
+  /// 지치게 만드느니 아무 말도 안 하는 게 낫다.
+  const fatigue = Math.min(1, Math.max(0, (sessionPct ?? 0) / 100));
 
   const state: PetState = useMemo(() => {
     const off = new Set(disabledStates); // 사용자가 끈 상태는 건너뜀 (idle 취급)
@@ -223,11 +236,11 @@ export default function Pet() {
     // 한도 완전 소진 — 작업 중이어도 최우선 표시
     if (sessionPct != null && sessionPct >= 100 && !off.has("exhausted")) return "exhausted";
     if (live.busy && !off.has("working")) return "working";
-    // 경고: 공식 세션 % ≥ 세션 한도 또는 공식 주간 % ≥ 주간 한도. 공식 없으면 로컬 추정 폴백
+    // 경고: 공식 세션 % ≥ 세션 한도 또는 공식 주간 % ≥ 주간 한도.
+    // 공식 한도가 없는 벤더는 경고하지 않는다 (근거 없이 겁주지 않는다).
     const alert =
-      sessionPct != null
-        ? sessionPct >= threshold * 100 || (weeklyPct != null && weeklyPct >= weeklyThreshold * 100)
-        : (summary?.block?.token_ratio ?? 0) >= threshold;
+      sessionPct != null &&
+      (sessionPct >= threshold * 100 || (weeklyPct != null && weeklyPct >= weeklyThreshold * 100));
     if (alert && !off.has("alert")) return "alert";
     if (Date.now() < refreshedUntil && !off.has("refreshed")) return "refreshed";
     const last = summary?.last_event_ts ? Date.parse(summary.last_event_ts) : null;
@@ -306,7 +319,9 @@ export default function Pet() {
     gaugeSide,
     sessionPct != null,
     weeklyPct != null,
-    summary?.context != null,
+    active?.source,
+    active?.context != null,
+    plan?.meters?.length,
     blockElapsedPct != null,
   ]);
 
@@ -341,7 +356,8 @@ export default function Pet() {
       오늘비용: summary ? fmtCost(summary.today_cost, summary.cost_partial) : null,
       세션: sessionPct != null ? String(sessionPct) : null,
       주간: weeklyPct != null ? String(weeklyPct) : null,
-      컨텍스트: summary?.context ? String(Math.round(summary.context.used_pct)) : null,
+      컨텍스트: active?.context ? String(Math.round(active.context.used_pct)) : null,
+      벤더: active ? SOURCE_LABEL[active.source] : null,
       리셋: resetRemainMin != null ? fmtMinutes(resetRemainMin) : null,
       리셋시각: resetAt
         ? `${String(resetAt.getHours()).padStart(2, "0")}:${String(resetAt.getMinutes()).padStart(2, "0")}`
@@ -437,47 +453,66 @@ export default function Pet() {
   // 셋 다 "%가 오르면 나빠진다"는 성격이 같아 같은 모양·같은 색 규칙으로 묶인다.
   // 리셋까지 남은 시간은 성격이 반대(다 차면 좋음)라 발밑 가로 바로 분리했다.
   // .stage 안이라 캐릭터와 같은 배율로 커지고, 라벨은 캐릭터 반대쪽(바깥)으로 뻗는다.
-  const ctx = summary?.context ?? null;
+  const ctx = active?.context ?? null;
   const contextPct = ctx ? Math.round(ctx.used_pct) : null;
 
+  /**
+   * 링 한 줄. `pct`가 null 이면 **값이 없다**는 뜻이라 0%처럼 보이면 안 된다 —
+   * 점선 테두리로 "이 벤더는 이 값을 안 알려줌"과 "0%"를 구분한다.
+   * (agy 는 공식 한도가 없어 링 2·3이 늘 비어 있다)
+   */
   const ringRow = (key: string, pct: number | null, label: React.ReactNode) => (
     <div className="gauge-row" key={key}>
       <div
-        className="gauge-ring"
-        style={{
-          background:
-            pct == null
-              ? "rgba(255,255,255,0.14)"
-              : `conic-gradient(${ringColor(pct)} ${pct}%, rgba(255,255,255,0.14) 0)`,
-        }}
+        className={`gauge-ring ${pct == null ? "empty" : ""}`}
+        style={
+          pct == null
+            ? undefined
+            : {
+                background: `conic-gradient(${ringColor(pct)} ${pct}%, rgba(255,255,255,0.14) 0)`,
+              }
+        }
       />
       <span className="gauge-label">{label}</span>
     </div>
   );
 
-  // 컨텍스트 링은 라이브 세션이 없으면 값이 없다. 자리까지 빼면 열 높이가 널뛰어
-  // 캐릭터 세로 중심이 흔들리므로, 빈 링으로 자리를 지킨다("지금은 세션 없음"의 표시이기도 하다).
-  const hasPlanRings = sessionPct != null || weeklyPct != null;
+  // 링 2·3은 활성 벤더의 한도 미터를 짧은 창부터 그대로 얹는다.
+  // Claude 는 세션 5h + 주간, Codex free 는 월간 하나, agy 는 없음.
+  const meters = plan?.meters ?? [];
+  const meterRow = (slot: number) => {
+    const m = meters[slot];
+    const key = `meter${slot}`;
+    if (!m) {
+      return ringRow(key, null, <>한도 정보 없음</>);
+    }
+    const label = m.label.replace("Current session", "세션 5h").replace("Current week", "주간");
+    return ringRow(
+      key,
+      m.used_pct,
+      <>
+        {label} <b>{m.used_pct}%</b>
+      </>,
+    );
+  };
 
+  // 링 개수를 벤더마다 바꾸면 열 높이가 널뛰어 캐릭터 세로 중심이 흔들린다.
+  // 그래서 항상 3줄을 유지하고, 값이 없는 줄만 빈 링으로 둔다.
   const gauges =
-    gaugeSide === "off" || (!hasPlanRings && ctx == null) ? null : (
+    gaugeSide === "off" || active == null ? null : (
       <div className={`gauge ${gaugeSide}`}>
-        {sessionPct != null &&
-          ringRow(
-            "session",
-            sessionPct,
-            <>
-              세션 5h <b>{sessionPct}%</b>
-            </>,
-          )}
-        {weeklyPct != null &&
-          ringRow(
-            "weekly",
-            weeklyPct,
-            <>
-              주간 <b>{weeklyPct}%</b>
-            </>,
-          )}
+        {/* 벤더 로고 — 평상시 라벨이 안 보이므로(호버 전용) 이게 벤더를 밝히는 유일한 수단이다 */}
+        <div className="gauge-row" key="vendor">
+          <VendorIcon
+            source={active.source}
+            className={`gauge-dot ${active.busy ? "busy" : ""} ${active.stale ? "stale" : ""}`}
+          />
+          <span className="gauge-label">
+            {SOURCE_LABEL[active.source]}
+            {ctx?.model ? ` · ${shortModel(ctx.model)}` : ""}
+            {active.busy ? " · 작업 중" : ""}
+          </span>
+        </div>
         {ctx != null && contextPct != null
           ? ringRow(
               "context",
@@ -487,13 +522,9 @@ export default function Pet() {
                 {ctx.interim ? " · 정리 중" : ""}
               </>,
             )
-          : ringRow(
-              "context",
-              null,
-              <>
-                컨텍스트 <b>—</b>
-              </>,
-            )}
+          : ringRow("context", null, <>컨텍스트 <b>—</b></>)}
+        {meterRow(0)}
+        {meterRow(1)}
       </div>
     );
 

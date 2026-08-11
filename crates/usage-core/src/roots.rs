@@ -81,48 +81,80 @@ fn with_extra(auto: Vec<PathBuf>, extra: &[PathBuf], suffix: &[&str]) -> Vec<Pat
 /// Windows 빌드에서 WSL 배포판 내부의 리눅스 홈 디렉토리 목록
 /// (`\\wsl.localhost\<distro>\home\<user>`, `\root`).
 /// 같은 머신에서 WSL로 쓴 CLI 사용량을 Windows 앱이 병합하기 위함.
+///
+/// WSL 조회는 **꺼져 있을 때 지독하게 느리다.** 실측(배포판 2개 Stopped):
+///
+/// | | 걸린 시간 |
+/// |---|---|
+/// | `\\wsl.localhost\<distro>\...` 경로 확인 1회 | **110초** |
+/// | `wsl.exe -l -q` | 30초 |
+/// | `wsl.exe -l -q --running` | 14초 |
+///
+/// Windows 가 배포판을 깨우려 들기 때문이다. 그래서 두 겹으로 막는다:
+/// **실행 중인 배포판만** 보고(`--running` — 사용량 보자고 남의 WSL 을 깨울 이유가 없다),
+/// 그마저도 [`WSL_PROBE_TIMEOUT`] 안에 안 끝나면 포기한다.
+///
+/// 포기한 결과는 캐시하지 **않는다** — 나중에 WSL 을 켜고 "다시 검색" 하면 잡히도록.
 #[cfg(windows)]
 fn wsl_guest_homes() -> Vec<PathBuf> {
+    use std::sync::{Mutex, OnceLock};
+
+    static CACHE: OnceLock<Mutex<Option<Vec<PathBuf>>>> = OnceLock::new();
+    let cell = CACHE.get_or_init(|| Mutex::new(None));
+    if let Some(cached) = cell.lock().unwrap().as_ref() {
+        return cached.clone();
+    }
+
+    // 조회가 매달릴 수 있으므로 별도 스레드에 맡기고 기다리는 쪽에 시간 제한을 건다.
+    // 시간이 지나면 그 스레드는 버려둔다 — wsl.exe 가 끝나면 알아서 정리된다.
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = tx.send(collect_wsl_guest_homes());
+    });
+    let Ok(homes) = rx.recv_timeout(WSL_PROBE_TIMEOUT) else {
+        return vec![];
+    };
+    *cell.lock().unwrap() = Some(homes.clone());
+    homes
+}
+
+/// WSL 조회를 포기하는 시간. 켜져 있으면 수십 ms 면 끝나므로 넉넉한 값이다.
+#[cfg(windows)]
+const WSL_PROBE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(3);
+
+#[cfg(windows)]
+fn collect_wsl_guest_homes() -> Vec<PathBuf> {
     use std::os::windows::process::CommandExt;
-    use std::sync::OnceLock;
     const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
-    static CACHE: OnceLock<Vec<PathBuf>> = OnceLock::new();
-    CACHE
-        .get_or_init(|| {
-            let Ok(out) = std::process::Command::new("wsl.exe")
-                .args(["-l", "-q"])
-                .creation_flags(CREATE_NO_WINDOW)
-                .output()
-            else {
-                return vec![];
-            };
-            // wsl.exe 출력은 UTF-16LE
-            let utf16: Vec<u16> = out
-                .stdout
-                .chunks_exact(2)
-                .map(|c| u16::from_le_bytes([c[0], c[1]]))
-                .collect();
-            let text = String::from_utf16_lossy(&utf16);
+    let Ok(out) = std::process::Command::new("wsl.exe")
+        .args(["-l", "-q", "--running"])
+        .creation_flags(CREATE_NO_WINDOW)
+        .output()
+    else {
+        return vec![];
+    };
+    // wsl.exe 출력은 UTF-16LE
+    let utf16: Vec<u16> =
+        out.stdout.chunks_exact(2).map(|c| u16::from_le_bytes([c[0], c[1]])).collect();
+    let text = String::from_utf16_lossy(&utf16);
 
-            let mut homes = vec![];
-            for distro in text.lines().map(|l| l.trim().trim_matches('\0')).filter(|l| !l.is_empty()) {
-                let base = PathBuf::from(format!(r"\\wsl.localhost\{distro}\home"));
-                if let Ok(entries) = std::fs::read_dir(&base) {
-                    for e in entries.filter_map(|e| e.ok()) {
-                        if e.path().is_dir() {
-                            homes.push(e.path());
-                        }
-                    }
-                }
-                let root = PathBuf::from(format!(r"\\wsl.localhost\{distro}\root"));
-                if root.is_dir() {
-                    homes.push(root);
+    let mut homes = vec![];
+    for distro in text.lines().map(|l| l.trim().trim_matches('\0')).filter(|l| !l.is_empty()) {
+        let base = PathBuf::from(format!(r"\\wsl.localhost\{distro}\home"));
+        if let Ok(entries) = std::fs::read_dir(&base) {
+            for e in entries.filter_map(|e| e.ok()) {
+                if e.path().is_dir() {
+                    homes.push(e.path());
                 }
             }
-            homes
-        })
-        .clone()
+        }
+        let root = PathBuf::from(format!(r"\\wsl.localhost\{distro}\root"));
+        if root.is_dir() {
+            homes.push(root);
+        }
+    }
+    homes
 }
 
 #[cfg(not(windows))]

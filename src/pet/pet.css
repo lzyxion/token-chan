@@ -149,6 +149,54 @@
   mask: radial-gradient(closest-side, transparent 56%, #000 57%);
   filter: drop-shadow(0 1px 3px rgba(0, 0, 0, 0.45));
 }
+/* 값이 **없는** 링 — 이 벤더가 그 수치를 안 알려준다는 뜻이다 (agy 는 공식 한도가 없다).
+   채운 링과 같은 모양이면 "0%"로 읽히므로, 마스크를 빼고 점선 테두리만 남겨 구분한다. */
+.gauge-ring.empty {
+  -webkit-mask: none;
+  mask: none;
+  background: none;
+  border: 1px dashed rgba(255, 255, 255, 0.22);
+  filter: none;
+}
+
+/* ── 벤더 아이콘 ──
+   평상시 라벨이 안 보이므로(호버 전용) 지금 어느 CLI 를 보고 있는지 알릴 수단이
+   이것뿐이다. 링 색은 이미 소진율 단계에 쓰고 있어 벤더를 실을 수 없다.
+   투명 오버레이라 배경이 사용자 바탕화면이다 — 밝은 배경에서도 읽히도록 그림자를 준다. */
+.gauge-dot {
+  flex: none;
+  /* 링(18px) 기준 가운데로 오도록 좌우 여백을 준다 (아이콘 14px) */
+  margin: 0 2px;
+  filter: drop-shadow(0 1px 3px rgba(0, 0, 0, 0.55));
+}
+/* 로고 파일이 없는 벤더의 폴백 점 */
+.gauge-dot.fallback {
+  width: 8px;
+  height: 8px;
+  margin: 0 5px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.3);
+}
+/* 작업 중이면 아이콘이 숨쉰다 — 캐릭터 모션과 별개로 "이 벤더가 지금 돌고 있음"을 알린다 */
+.gauge-dot.busy {
+  animation: gauge-dot-pulse 1.4s ease-in-out infinite;
+}
+/* 세션이 다 끝나 근거 없이 직전 벤더를 계속 보여주는 중 — 흐리게 낮춘다 */
+.gauge-dot.stale {
+  opacity: 0.45;
+}
+@keyframes gauge-dot-pulse {
+  0%,
+  100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+  50% {
+    /* 로고는 점보다 크므로 확대폭을 줄인다 — 크게 튀면 열 폭이 흔들려 보인다 */
+    transform: scale(1.15);
+    opacity: 0.6;
+  }
+}
 
 /* 라벨은 캐릭터(=창)에 마우스를 올렸을 때만 보인다.
    자리는 항상 차지하므로 나타날 때 배치가 흔들리지 않는다. */

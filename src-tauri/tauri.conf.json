@@ -45,7 +45,7 @@
         "label": "panel",
         "title": "Token Pet 사용량",
         "width": 320,
-        "height": 262,
+        "height": 410,
         "visible": false,
         "transparent": true,
         "decorations": false,

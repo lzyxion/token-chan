@@ -7,10 +7,10 @@ import type {
   CharacterRule,
   GaugeSide,
   ScanRoot,
-  Source,
   SpeechRule,
   Summary,
 } from "../types";
+import { SOURCE_LABEL } from "../format";
 import ResizeGrips from "../components/ResizeGrips";
 import { DEFAULT_LINES } from "../pet/speech";
 import "./settings.css";
@@ -25,12 +25,6 @@ const STATE_LABELS: [string, string][] = [
 ];
 
 /** 설정 탭 — 일반(창·한도·시스템) / 캐릭터(팩·상태·크기) / 대사(말풍선·문구) */
-/** 소스 id → 화면 표기. 트레이의 「연결된 계정」 항목과 같은 표기를 쓴다. */
-const SOURCE_LABEL: Record<Source, string> = {
-  claude: "Claude",
-  codex: "Codex",
-  antigravity: "AGY",
-};
 
 type Tab = "general" | "character" | "speech";
 const TABS: [Tab, string][] = [
@@ -716,9 +710,30 @@ export default function SettingsPanel() {
                   <option value="off">표시 안 함</option>
                 </select>
               </div>
+              {s.gaugeSide !== "off" && (
+                <div className="settings-row">
+                  <span className="settings-sublabel">보여줄 벤더</span>
+                  <select
+                    className="settings-select"
+                    value={s.gaugeVendor ?? "auto"}
+                    onChange={(e) =>
+                      update({ gaugeVendor: e.currentTarget.value as AppSettings["gaugeVendor"] })
+                    }
+                  >
+                    <option value="auto">자동 (작업 중인 쪽)</option>
+                    <option value="claude">Claude 고정</option>
+                    <option value="codex">Codex 고정</option>
+                    <option value="antigravity">AGY 고정</option>
+                  </select>
+                </div>
+              )}
               <div className="settings-hint">
-                세션 5시간 · 주간 · 컨텍스트 3개. 캐릭터에 마우스를 올리면 라벨이
-                바깥쪽으로 펼쳐집니다. 리셋까지 남은 시간은 발밑 가로 바입니다
+                링이 3개뿐이라 <b>벤더 하나</b>만 보여줍니다 — 맨 위 로고가 어느 CLI인지
+                알려주고, 작업 중이면 로고가 깜빡입니다.
+                아래는 컨텍스트 · 그 벤더의 공식 한도 2개 순입니다. 점선 링은 0%가 아니라
+                <b> 그 벤더가 안 알려주는 값</b>입니다 (AGY는 공식 한도가 없습니다).
+                캐릭터에 마우스를 올리면 라벨이 바깥쪽으로 펼쳐지고, 리셋까지 남은 시간은
+                발밑 가로 바입니다
               </div>
             </div>
 

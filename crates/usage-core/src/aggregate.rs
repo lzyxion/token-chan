@@ -3,7 +3,6 @@
 use chrono::{DateTime, Duration, FixedOffset, NaiveDate, Utc};
 use serde::Serialize;
 
-use crate::blocks::{active_block, compute_blocks, token_ratio_vs_history, BLOCK_HOURS};
 use crate::model::{Source, SourceStatus, UsageEvent};
 use crate::pricing::PriceTable;
 
@@ -55,20 +54,6 @@ pub struct DailyRow {
 }
 
 #[derive(Clone, Debug, Serialize)]
-pub struct BlockSummary {
-    pub start: DateTime<Utc>,
-    pub end: DateTime<Utc>,
-    pub totals: Totals,
-    pub cost: f64,
-    pub cost_partial: bool,
-    pub remaining_minutes: i64,
-    /// 블록 시간 경과율 0..1
-    pub time_ratio: f64,
-    /// 과거 최대 블록 대비 토큰 소진율 (히스토리 부족 시 None)
-    pub token_ratio: Option<f64>,
-}
-
-#[derive(Clone, Debug, Serialize)]
 pub struct Summary {
     pub generated_at: DateTime<Utc>,
     pub today_date: String,
@@ -78,17 +63,29 @@ pub struct Summary {
     pub sources: Vec<SourceSummary>,
     pub models_today: Vec<ModelRow>,
     pub daily: Vec<DailyRow>,
-    pub block: Option<BlockSummary>,
     pub last_event_ts: Option<DateTime<Utc>>,
     /// 가장 최근 메인체인(서브에이전트 제외) 이벤트의 모델 — "활성 모델" 캐릭터 매핑용
     pub last_model: Option<String>,
     /// 스캔 범위에서 관측된 모든 모델명 (정렬) — 규칙 편집 도우미용
     pub observed_models: Vec<String>,
-    /// 활성 Claude 세션의 컨텍스트 창 사용량.
+    /// 소스별 활성 세션의 컨텍스트 창 사용량 (해당 소스에 최근 세션이 있는 것만).
     /// 트랜스크립트 파일 단위 정보라 이벤트 집계로는 만들 수 없어, 스캔 뒤
-    /// `ClaudeAdapter::context()` 결과를 채워 넣는다 (monitor.rs).
+    /// 각 어댑터의 `context()` 결과를 채워 넣는다 (monitor.rs).
+    ///
+    /// 게이지는 이 중 하나(활성 벤더)만 쓰고 패널은 전부 쓴다 — 어느 쪽을 고를지는
+    /// 프론트가 정하므로 여기서는 고르지 않고 그대로 내보낸다.
     #[serde(default)]
-    pub context: Option<crate::context::ContextState>,
+    pub contexts: Vec<crate::context::ContextState>,
+    /// 최근 세션 (소스 합쳐 최근순). 어느 프로젝트에서 태웠는지는 이것만 답한다.
+    #[serde(default)]
+    pub sessions: Vec<crate::session::SessionRow>,
+}
+
+impl Summary {
+    /// 가장 최근에 움직인 세션의 컨텍스트 (활성 벤더 자동 선택의 기본 근거)
+    pub fn latest_context(&self) -> Option<&crate::context::ContextState> {
+        self.contexts.iter().max_by_key(|c| c.at)
+    }
 }
 
 fn local_date(ts: DateTime<Utc>, offset: FixedOffset) -> NaiveDate {
@@ -181,25 +178,6 @@ pub fn build_summary(
         daily.push(DailyRow { date: d.to_string(), totals, cost });
     }
 
-    // 5시간 블록: Claude 이벤트만
-    let claude_events: Vec<UsageEvent> =
-        events.iter().filter(|e| e.source == Source::Claude).cloned().collect();
-    let blocks = compute_blocks(&claude_events, pricing);
-    let block = active_block(&blocks, now).map(|b| {
-        let elapsed = (now - b.start).num_seconds() as f64;
-        let len = (Duration::hours(BLOCK_HOURS)).num_seconds() as f64;
-        BlockSummary {
-            start: b.start,
-            end: b.end,
-            totals: b.totals,
-            cost: b.cost,
-            cost_partial: b.cost_partial,
-            remaining_minutes: (b.end - now).num_minutes().max(0),
-            time_ratio: (elapsed / len).clamp(0.0, 1.0),
-            token_ratio: token_ratio_vs_history(&blocks, b),
-        }
-    });
-
     let last_model = events.iter().rev().find(|e| !e.sidechain).map(|e| e.model.clone());
     let observed: std::collections::BTreeSet<String> =
         events.iter().map(|e| e.model.clone()).collect();
@@ -213,11 +191,11 @@ pub fn build_summary(
         sources,
         models_today,
         daily,
-        block,
         last_event_ts: events.last().map(|e| e.ts),
         last_model,
         observed_models: observed.into_iter().collect(),
-        context: None,
+        contexts: vec![],
+        sessions: vec![],
     }
 }
 
@@ -264,8 +242,6 @@ mod tests {
         assert_eq!(s.daily.last().unwrap().date, "2026-07-30");
         assert!(s.today_cost > 0.0);
         assert!(!s.cost_partial);
-        // 활성 블록: 마지막 Claude 이벤트(16:30Z) 기준 5h 이내 아님 → now 03:00Z 는 블록(16:00~21:00) 밖
-        assert!(s.block.is_none());
         assert_eq!(s.models_today.len(), 2);
     }
 
