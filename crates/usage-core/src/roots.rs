@@ -1,46 +1,17 @@
-//! OS/WSL별 데이터 루트 탐색.
+//! OS별 데이터 루트 탐색.
 //!
-//! - Linux/macOS: `~/.claude`, `~/.config/claude`(XDG 대안), `~/.codex`, `~/.gemini/antigravity-cli`
+//! - Linux/macOS: `~/.claude`, `~/.codex`, `~/.gemini/antigravity-cli`
 //! - Windows: `%USERPROFILE%\.claude` 등 (dirs::home_dir 가 처리)
-//! - WSL: 위에 더해 `/mnt/c/Users/<user>/.claude` 등 Windows 쪽 홈도 병합
+//!   + 실행 중인 WSL 배포판 안의 리눅스 홈도 병합 ([`wsl_guest_homes`])
+//!
+//! 반대 방향(WSL **안에서** 앱을 띄우고 `/mnt/c/Users/*` 의 Windows 홈을 병합)은 지원하지
+//! 않는다. 배포본이 msi/dmg 뿐이라 최종 사용자가 그렇게 쓸 일이 없고, 개발용으로만 남아
+//! 있던 코드다. WSL 안에서 띄워도 그 배포판의 `~/.claude` 등은 그대로 잡힌다.
 
 use std::path::{Path, PathBuf};
 
 pub fn home_dir() -> Option<PathBuf> {
     dirs::home_dir()
-}
-
-/// WSL 환경 여부 (리눅스 커널 버전 문자열에 microsoft 포함)
-pub fn is_wsl() -> bool {
-    if std::env::var_os("WSL_DISTRO_NAME").is_some() {
-        return true;
-    }
-    std::fs::read_to_string("/proc/version")
-        .map(|v| v.to_lowercase().contains("microsoft"))
-        .unwrap_or(false)
-}
-
-/// WSL에서 보이는 Windows 사용자 홈 디렉토리 목록 (`/mnt/c/Users/<user>`)
-fn wsl_windows_user_homes() -> Vec<PathBuf> {
-    if !is_wsl() {
-        return vec![];
-    }
-    let users = Path::new("/mnt/c/Users");
-    let Ok(entries) = std::fs::read_dir(users) else {
-        return vec![];
-    };
-    let skip = ["Public", "Default", "Default User", "All Users", "desktop.ini"];
-    entries
-        .filter_map(|e| e.ok())
-        .map(|e| e.path())
-        .filter(|p| p.is_dir())
-        .filter(|p| {
-            p.file_name()
-                .and_then(|n| n.to_str())
-                .map(|n| !skip.contains(&n))
-                .unwrap_or(false)
-        })
-        .collect()
 }
 
 /// 존재하는 경로만 남기고 중복 제거.
@@ -63,9 +34,11 @@ fn existing(paths: Vec<PathBuf>) -> Vec<PathBuf> {
 
 /// 자동 탐지 결과에 사용자가 설정에 직접 적은 홈들을 합친다.
 ///
-/// 자동 탐지는 프로세스 환경에 의존한다 — 트레이에서 뜬 앱은 터미널의 `CODEX_HOME` 을
-/// 물려받지 못해서, 그 경로가 있다는 사실조차 알 수 없다. 설정에 적어 두면 실행 방식과
-/// 무관하게 항상 같은 범위를 본다. 합쳐서 생기는 중복은 어댑터의 이벤트 dedup 이 막는다.
+/// 자동 탐지는 표준 위치와 마커 스캔이 닿는 곳까지만 본다. 홈을 다른 드라이브처럼 스캔
+/// 범위 밖으로 옮겨 두면 그 경로가 있다는 사실조차 알 수 없다 — **세 소스 모두 그렇다.**
+/// (환경변수로 그걸 메우면 실행 방식에 따라 범위가 달라져서 안 쓴다. `codex_homes` 참고)
+/// 설정에 적어 두면 실행 방식과 무관하게 항상 같은 범위를 본다.
+/// 합쳐서 생기는 중복은 어댑터의 이벤트 dedup 이 막는다.
 fn with_extra(auto: Vec<PathBuf>, extra: &[PathBuf], suffix: &[&str]) -> Vec<PathBuf> {
     let mut all = auto;
     for e in extra {
@@ -95,12 +68,10 @@ fn with_extra(auto: Vec<PathBuf>, extra: &[PathBuf], suffix: &[&str]) -> Vec<Pat
 /// 그마저도 [`WSL_PROBE_TIMEOUT`] 안에 안 끝나면 포기한다.
 ///
 /// 포기한 결과는 캐시하지 **않는다** — 나중에 WSL 을 켜고 "다시 검색" 하면 잡히도록.
+/// 성공한 결과는 캐시하되 [`forget_wsl_guest_homes`] 로 버릴 수 있다.
 #[cfg(windows)]
 fn wsl_guest_homes() -> Vec<PathBuf> {
-    use std::sync::{Mutex, OnceLock};
-
-    static CACHE: OnceLock<Mutex<Option<Vec<PathBuf>>>> = OnceLock::new();
-    let cell = CACHE.get_or_init(|| Mutex::new(None));
+    let cell = wsl_cache();
     if let Some(cached) = cell.lock().unwrap().as_ref() {
         return cached.clone();
     }
@@ -121,6 +92,27 @@ fn wsl_guest_homes() -> Vec<PathBuf> {
 /// WSL 조회를 포기하는 시간. 켜져 있으면 수십 ms 면 끝나므로 넉넉한 값이다.
 #[cfg(windows)]
 const WSL_PROBE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(3);
+
+#[cfg(windows)]
+fn wsl_cache() -> &'static std::sync::Mutex<Option<Vec<PathBuf>>> {
+    static CACHE: std::sync::OnceLock<std::sync::Mutex<Option<Vec<PathBuf>>>> =
+        std::sync::OnceLock::new();
+    CACHE.get_or_init(|| std::sync::Mutex::new(None))
+}
+
+/// 캐시된 WSL 조회 결과를 버린다 — **"다시 검색"이 실제로 다시 검색하게** 하는 데 필요하다.
+///
+/// 조회가 비싸서(꺼진 배포판이 있으면 최대 [`WSL_PROBE_TIMEOUT`]) 성공한 결과는 프로세스
+/// 내내 캐시한다. 그런데 그러면 앱을 켠 **뒤에** 시작한 배포판이 영영 안 잡힌다 — 재시작
+/// 말고는 방법이 없었다. 사용자가 상황을 바꾸고 다시 누르는 경우가 정확히 이 시나리오다.
+///
+/// 자동 재발견(홈 추가·제거 등)에서는 부르지 않는다. 매번 최대 3초를 더 쓸 이유가 없다.
+pub fn forget_wsl_guest_homes() {
+    #[cfg(windows)]
+    {
+        *wsl_cache().lock().unwrap() = None;
+    }
+}
 
 #[cfg(windows)]
 fn collect_wsl_guest_homes() -> Vec<PathBuf> {
@@ -162,38 +154,60 @@ fn wsl_guest_homes() -> Vec<PathBuf> {
     vec![]
 }
 
-/// 후보 홈들에 suffix를 붙여 존재하는 것만 반환
-fn candidate_dirs(suffix: &[&str]) -> Vec<PathBuf> {
+/// 소스별 배치 — 홈 아래 어디를 보는가. 대안이 여럿이면 **홈마다 전부** 시도한다.
+/// 소스 간 차이를 **코드가 아니라 데이터**로 두면 특정 홈에서만 빠지는 누락이 안 생긴다.
+///
+/// 지금은 소스마다 하나씩이다. 예전에는 Claude 에 XDG 대안(`~/.config/claude/projects`)이
+/// 있었는데 **뺐다** — 그 배치에서는 설치본이 온전히 복원되지 않았다. 발견한 루트에서
+/// 홈을 거꾸로 유도하는데(`accounts::standard_installs`), XDG 배치면 홈이 `~/.config` 로
+/// 잡혀 트랜스크립트·세션·계정 파일 경로가 전부 어긋나고, 계정 파일을 못 읽으니 경로를
+/// 키로 한 **유령 계정**이 목록에 뜬다. 게다가 그 배치를 실제로 관측한 적이 없어서,
+/// 계정 파일이 어디 놓이는지도 추측일 수밖에 없다. 실측되면 그때 제대로 넣는다.
+const CLAUDE_PROJECT_LAYOUTS: &[&[&str]] = &[&[".claude", "projects"]];
+const CLAUDE_SESSION_LAYOUTS: &[&[&str]] = &[&[".claude", "sessions"]];
+const CODEX_HOME_LAYOUTS: &[&[&str]] = &[&[".codex"]];
+const AGY_HOME_LAYOUTS: &[&[&str]] = &[&[".gemini", "antigravity-cli"]];
+
+/// 훑을 후보 홈 — 로컬 홈 + 실행 중인 WSL 배포판의 리눅스 홈.
+/// **세 소스가 이 목록을 공유한다.** 셋 다 WSL 에 따로 설치될 수 있고 세션도 따로 쌓인다.
+fn candidate_homes() -> Vec<PathBuf> {
     let mut homes: Vec<PathBuf> = vec![];
     if let Some(h) = home_dir() {
         homes.push(h);
     }
-    homes.extend(wsl_windows_user_homes());
     homes.extend(wsl_guest_homes());
+    homes
+}
 
+/// 후보 홈 × 배치의 모든 조합 중 존재하는 것만.
+fn candidate_dirs(layouts: &[&[&str]]) -> Vec<PathBuf> {
+    dirs_under(candidate_homes(), layouts)
+}
+
+/// 홈 목록을 받는 쪽을 갈라 둬서 테스트에서 주입할 수 있다
+/// (`home_dir()` 은 실행 환경에 고정돼 있어 그대로면 조합 규칙을 검증할 수 없다).
+fn dirs_under(homes: Vec<PathBuf>, layouts: &[&[&str]]) -> Vec<PathBuf> {
     let mut out = vec![];
     for home in homes {
-        let mut p = home;
-        for part in suffix {
-            p = p.join(part);
+        for layout in layouts {
+            let mut p = home.clone();
+            for part in *layout {
+                p = p.join(part);
+            }
+            out.push(p);
         }
-        out.push(p);
     }
     existing(out)
 }
 
-/// Claude Code 트랜스크립트 루트 (`.claude/projects` + XDG 대안)
+/// Claude Code 트랜스크립트 루트 (`.claude/projects`)
 pub fn claude_project_roots() -> Vec<PathBuf> {
     claude_project_roots_with(&[])
 }
 
 /// `extra` 는 추가로 볼 `.claude` 홈 디렉토리 목록 (그 아래 `projects` 를 본다)
 pub fn claude_project_roots_with(extra: &[PathBuf]) -> Vec<PathBuf> {
-    let mut roots = candidate_dirs(&[".claude", "projects"]);
-    if let Some(h) = home_dir() {
-        roots.push(h.join(".config/claude/projects"));
-    }
-    with_extra(roots, extra, &["projects"])
+    with_extra(candidate_dirs(CLAUDE_PROJECT_LAYOUTS), extra, &["projects"])
 }
 
 /// Claude Code 라이브 세션 레지스트리 (`.claude/sessions`)
@@ -203,43 +217,38 @@ pub fn claude_session_dirs() -> Vec<PathBuf> {
 
 /// `extra` 는 추가로 볼 `.claude` 홈 디렉토리 목록 (그 아래 `sessions` 를 본다)
 pub fn claude_session_dirs_with(extra: &[PathBuf]) -> Vec<PathBuf> {
-    with_extra(candidate_dirs(&[".claude", "sessions"]), extra, &["sessions"])
+    with_extra(candidate_dirs(CLAUDE_SESSION_LAYOUTS), extra, &["sessions"])
 }
 
-/// Codex CLI 홈. 기본은 `~/.codex` 이고, `CODEX_HOME` 은 그 루트를 **대체**한다.
+/// Codex CLI 홈 (`~/.codex`). 홈 자체가 루트이고 그 아래 `sessions`/`archived_sessions` 가 있다.
 ///
-/// 공식 문서(learn.chatgpt.com/docs/config-file/environment-variables)의 `CODEX_HOME` 항목:
-/// *"Sets the root for Codex state, including config, auth, logs, sessions, skills, ..."* —
-/// 기본값 `~/.codex` 를 옮기는 것이지 추가 탐색 경로가 아니다.
+/// **`CODEX_HOME` 은 보지 않는다.** 공식 문서상 기본값을 옮기는 환경변수가 맞지만, 읽는 순간
+/// 앱이 보는 범위가 **실행 방식에 좌우된다** — 터미널에서 띄우면 잡히고 트레이·자동시작으로
+/// 띄우면 안 잡혀서, 같은 머신인데 집계가 달라진다. 세 소스 중 Codex 만 그런 예외를 두는
+/// 것도 일관성을 해친다 (Claude·agy 는 표준 위치만 본다).
 ///
-/// 예전에는 둘을 합쳐서 봤는데, 같은 rollout 파일이 양쪽에 있으면 사용량이 두 번 집계됐다
-/// (실측: 이벤트 4건이 5건으로). 대체 의미로 바꾸면 그 경우가 아예 생기지 않는다.
+/// 재배치된 홈은 다른 두 소스와 **같은 방식**으로 찾는다:
+/// - `%APPDATA%`·`%LOCALAPPDATA%`·XDG 아래면 마커 스캔이 찾아낸다 (실측: orca 런타임 홈)
+/// - 그 밖(다른 드라이브 등)이면 "홈 추가…"로 직접 등록한다 → `extraCodexHomes`
 ///
-/// `CODEX_HOME` 이 설정됐는데 그 경로가 없으면 빈 목록이다 — 그게 이 설치본의 루트이고,
-/// `~/.codex` 로 되돌아가면 방금 없앤 중복 문제가 되살아난다.
+/// 재배치 홈과 `~/.codex` 가 같은 rollout 을 갖고 있어도 중복 집계되지 않는다 — 어댑터가
+/// 파일이 아니라 **이벤트 단위**로 dedup 한다 (`codex::tests::same_rollout_in_two_homes_counted_once`).
 pub fn codex_homes() -> Vec<PathBuf> {
     codex_homes_with(&[])
 }
 
 /// `extra` 는 추가로 볼 Codex 홈 디렉토리 목록 (그 아래 `sessions`/`archived_sessions`).
-/// 자동 탐지분과 합쳐도 어댑터의 이벤트 dedup 이 중복 집계를 막는다.
+/// WSL 경계를 넘는 `.codex` 들은 서로 다른 설치본이라 그대로 병합한다.
 pub fn codex_homes_with(extra: &[PathBuf]) -> Vec<PathBuf> {
-    with_extra(codex_homes_from(std::env::var_os("CODEX_HOME")), extra, &[])
-}
-
-fn codex_homes_from(env_home: Option<std::ffi::OsString>) -> Vec<PathBuf> {
-    match env_home {
-        Some(h) => existing(vec![PathBuf::from(h)]),
-        // 미설정이 일반적인 경우 — WSL 경계를 넘는 `.codex` 들은 서로 다른 설치본이라 그대로 병합한다
-        None => candidate_dirs(&[".codex"]),
-    }
+    with_extra(candidate_dirs(CODEX_HOME_LAYOUTS), extra, &[])
 }
 
 /// Antigravity CLI(`agy`) 홈 (`~/.gemini/antigravity-cli`).
 ///
 /// Gemini CLI 를 대체한 도구지만 `~/.gemini` 아래에 자기 폴더를 따로 쓴다.
 /// 홈 자체가 루트이고 그 아래 `conversations/<uuid>.db` 가 대화들이다.
-/// Codex 의 `CODEX_HOME` 같은 재배치 환경변수는 관측되지 않았다.
+/// 홈을 옮기는 환경변수는 관측되지 않았다 (Codex 의 `CODEX_HOME` 에 해당하는 것이 없다).
+/// 어차피 환경변수는 어느 소스에서도 읽지 않는다 — `codex_homes` 참고.
 pub fn antigravity_homes() -> Vec<PathBuf> {
     antigravity_homes_with(&[])
 }
@@ -247,11 +256,12 @@ pub fn antigravity_homes() -> Vec<PathBuf> {
 /// `extra` 는 추가로 볼 `antigravity-cli` 홈 디렉토리 목록.
 /// 합쳐서 같은 대화 DB 가 두 번 잡혀도 어댑터의 요청 id dedup 이 중복 집계를 막는다.
 pub fn antigravity_homes_with(extra: &[PathBuf]) -> Vec<PathBuf> {
-    with_extra(candidate_dirs(&[".gemini", "antigravity-cli"]), extra, &[])
+    with_extra(candidate_dirs(AGY_HOME_LAYOUTS), extra, &[])
 }
 
 /// OS 경계를 넘는 경로 여부 — pid 생존 확인이 불가능한 세션 디렉토리 판단용.
-/// WSL에서 본 Windows 마운트(`/mnt/...`)와 Windows에서 본 WSL 공유(`\\wsl...`)가 해당.
+/// Windows 에서 본 WSL 공유(`\\wsl...`)가 주 대상이고, `/mnt/...` 는 자동 탐지로는 더 이상
+/// 들어오지 않지만 설정에 직접 적을 수 있어 남겨 둔다 (판정이 경로 모양만 보므로 공짜다).
 pub fn is_windows_mount(p: &Path) -> bool {
     if p.starts_with("/mnt/") {
         return true;
@@ -263,23 +273,53 @@ pub fn is_windows_mount(p: &Path) -> bool {
 mod tests {
     use super::*;
 
+    /// Codex 만 환경변수를 보던 예외를 없앤 것에 대한 회귀 방지.
+    /// 환경변수를 읽으면 앱을 어떻게 띄웠느냐에 따라 집계 범위가 달라진다.
     #[test]
-    fn codex_home_replaces_default_root() {
+    fn codex_home_env_is_ignored() {
         let dir = tempfile::tempdir().unwrap();
-        let homes = codex_homes_from(Some(dir.path().as_os_str().to_owned()));
-        assert_eq!(homes, vec![dir.path().to_path_buf()]);
-
-        // 기본 `.codex` 후보가 섞여 들어오면 같은 rollout 을 두 번 세게 된다
-        let home_codex = home_dir().map(|h| h.join(".codex"));
-        if let Some(hc) = home_codex {
-            assert!(!homes.contains(&hc), "CODEX_HOME 은 대체이지 추가가 아니다");
-        }
+        std::env::set_var("CODEX_HOME", dir.path());
+        let homes = codex_homes();
+        std::env::remove_var("CODEX_HOME");
+        assert!(
+            !homes.contains(&dir.path().to_path_buf()),
+            "CODEX_HOME 은 탐색에 쓰이지 않는다 — 재배치 홈은 마커 스캔이나 설정으로 들어온다"
+        );
     }
 
+    /// 대안 배치는 **홈마다 전부** 시도해야 한다. 예전에 Claude 의 XDG 대안을 로컬 홈에만
+    /// 붙였다가 WSL 게스트가 빠진 적이 있다 (그 배치 자체는 지금 빠져 있다 —
+    /// `CLAUDE_PROJECT_LAYOUTS` 주석 참고). 배치 데이터와 무관하게 **조합 규칙**을 지킨다.
     #[test]
-    fn missing_codex_home_does_not_fall_back() {
+    fn every_home_gets_every_layout() {
+        const TWO: &[&[&str]] = &[&["a", "data"], &["b", "c", "data"]];
+        let one = tempfile::tempdir().unwrap();
+        let two = tempfile::tempdir().unwrap();
+        // 홈마다 서로 다른 배치를 쓰는 상황
+        std::fs::create_dir_all(one.path().join("a").join("data")).unwrap();
+        std::fs::create_dir_all(two.path().join("b").join("c").join("data")).unwrap();
+
+        let out = dirs_under(vec![one.path().to_path_buf(), two.path().to_path_buf()], TWO);
+        assert!(out.contains(&one.path().join("a").join("data")));
+        assert!(
+            out.contains(&two.path().join("b").join("c").join("data")),
+            "어떤 홈이든 모든 배치를 시도해야 한다"
+        );
+        assert_eq!(out.len(), 2, "존재하지 않는 조합은 걸러진다");
+    }
+
+    /// 재배치된 홈이 들어오는 유일한 자동 경로는 설정(`extraCodexHomes`)이다.
+    /// 세 소스가 모두 같은 규칙을 쓴다.
+    #[test]
+    fn extra_homes_are_added_for_every_source() {
         let dir = tempfile::tempdir().unwrap();
-        let gone = dir.path().join("nope");
-        assert!(codex_homes_from(Some(gone.into_os_string())).is_empty());
+        let extra = vec![dir.path().to_path_buf()];
+        assert!(codex_homes_with(&extra).contains(&dir.path().to_path_buf()));
+        assert!(antigravity_homes_with(&extra).contains(&dir.path().to_path_buf()));
+
+        // Claude 만 홈 아래 하위 디렉토리가 루트라 접미사가 붙는다
+        let proj = dir.path().join("projects");
+        std::fs::create_dir_all(&proj).unwrap();
+        assert!(claude_project_roots_with(&extra).contains(&proj));
     }
 }

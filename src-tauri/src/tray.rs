@@ -214,9 +214,14 @@ pub fn handle_action(app: &AppHandle, action: &str) {
             "quit" => app.exit(0),
             // 계정 토글 — id 의 나머지가 곧 Account::setting_key()
             a if a.starts_with("acct:") => toggle_account(app, &a["acct:".len()..]),
+            // 마커 스캔(수백 ms)에 WSL 재조회(최대 3초)까지 겹치므로 메뉴 핸들러를 막지
+            // 않는다 — 시작 시 발견을 별도 스레드로 돌리는 것과 같은 이유다.
             "acctrescan" => {
-                crate::monitor::rediscover(app);
-                refresh_menu(app);
+                let app = app.clone();
+                std::thread::spawn(move || {
+                    crate::monitor::rescan(&app);
+                    refresh_menu(&app);
+                });
             }
             a if a.starts_with("acctadd:") => pick_home(app, &a["acctadd:".len()..]),
             a if a.starts_with("acctdel:") => remove_home(app, &a["acctdel:".len()..]),

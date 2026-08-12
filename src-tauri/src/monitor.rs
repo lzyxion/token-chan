@@ -48,6 +48,14 @@ pub fn extra_homes(app: &AppHandle) -> usage_core::accounts::ExtraHomes {
     }
 }
 
+/// 사용자가 누른 "다시 검색" — 캐시된 WSL 조회 결과까지 버리고 처음부터 찾는다.
+/// 자동 재발견(홈 추가·제거)과 달리 사용자가 **상황을 바꾸고** 부르는 것이라,
+/// 앱을 켠 뒤 시작한 WSL 배포판도 이때 잡혀야 한다.
+pub fn rescan(app: &AppHandle) {
+    usage_core::roots::forget_wsl_guest_homes();
+    rediscover(app);
+}
+
 /// 계정을 다시 발견해 상태에 캐시한다. 마커 스캔이 수백 ms 걸리므로 자주 부르지 않는다.
 pub fn rediscover(app: &AppHandle) {
     let extra = extra_homes(app);
@@ -355,16 +363,39 @@ fn spawn_live_thread(app: AppHandle) {
         let mut prev = String::new();
         // 감시 파일의 직전 관측값 — 회차 사이에 들고 있어야 크기 변화를 알 수 있다
         let mut tracker = usage_core::live::WatchTracker::default();
+        // Codex 턴 추적 — 홈별 history.jsonl 오프셋과 세션별 진행 상태를 들고 있는다
+        let mut turns = usage_core::codex::TurnWatcher::default();
         loop {
             // 라이브 세션도 활성 계정의 설치본만 본다 (계정을 끄면 그쪽 세션은 무시)
-            let dirs = enabled_roots(&app).sessions;
+            let roots = enabled_roots(&app);
 
             let now = Utc::now();
-            let mut live = read_live_state(&dirs, now.timestamp_millis());
-            // Claude 외 소스는 레지스트리가 없어 감시 파일 mtime 으로 유도한다.
+            let mut live = read_live_state(&roots.sessions, now.timestamp_millis());
+
+            // Codex 는 턴 경계를 파일에서 **직접 읽는다**. 유도가 아니라 사실이라
+            // 상태 이름도 Claude 와 같은 `busy` 를 쓴다.
+            let poll = turns.poll(&roots.codex, now);
+            for id in &poll.running {
+                live.busy = true;
+                live.busy_count += 1;
+                live.sessions.push(usage_core::live::LiveSessionView {
+                    source: Source::Codex,
+                    name: id.chars().take(8).collect(),
+                    status: "busy".into(),
+                    cwd: String::new(),
+                });
+            }
+
+            // 레지스트리도 턴 이벤트도 없는 소스는 감시 파일 크기 변화로 유도한다.
             // 사용량 스캔(10초)이 아니라 여기(2초)서 stat 해야 작업 시작이 늦게 안 보인다.
             {
                 let watch = { app.state::<AppState>().watch.lock().unwrap().clone() };
+                // 턴 추적이 Codex 를 덮고 있으면 감시 목록에서 뺀다 — 그대로 두면 크기
+                // 변화 판정이 45초 꼬리를 되살려 방금 없앤 종료 지연이 돌아온다.
+                let watch: Vec<_> = watch
+                    .into_iter()
+                    .filter(|(s, _, _)| !(poll.covered && *s == Source::Codex))
+                    .collect();
                 usage_core::live::add_inferred(&mut live, &watch, now, &mut tracker);
             }
             let json = serde_json::to_string(&live).unwrap_or_default();

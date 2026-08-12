@@ -27,9 +27,10 @@ use crate::model::Source;
 /// 마커 스캔 깊이. 4면 `%APPDATA%\<도구>\<런타임홈>\home` 형태까지 닿는다.
 const MARKER_DEPTH: usize = 4;
 
-/// 스캔에서 건너뛸 디렉토리 — 캐시/의존성은 크기만 크고 홈이 있을 리 없다
+/// 스캔에서 건너뛸 디렉토리 — 캐시/의존성은 크기만 크고 홈이 있을 리 없다.
+/// `Caches` 는 macOS 표기 (`~/Library/Application Support/<앱>/Caches`).
 const SKIP_DIRS: &[&str] = &[
-    "node_modules", ".git", "Cache", "cache", "Code Cache", "GPUCache",
+    "node_modules", ".git", "Cache", "cache", "Caches", "Code Cache", "GPUCache",
     "Temp", "temp", "logs", "Crashpad", "Service Worker",
 ];
 
@@ -281,7 +282,7 @@ fn short(key: &str) -> String {
     key.chars().take(8).collect()
 }
 
-/// 표준 위치(홈·WSL·환경변수)와 사용자가 설정에 적은 경로에서 나오는 설치본
+/// 표준 위치(홈·WSL 게스트)와 사용자가 설정에 적은 경로에서 나오는 설치본
 fn standard_installs(extra: &ExtraHomes) -> Vec<Install> {
     let mut out = vec![];
     for root in crate::roots::claude_project_roots_with(&extra.claude) {
@@ -310,7 +311,12 @@ fn scan_bases() -> Vec<PathBuf> {
     if let Some(h) = crate::roots::home_dir() {
         bases.push(h.join(".local").join("share"));
         bases.push(h.join(".config"));
+        // macOS 앱이 데이터를 두는 표준 위치. 이게 빠져 있어서 macOS 에서는 재배치된 홈을
+        // 찾을 방법이 아예 없었다 — 환경변수를 안 보는 데다(roots::codex_homes) GUI 앱은
+        // 셸 환경변수를 상속하지도 않으므로, 마커 스캔이 유일한 자동 경로다.
+        bases.push(h.join("Library").join("Application Support"));
     }
+    // 없는 경로는 여기서 걸러지므로 OS 별로 나눌 필요가 없다
     bases.retain(|p| p.is_dir());
     bases
 }

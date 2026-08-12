@@ -1,9 +1,15 @@
 //! 라이브 세션 상태 — 캐릭터 애니메이션(작업 중/대기) 구동용.
 //!
 //! Claude 만 세션 레지스트리(`~/.claude/sessions/<pid>.json`)를 남겨 정확히 알 수 있다:
-//! - `status == "busy"` 이고 `updatedAt` 이 최근(기본 10분)이어야 busy 로 간주
-//! - 같은 OS 의 세션(pid 확인 가능)은 /proc/<pid> 생존 확인 (unix)
-//! - Windows 마운트(/mnt/...) 쪽 세션 파일은 pid 확인 불가 → 신선도만 사용
+//! - `status == "busy"` 이고 `updatedAt` 이 최근이어야 busy 로 간주
+//! - OS 경계를 넘은 세션(`\\wsl...`)은 시계가 다를 수 있어 신선도를 더 엄격하게 본다
+//!
+//! **프로세스 생존 확인은 하지 않는다.** `/proc/<pid>` 로 보던 코드가 있었는데 그건
+//! Linux 에서만 성립하고, 배포되는 번들은 msi/dmg 뿐이라 **실제 사용자 빌드에는 아예
+//! 컴파일되지 않는 코드**였다. 그런데도 [`FRESH_MS_LOCAL`] 의 근거로 인용되고 있어
+//! "죽은 세션은 걸러진다" 는 잘못된 인상을 줬다. 세 OS 를 전부 지원하는 방식으로
+//! 되살릴 수는 있으나(unix `kill(pid,0)`, Windows `OpenProcess`), 같은 필요가 있는
+//! Codex 쪽 크래시 판정과 **함께 하나의 공통 층으로** 만드는 편이 낫다.
 //!
 //! Codex·Antigravity 는 그런 레지스트리가 없어서 **트랜스크립트 파일이 방금 쓰였는지**로
 //! 유도한다([`add_inferred`]). 정확한 신호가 아니라 유도값이므로 상태 이름도
@@ -32,17 +38,21 @@ use serde::{Deserialize, Serialize};
 
 use crate::model::Source;
 
-/// Windows 마운트 세션(pid 확인 불가)의 updatedAt 신선도 한계 (ms)
+/// OS 경계를 넘은 세션(`\\wsl...`)의 updatedAt 신선도 한계 (ms).
+/// 시계가 어긋날 수 있어 같은 OS 세션보다 엄격하게 본다.
 pub const FRESH_MS: i64 = 10 * 60 * 1000;
 
 /// 같은 OS 세션의 updatedAt 허용 한계 (ms).
-/// updatedAt 은 상태 전환 시점에만 갱신되므로 긴 턴(>10분) 중에도 busy 를 유지하려면
-/// 느슨해야 한다 — 죽은 세션은 pid 생존 확인이 걸러낸다.
+///
+/// `updatedAt` 은 상태 전환 시점에만 갱신되므로, 긴 턴(>10분) 중에도 busy 를 유지하려면
+/// 느슨해야 한다. **그 대가로 비정상 종료한 세션이 이 시간만큼 작업 중으로 남아 보인다**
+/// — 지금은 프로세스 생존 확인이 없어서 이게 유일한 방어다 (모듈 주석 참고).
+/// 좁히면 긴 턴이 중간에 idle 로 튀므로, 생존 확인을 제대로 붙이기 전까지는 이 값이 맞다.
 pub const FRESH_MS_LOCAL: i64 = 24 * 60 * 60 * 1000;
 
+/// 파일에는 `pid` 도 있지만 읽지 않는다 — 생존 확인을 하지 않기 때문 (모듈 주석 참고).
 #[derive(Debug, Clone, Deserialize)]
 struct SessionFile {
-    pid: Option<u64>,
     #[serde(rename = "sessionId")]
     session_id: Option<String>,
     cwd: Option<String>,
@@ -154,8 +164,7 @@ pub fn read_live_state(dirs: &[PathBuf], now_ms: i64) -> LiveState {
             let Ok(s) = std::fs::read_to_string(&path) else { continue };
             let Ok(sf) = serde_json::from_str::<SessionFile>(&s) else { continue };
 
-            // pid 확인이 가능한 로컬 세션은 pid 생존이 1차 근거 → 신선도는 느슨하게.
-            // pid 확인이 불가능한 Windows 마운트 세션은 신선도가 유일한 근거 → 엄격하게.
+            // OS 경계를 넘은 세션은 시계도 다를 수 있어 더 엄격하게 본다
             let limit = if windows_mount { FRESH_MS } else { FRESH_MS_LOCAL };
             let fresh = sf
                 .updated_at
@@ -163,14 +172,6 @@ pub fn read_live_state(dirs: &[PathBuf], now_ms: i64) -> LiveState {
                 .unwrap_or(false);
             if !fresh {
                 continue;
-            }
-            // 같은 OS 세션이면 pid 생존 확인 (죽은 세션의 잔존 파일 무시)
-            if !windows_mount {
-                if let Some(pid) = sf.pid {
-                    if !pid_alive(pid) {
-                        continue;
-                    }
-                }
             }
 
             let status = sf.status.unwrap_or_else(|| "unknown".into());
@@ -192,17 +193,6 @@ pub fn read_live_state(dirs: &[PathBuf], now_ms: i64) -> LiveState {
     state
 }
 
-#[cfg(unix)]
-fn pid_alive(pid: u64) -> bool {
-    std::path::Path::new(&format!("/proc/{pid}")).exists()
-}
-
-#[cfg(not(unix))]
-fn pid_alive(_pid: u64) -> bool {
-    // Windows: pid 확인 생략, updatedAt 신선도에 의존
-    true
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -215,11 +205,11 @@ mod tests {
     }
 
     #[test]
-    fn busy_when_fresh_and_alive() {
+    fn busy_when_fresh() {
         let dir = tempfile::tempdir().unwrap();
         let now_ms = 1_000_000_000_000i64;
-        let my_pid = std::process::id() as u64; // 확실히 살아있는 pid
-        fs::write(dir.path().join("1.json"), session_json(my_pid, "busy", now_ms - 1000)).unwrap();
+        fs::write(dir.path().join("1.json"), session_json(std::process::id() as u64, "busy", now_ms - 1000))
+            .unwrap();
 
         let state = read_live_state(&[dir.path().to_path_buf()], now_ms);
         assert!(state.busy);
@@ -227,23 +217,31 @@ mod tests {
         assert_eq!(state.sessions.len(), 1);
     }
 
+    /// 신선도가 유일한 방어다 — 생존 확인이 없으므로 한계를 넘은 세션만 걸러진다.
     #[test]
-    fn stale_or_dead_sessions_ignored() {
+    fn stale_sessions_ignored() {
         let dir = tempfile::tempdir().unwrap();
         let now_ms = 1_000_000_000_000i64;
         let my_pid = std::process::id() as u64;
-        // 로컬 세션 한계(24h)보다 오래된 updatedAt → pid 가 살아있어도 무시
+        // 한계(24h)보다 오래된 updatedAt → 무시
         fs::write(dir.path().join("1.json"), session_json(my_pid, "busy", now_ms - FRESH_MS_LOCAL - 1)).unwrap();
-        // 죽은 pid (u32::MAX 근처는 존재할 수 없음) → 무시 (unix)
-        fs::write(dir.path().join("2.json"), session_json(4_294_967_000, "busy", now_ms - 1000)).unwrap();
 
-        let _state = read_live_state(&[dir.path().to_path_buf()], now_ms);
-        // pid 생존 확인은 unix 에서만 가능하다 (windows 는 신선도에만 의존)
-        #[cfg(unix)]
-        {
-            assert!(!_state.busy);
-            assert!(_state.sessions.is_empty());
-        }
+        let state = read_live_state(&[dir.path().to_path_buf()], now_ms);
+        assert!(!state.busy);
+        assert!(state.sessions.is_empty());
+    }
+
+    /// 한계 안이면 프로세스가 죽었어도 살아 있는 것으로 본다 — 지금의 한계를 못박아 둔다.
+    /// 생존 확인을 붙이면 이 테스트가 깨져야 하고, 그때 함께 고치면 된다.
+    #[test]
+    fn dead_process_still_looks_busy_within_the_window() {
+        let dir = tempfile::tempdir().unwrap();
+        let now_ms = 1_000_000_000_000i64;
+        // 존재할 수 없는 pid (u32::MAX 근처)인데도 신선하면 busy 로 잡힌다
+        fs::write(dir.path().join("1.json"), session_json(4_294_967_000, "busy", now_ms - 1000)).unwrap();
+
+        let state = read_live_state(&[dir.path().to_path_buf()], now_ms);
+        assert!(state.busy, "생존 확인이 없으므로 죽은 세션도 신선하면 busy 다");
     }
 
     #[test]
