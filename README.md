@@ -21,8 +21,8 @@ src                 # React: Pet(캐릭터) + Speech(대사 말풍선) + UsagePa
 
 | 소스 | 방식 | 상태 |
 |---|---|---|
-| Claude Code | `~/.claude/projects/**/*.jsonl` 재귀 파싱, `message.id` dedup, `<synthetic>` 필터. WSL이면 `/mnt/c/Users/*/.claude`도 병합. 라이브 상태는 `~/.claude/sessions/*.json` | ✅ 실데이터 검증 |
-| Codex CLI | `~/.codex/{sessions,archived_sessions}/**/*.jsonl` 의 `token_count` 이벤트 (누적/델타) + 같은 이벤트의 `rate_limits`(공식 한도). `CODEX_HOME`이 설정돼 있으면 `~/.codex` **대신** 그 경로 | ✅ 실데이터 검증 |
+| Claude Code | `~/.claude/projects/**/*.jsonl` 재귀 파싱, `message.id` dedup, `<synthetic>` 필터. 라이브 상태는 `~/.claude/sessions/*.json` | ✅ 실데이터 검증 |
+| Codex CLI | `~/.codex/{sessions,archived_sessions}/**/*.jsonl` 의 `token_count` 이벤트 (누적/델타) + 같은 이벤트의 `rate_limits`(공식 한도) | ✅ 실데이터 검증 |
 | Antigravity CLI (`agy`) | `~/.gemini/antigravity-cli/conversations/<uuid>.db` — 대화 하나가 **SQLite 파일 하나**. `gen_metadata` 테이블의 protobuf blob 에서 요청별 토큰·컨텍스트를 읽고, 요청 id 로 dedup | ✅ 실데이터 검증 |
 
 > **Gemini CLI → agy**: Gemini CLI 가 Antigravity CLI 로 전환되면서 어댑터도 교체했습니다.
@@ -36,15 +36,24 @@ src                 # React: Pet(캐릭터) + Speech(대사 말풍선) + UsagePa
 
 | | 공식 한도 | 작업 중 감지 |
 |---|---|---|
-| Claude Code | ✅ `claude -p "/usage"` 출력 파싱 (5분 주기, 프로세스 1회 실행) | ✅ `~/.claude/sessions/*.json` + pid 생존 확인 |
-| Codex CLI | ✅ **rollout 의 `payload.rate_limits`** — 이미 읽는 파일에 서버가 준 값이 들어 있어 프로세스가 필요 없고, 리셋도 문자열이 아니라 유닉스 타임스탬프로 정확히 옵니다 | ⚠️ rollout mtime 신선도로 유도 |
-| Antigravity CLI | ❌ `quota_manager` 가 서버에서 받아 **메모리에만** 둡니다 (로그에 호출 기록만 있고 값이 없음) | ⚠️ DB·WAL mtime 신선도로 유도 |
+| Claude Code | ✅ `claude -p "/usage"` 출력 파싱 (5분 주기, 프로세스 1회 실행) | ✅ `~/.claude/sessions/*.json` 의 `status` 직독 |
+| Codex CLI | ✅ **rollout 의 `payload.rate_limits`** — 이미 읽는 파일에 서버가 준 값이 들어 있어 프로세스가 필요 없고, 리셋도 문자열이 아니라 유닉스 타임스탬프로 정확히 옵니다 | ✅ **턴 경계 이벤트 직독** (아래) |
+| Antigravity CLI | ❌ `quota_manager` 가 서버에서 받아 **메모리에만** 둡니다 (로그에 호출 기록만 있고 값이 없음) | ⚠️ DB·WAL 크기 변화로 유도 |
 
-Codex 의 창은 이름 없이 분으로만 옵니다 — 실측 free 플랜은 `window_minutes: 43200`(30일) 하나뿐이고 `secondary`가 null입니다. 유료 플랜은 5시간 + 주간 두 창이 오는 구조로 보여서, **창이 짧은 것부터** 정렬해 첫 미터가 늘 "지금 당장 걸리는 한도"가 되게 했습니다.
+Codex 의 창은 이름 없이 분으로만 옵니다(`limit_name`은 null). **창 길이는 플랜에 따라 바뀝니다** — 같은 계정에서 실측한 값입니다:
 
-작업 중 유도는 감시 파일이 45초 안에 움직였으면 작업 중으로 봅니다. 두 CLI 모두 응답을 스트리밍하며 파일에 계속 덧쓰기 때문입니다. 정확한 신호가 아니라서 상태 이름도 `busy`가 아니라 `active`로 구분해 둡니다.
+| 플랜 | `window_minutes` | `secondary` |
+|---|---|---|
+| free | 43,200 (30일) | null |
+| plus | 10,080 (7일) | null |
 
-**"움직였다"를 mtime 으로만 보면 Windows 에서 통째로 실패합니다.** NTFS 는 파일 핸들이 열려 있는 동안 last-write 타임스탬프 갱신을 미루고 핸들이 닫힐 때 반영합니다. Codex 는 세션 내내 rollout 핸들을 열어 둔 채 append 하므로 **작업 중에는 mtime 이 아예 안 움직이고 세션이 끝나야 움직입니다** — 신호가 정확히 반대로 뒤집힙니다. 실측(Windows 11)에서 30초 동안 71KB 가 쓰였는데 mtime 은 1초도 움직이지 않았습니다:
+**둘 다 창이 하나뿐입니다.** 두 창이 오는 플랜이 있는지는 아직 관측하지 못했습니다. 그래도 오면 대비해 **창이 짧은 것부터** 정렬해, 첫 미터가 늘 "지금 당장 걸리는 한도"가 되게 했습니다.
+
+**Codex 는 턴 경계가 파일에 적혀 있어 추측하지 않습니다.** `~/.codex/history.jsonl` 은 고정 경로이고 프롬프트 제출 때 `{session_id, ts, text}` 한 줄이 붙습니다. 그 `session_id` 가 rollout 파일명의 uuid 와 같아서 디렉토리를 훑지 않고 해당 rollout 을 특정할 수 있고, 그 파일 꼬리에 `task_started` / `task_complete` / `turn_aborted` 가 들어 있습니다 (실측 9파일 38턴: 시작 38 = 완료 33 + 중단 5, 하나도 안 어긋남). 그래서 **응답이 끝나면 즉시** 풀리고, 새 세션도 기다림 없이 잡히며, 동시 세션이 각각 추적됩니다. 이력 저장을 꺼 두면 아래 크기 변화 방식으로 폴백합니다.
+
+**agy 는 그런 진입점이 없어** 감시 파일이 45초 안에 움직였으면 작업 중으로 봅니다. 정확한 신호가 아니라서 상태 이름도 `busy`가 아니라 `active`로 구분해 둡니다.
+
+**그 "움직였다"를 mtime 으로만 보면 Windows 에서 통째로 실패합니다.** NTFS 는 파일 핸들이 열려 있는 동안 last-write 타임스탬프 갱신을 미루고 핸들이 닫힐 때 반영합니다. 두 CLI 모두 세션 내내 핸들을 열어 둔 채 덧쓰므로 **작업 중에는 mtime 이 아예 안 움직이고 세션이 끝나야 움직입니다** — 신호가 정확히 반대로 뒤집힙니다. 아래는 Codex 를 턴 이벤트로 옮기기 전에 잰 값이고, 지금은 agy 와 Codex 폴백 경로에 그대로 적용됩니다. 실측(Windows 11)에서 30초 동안 71KB 가 쓰였는데 mtime 은 1초도 움직이지 않았습니다:
 
 ```
 10:14:57  mtime=09:55:03  size=254494
@@ -204,17 +213,24 @@ pnpm tauri build           # 패키징 (msi/dmg는 GitHub Actions 매트릭스 �
 
 참고로 `~/.gemini/oauth_creds.json`과 `google_account_id`는 **AGY 것이 아닙니다** — 구 Gemini CLI가 남긴 것이고(mtime 2025-07-03, AGY 실행에 안 건드려짐), 그 계정 id는 AGY DB 어디에도 없습니다.
 
-설치본 발견은 표준 위치(홈·WSL·`CODEX_HOME`·직접 추가)에 더해 **마커 파일 스캔**을 씁니다. `%APPDATA%`·`%LOCALAPPDATA%` 등을 깊이 4로 훑으며 `auth.json`+`sessions/`(Codex), `.claude/projects`(Claude), `conversations/`+`installation_id`(agy)를 찾습니다 — 실측 0.8초, 시작 시 1회 + "다시 검색" 할 때만 돕니다.
+설치본 발견은 표준 위치(홈·WSL·직접 추가)에 더해 **마커 파일 스캔**을 씁니다. `%APPDATA%`·`%LOCALAPPDATA%` 등을 깊이 4로 훑으며 `auth.json`+`sessions/`(Codex), `.claude/projects`(Claude), `conversations/`+`installation_id`(agy)를 찾습니다 — 실측 0.8초, 시작 시 1회 + "다시 검색" 할 때만 돕니다.
 
 **기본 포함 규칙**: 표준 위치에서 발견된 계정은 켜고, 마커 스캔으로만 나온 **처음 보는 계정은 꺼둡니다**. 오래된 백업이나 남의 계정이 조용히 합산되는 게 가장 나쁜 실패 모드라서입니다. 반면 이미 켜진 계정의 새 설치본은 그 계정에 합류하므로 자동으로 포함됩니다.
 
-### 스캔 경로가 환경에 좌우되는 문제
+### 재배치된 홈 — 환경변수는 보지 않습니다
 
-자동 탐지는 **앱 프로세스의 환경**을 봅니다. 트레이나 자동시작으로 뜬 앱은 터미널의 `CODEX_HOME` 같은 변수를 물려받지 못해서, 그 경로에 세션이 있어도 존재 자체를 모릅니다. 같은 머신인데 실행 방식에 따라 집계 범위가 달라지는 겁니다.
+CLI 를 격리 실행하는 도구가 홈을 자기 폴더로 돌려놓는 경우가 있습니다 (Codex 는 `CODEX_HOME` 환경변수로). **그 환경변수는 읽지 않습니다.** 읽으면 앱이 보는 범위가 **실행 방식에 좌우되기** 때문입니다 — 터미널에서 띄우면 잡히고 트레이·자동시작으로 띄우면 안 잡혀서, 같은 머신인데 집계가 달라집니다. 세 소스 중 Codex 만 예외를 두는 것도 일관성을 해칩니다.
 
-그래서 펫 우클릭(또는 트레이) → **연결된 계정**의 "홈 추가…"로 빠진 홈을 직접 추가할 수 있습니다 (`extraClaudeHomes` · `extraCodexHomes` · `extraAntigravityHomes`에 저장). 설정에 적어 두면 실행 방식과 무관하게 항상 같은 범위를 봅니다. 추가한 경로는 같은 메뉴의 **추가한 경로 제거**에서 지웁니다.
+대신 **세 소스 모두 같은 방법**으로 재배치된 홈을 찾습니다:
 
-**합쳐도 중복 집계되지 않습니다.** 세 어댑터 모두 파일이 아니라 이벤트 단위로 dedup 합니다 — Claude 는 `message.id`, Codex 는 `세션 id + 시각 + 사용량`, agy 는 `gen_metadata` 의 요청 id(실측 19건 전부 고유). 실제로 같은 rollout 이 `~/.codex` 와 `CODEX_HOME` 양쪽에 있던 상황에서 검증했습니다:
+| | 방법 |
+|---|---|
+| `%APPDATA%`·`%LOCALAPPDATA%`·XDG 아래 | **마커 스캔**이 자동으로 찾습니다 (실측: 어떤 래퍼의 Codex 런타임 홈) |
+| 그 밖 (다른 드라이브 등) | **"홈 추가…"로 직접 등록** |
+
+즉 홈을 옮겼는데 마커 스캔이 못 닿는 곳이면 한 번 등록해 두면 됩니다. 펫 우클릭(또는 트레이) → **연결된 계정**의 "홈 추가…"로 추가합니다 (`extraClaudeHomes` · `extraCodexHomes` · `extraAntigravityHomes`에 저장). 설정에 적어 두면 실행 방식과 무관하게 항상 같은 범위를 봅니다. 추가한 경로는 같은 메뉴의 **추가한 경로 제거**에서 지웁니다.
+
+**합쳐도 중복 집계되지 않습니다.** 세 어댑터 모두 파일이 아니라 이벤트 단위로 dedup 합니다 — Claude 는 `message.id`, Codex 는 `세션 id + 시각 + 사용량`, agy 는 `gen_metadata` 의 요청 id(실측 19건 전부 고유). 실제로 같은 rollout 이 `~/.codex` 와 재배치된 홈 양쪽에 있던 상황에서 검증했습니다:
 
 | | 스캔 루트 | 이벤트 |
 |---|---|---|

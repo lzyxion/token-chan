@@ -168,7 +168,7 @@ export interface AppSettings {
   speechLines: Record<string, string[]>;
   /** 추가로 스캔할 Claude 홈(`.claude` 디렉토리) — 자동 탐지가 환경에 좌우되는 걸 보완 */
   extraClaudeHomes: string[];
-  /** 추가로 스캔할 Codex 홈(`CODEX_HOME` 에 해당) */
+  /** 추가로 스캔할 Codex 홈 (환경변수 `CODEX_HOME` 은 보지 않는다 — 재배치 홈은 여기로) */
   extraCodexHomes: string[];
   /** 추가로 스캔할 agy 홈(`antigravity-cli` 디렉토리) */
   extraAntigravityHomes: string[];
