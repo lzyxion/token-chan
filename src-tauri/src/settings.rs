@@ -1,6 +1,6 @@
 //! 앱 설정 (JSON 파일 영속화). 스캔 상태는 저장하지 않는다 — 설정/창 위치만.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
@@ -195,28 +195,131 @@ pub fn config_path() -> Option<PathBuf> {
 
 pub fn load() -> Settings {
     let Some(path) = config_path() else { return Settings::default() };
-    std::fs::read_to_string(path)
-        .ok()
-        .and_then(|s| serde_json::from_str(&s).ok())
-        .unwrap_or_default()
+    load_from(&path).unwrap_or_default()
 }
 
 pub fn save(settings: &Settings) {
     let Some(path) = config_path() else { return };
+    let _ = save_to(&path, settings);
+}
+
+/// 못 읽거나 깨졌으면 `None`. **깨진 파일은 `.bad` 로 옮겨 둔다** —
+/// 그대로 두면 다음 저장이 덮어써서 무엇이 있었는지 영영 알 수 없다.
+fn load_from(path: &Path) -> Option<Settings> {
+    let text = std::fs::read_to_string(path).ok()?;
+    match serde_json::from_str(&text) {
+        Ok(s) => Some(s),
+        Err(_) => {
+            let _ = std::fs::rename(path, path.with_extension("json.bad"));
+            None
+        }
+    }
+}
+
+/// 설정을 **원자적으로** 저장한다 — 임시 파일에 다 쓰고 `rename` 으로 갈아끼운다.
+///
+/// `fs::write` 로 직접 쓰면 안 된다. 그건 대상 파일을 **먼저 비우고** 쓰기 때문에, 그 사이에
+/// 앱이 종료되면 잘린 JSON 이 남는다. 그러면 [`load_from`] 이 파싱에 실패하고 앱은 조용히
+/// 기본값으로 뜬다 — 펫 위치·캐릭터 규칙·계정 토글·추가 홈이 통째로 사라진다.
+/// 저장 지점이 11군데라 마주칠 확률도 낮지 않다.
+///
+/// `rename` 은 같은 디렉토리 안이라 원자적이고, Windows 에서도 기존 파일을 대체한다.
+/// 내용이 디스크에 닿은 뒤에 갈아끼우도록 `sync_all` 을 먼저 부른다.
+fn save_to(path: &Path, settings: &Settings) -> std::io::Result<()> {
+    use std::io::Write;
+
     if let Some(parent) = path.parent() {
-        let _ = std::fs::create_dir_all(parent);
+        std::fs::create_dir_all(parent)?;
     }
-    if let Ok(json) = serde_json::to_string_pretty(settings) {
-        let _ = std::fs::write(path, json);
+    let json = serde_json::to_string_pretty(settings)
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+
+    // 고정 이름이라 중간에 죽어 남더라도 다음 저장이 덮어쓴다.
+    // 저장은 항상 설정 뮤텍스를 쥔 채 일어나므로 서로 겹치지 않는다.
+    let tmp = path.with_extension("json.tmp");
+    {
+        let mut f = std::fs::File::create(&tmp)?;
+        f.write_all(json.as_bytes())?;
+        f.sync_all()?;
     }
+    if let Err(e) = std::fs::rename(&tmp, path) {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(e);
+    }
+    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
     /// "발밑 미니 라벨" 시절 키가 게이지 라벨 설정으로 넘어와야 한다
     #[test]
     fn old_show_mini_label_key_migrates() {
         let s: super::Settings = serde_json::from_str(r#"{"showMiniLabel": true}"#).unwrap();
         assert!(s.gauge_labels);
+    }
+
+    fn sample() -> Settings {
+        Settings { retention_days: 42, ..Default::default() }
+    }
+
+    #[test]
+    fn saves_and_loads_round_trip() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("nested").join("settings.json");
+        save_to(&path, &sample()).unwrap();
+
+        assert_eq!(load_from(&path).unwrap().retention_days, 42, "없는 상위 폴더도 만든다");
+    }
+
+    /// 원자적 저장의 핵심 — 갈아끼운 뒤에는 임시 파일이 남지 않는다
+    #[test]
+    fn no_temp_file_is_left_behind() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        save_to(&path, &sample()).unwrap();
+
+        let left: Vec<_> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(left, vec!["settings.json".to_string()]);
+    }
+
+    /// 죽은 저장이 남긴 임시 파일이 있어도 다음 저장이 정상 동작해야 한다
+    #[test]
+    fn stale_temp_file_does_not_block_saving() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        std::fs::write(path.with_extension("json.tmp"), "{ 잘린").unwrap();
+
+        save_to(&path, &sample()).unwrap();
+        assert_eq!(load_from(&path).unwrap().retention_days, 42);
+    }
+
+    /// 기존 파일이 있어도 통째로 대체된다 (Windows 의 rename 도 대체를 허용한다)
+    #[test]
+    fn replaces_an_existing_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        save_to(&path, &Settings { retention_days: 7, ..Default::default() }).unwrap();
+        save_to(&path, &sample()).unwrap();
+
+        assert_eq!(load_from(&path).unwrap().retention_days, 42);
+    }
+
+    /// 깨진 파일은 기본값으로 떨어지되 **덮어쓰지 않고** `.bad` 로 남긴다.
+    /// 그대로 두면 다음 저장이 지워 버려 원인을 못 찾는다.
+    #[test]
+    fn corrupt_file_is_kept_as_bad() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        std::fs::write(&path, "{ 저장 중 잘린 JSON").unwrap();
+
+        assert!(load_from(&path).is_none());
+        assert!(!path.exists(), "깨진 파일은 자리를 비워 준다");
+        assert!(path.with_extension("json.bad").exists(), "내용은 .bad 로 보존된다");
     }
 }
