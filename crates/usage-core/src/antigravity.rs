@@ -222,7 +222,11 @@ fn first_step_meta(conn: &Connection) -> (String, String) {
     let Some(blob) = blob else { return (String::new(), String::new()) };
     let step = Message::new(&blob);
     let Some(input) = step.msg(19) else { return (String::new(), String::new()) };
-    let title = input.str(2).unwrap_or_default().trim().to_string();
+    // 세 소스 공통 규칙 — 첫 메시지에 줄바꿈·코드블록이 섞여 오고, 도구가 주입한
+    // 래퍼가 들어올 수 있다. agy 에서 래퍼를 관측한 적은 없지만 규칙을 갈라 둘 이유가 없다.
+    let raw = input.str(2).unwrap_or_default();
+    let title =
+        if crate::session::is_human_prompt(raw) { crate::session::first_line(raw) } else { String::new() };
     let workspace = input
         .msg(12)
         .and_then(|m| m.str(12))

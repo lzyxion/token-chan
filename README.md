@@ -149,23 +149,27 @@ agy 는 셋 중 가장 친절합니다 — 총계뿐 아니라 **구성 내역**
 **3. 최근 세션** — 어느 프로젝트에서 얼마나 태웠는지의 로그. 벤더 페이지는 벤더 단위라 프로젝트를 모르고 통계 페이지는 날짜 단위라 무엇을 했는지를 몰라서, 이 목록만 그 질문에 답합니다.
 
 ```
-✳ src-tauri                        2분 전
+✳ 디렉터리명 변경하고 다시 실행하는데 에러   2분 전
   opus-5 · main                     284M
-◍ token-chan                      1시간 전
-  gpt-5.6-terra                     802K
+◍ codex 업데이트 해주세요.           1시간 전
+  gpt-5.6-terra · main               802K
 ◮ AGY의 사용량 정책은??              2시간 전
   gem-3.6-flash                      75K
 ```
 
-세 CLI 모두 작업 디렉토리를 **정확히** 남겨서 경로를 되짚어 추측할 필요가 없습니다:
+**제목은 셋 다 첫 사용자 메시지**입니다 — 폴더명보다 "무엇을 했는지"를 알려줍니다. 없으면 폴더명으로 떨어집니다. 세 CLI 모두 작업 디렉토리도 **정확히** 남겨서 경로를 되짚어 추측할 필요가 없습니다:
 
-| | 세션 id | 작업 위치 | 제목 |
-|---|---|---|---|
-| Claude | 트랜스크립트의 `sessionId` | 같은 행의 `cwd` (+ `gitBranch`) | 없음 → 폴더명 |
-| Codex | `session_meta.payload.id` | `session_meta.payload.cwd` | 없음 → 폴더명 |
-| AGY | 대화 uuid | 첫 스텝의 `19.12.12` | **첫 스텝의 `19.2`** = 첫 사용자 메시지 |
+| | 세션 id | 작업 위치 | 브랜치 | 제목 |
+|---|---|---|---|---|
+| Claude | 트랜스크립트의 `sessionId` | 같은 행의 `cwd` | `gitBranch` | 첫 `type:"user"` 행 (아래 필터) |
+| Codex | `session_meta.payload.id` | `session_meta.payload.cwd` | `session_meta.payload.git.branch` | 첫 `event_msg/user_message` |
+| AGY | 대화 uuid | 첫 스텝의 `19.12.12` | 없음 | 첫 스텝의 `19.2` |
 
-AGY 만 사람이 읽을 제목이 나옵니다. `conversation_summaries.db` 의 `preview` 도 같은 값이지만 실측에서 대화 5건 중 1건만 채워져 있어(요약 DB 갱신이 늦음) **대화 DB 의 첫 스텝**에서 직접 뽑습니다 — 이쪽은 5건 전부에 있습니다.
+AGY 는 `conversation_summaries.db` 의 `preview` 에도 같은 값이 있지만 실측에서 대화 5건 중 1건만 채워져 있어(요약 DB 갱신이 늦음) **대화 DB 의 첫 스텝**에서 직접 뽑습니다 — 이쪽은 5건 전부에 있습니다. Codex 도 `state_5.sqlite` 의 `threads.title` 에 같은 값이 있지만, 그 DB 는 파일명에 스키마 버전이 박혀 있어(`state_5` → 언젠가 `state_6`) 이미 읽는 rollout 에서 뽑습니다.
+
+**Claude 만 걸러 낼 것이 있습니다.** `type:"user"` 행에 사람이 친 것 말고도 슬래시 명령(`<command-name>`)·그 출력(`<local-command-stdout>`)·시스템 안내(`isMeta`)·`[Request interrupted…]` 가 섞여 들어옵니다. 그대로 쓰면 제목이 `<command-name>/model</command-name>` 이 되므로 태그로 시작하는 것과 `isMeta` 를 건너뛰고 처음 나오는 사람 메시지를 씁니다. 완벽하진 않습니다 — 다른 도구가 주입한 "이어서 작업하세요" 류는 형식상 사람 메시지라 구분되지 않습니다.
+
+제목은 **첫 줄만** 쓰고 80자에서 자릅니다. 붙여넣은 코드블록·JSON 이 그대로 들어오는 게 실측된 사실이라, 안 자르면 목록 한 줄이 무너지고 덩어리가 통째로 요약 payload 에 실립니다.
 
 ## 개발
 
