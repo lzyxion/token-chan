@@ -8,6 +8,10 @@ docs/
 # 캐릭터 이미지 (개인 에셋 — 실제 위치는 %APPDATA%지만 안전장치)
 characters/
 
+# 모바일 아이콘 (`tauri icon` 이 항상 만들지만 데스크톱 전용이라 쓰지 않음 — 필요해지면 재생성)
+src-tauri/icons/android/
+src-tauri/icons/ios/
+
 # 로컬 디버그 잔여물
 *.log
 stderr.txt

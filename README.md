@@ -133,7 +133,7 @@ agy 는 셋 중 가장 친절합니다 — 총계뿐 아니라 **구성 내역**
 ```
 ✳ src-tauri                        2분 전
   opus-5 · main                     284M
-◍ token-pet                       1시간 전
+◍ token-chan                      1시간 전
   gpt-5.6-terra                     802K
 ◮ AGY의 사용량 정책은??              2시간 전
   gem-3.6-flash                      75K
