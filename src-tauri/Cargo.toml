@@ -1,6 +1,6 @@
 [package]
 name = "token-chan"
-version = "0.1.0"
+version = "0.2.0"
 description = "토큰쨩 — AI CLI 토큰 사용량 데스크톱 펫"
 authors = ["lzyxion"]
 edition = "2021"

@@ -89,7 +89,7 @@ mod tests {
 
     #[test]
     fn dir_label_handles_both_separators() {
-        assert_eq!(dir_label(r"C:\Users\u\projects\token-pet"), "token-pet");
+        assert_eq!(dir_label(r"C:\Users\u\projects\token-chan"), "token-chan");
         assert_eq!(dir_label("/home/u/projects/api"), "api");
         assert_eq!(dir_label("/home/u/projects/api/"), "api");
         assert_eq!(dir_label("solo"), "solo");
