@@ -31,7 +31,7 @@ use crate::context::{ContextState, RawContext};
 use crate::model::{ScanOutcome, Source, SourceStatus, UsageEvent};
 use crate::plan::{window_label, PlanMeter, PlanUsage};
 use crate::pricing::PriceTable;
-use crate::session::{dir_label, SessionRow};
+use crate::session::{dir_label, first_line, is_human_prompt, SessionRow};
 
 #[derive(Default, Clone, Copy, PartialEq)]
 struct Counters {
@@ -490,6 +490,13 @@ fn parse_rollout(path: &Path) -> Rollout {
     let mut limits: Option<(DateTime<Utc>, PlanUsage)> = None;
     // 작업 위치는 session_meta 에 있다 — 지금까지 읽고 버리던 값이다
     let mut cwd = String::new();
+    // git 브랜치도 session_meta 에 있다 (`git.branch`). Claude 와 같은 값을 보여줄 수 있다.
+    let mut branch = String::new();
+    // 제목은 **첫 사용자 메시지**다. Codex 가 `state_5.sqlite` 의 `threads.title` 에도
+    // 같은 값을 넣어 두지만(실측 일치), 그 DB 는 파일명에 스키마 버전이 박혀 있고
+    // (`state_5` → 언젠가 `state_6`) 마이그레이션을 돌린다. 같은 값을 이미 읽는 파일에서
+    // 얻을 수 있으니 새 스키마 의존을 만들지 않는다.
+    let mut title = String::new();
     let (mut last_at, mut tokens) = (None, 0u64);
     // 세션 id 는 dedup 키의 뿌리다. session_meta 가 1행이라 token_count 보다 항상 먼저 나오지만,
     // 없더라도 파일명에 uuid 가 들어 있어 같은 rollout 의 복사본끼리는 같은 값이 된다.
@@ -527,6 +534,26 @@ fn parse_rollout(path: &Path) -> Rollout {
             }
             if let Some(c) = payload.get("cwd").and_then(Value::as_str).filter(|c| !c.is_empty()) {
                 cwd = c.to_string();
+            }
+            if let Some(b) = payload
+                .get("git")
+                .and_then(|g| g.get("branch"))
+                .and_then(Value::as_str)
+                .filter(|b| !b.is_empty())
+            {
+                branch = b.to_string();
+            }
+            continue;
+        }
+
+        // 제목 = 첫 **사람** 메시지. 뒤엣것은 이어지는 대화라 제목이 아니다.
+        // 다른 도구가 Claude 대화를 그대로 입력으로 넣은 세션이 실측돼서(`Codex Desktop`
+        // originator) 여기에도 `<command-name>…` 같은 래퍼가 들어온다 — 걸러야 한다.
+        if p_ty == "user_message" && title.is_empty() {
+            if let Some(m) =
+                payload.get("message").and_then(Value::as_str).filter(|m| is_human_prompt(m))
+            {
+                title = first_line(m);
             }
             continue;
         }
@@ -642,12 +669,17 @@ fn parse_rollout(path: &Path) -> Rollout {
     ctx.session = session;
     let row = last_at.map(|at| SessionRow {
         source: Source::Codex,
+        // 제목이 있으면 그걸 쓴다 — 폴더명보다 "무엇을 했는지" 를 알려준다 (agy 와 같은 규칙).
+        // 첫 사용자 메시지가 없거나(도구로만 돈 세션) 비어 있으면 폴더명으로 떨어진다.
+        label: match (title.is_empty(), cwd.is_empty()) {
+            (false, _) => title,
+            (true, false) => dir_label(&cwd),
+            (true, true) => ctx.session.chars().take(8).collect(),
+        },
         id: ctx.session.clone(),
-        label: if cwd.is_empty() { ctx.session.chars().take(8).collect() } else { dir_label(&cwd) },
         cwd,
         model: model.unwrap_or_default(),
-        // Codex 는 브랜치를 안 남긴다
-        branch: String::new(),
+        branch,
         at,
         tokens,
     });
@@ -999,6 +1031,72 @@ mod tests {
         assert_eq!(p.meters[1].label, "주간");
         assert_eq!(p.meters[1].used_pct, 12, "12.4 → 반올림 12");
         assert_eq!(p.session_pct(), Some(61), "가장 짧은 창이 세션 게이지");
+    }
+
+    /// 세션 목록 라벨은 폴더명이 아니라 **첫 사용자 메시지**여야 한다 (agy 와 같은 규칙).
+    /// 브랜치도 `session_meta.git.branch` 에 있다 — "Codex 는 브랜치를 안 남긴다" 는
+    /// 예전 주석은 틀렸다.
+    #[test]
+    fn session_row_uses_first_message_and_git_branch() {
+        let dir = tempfile::tempdir().unwrap();
+        let day = dir.path().join("sessions/2026/08/12");
+        fs::create_dir_all(&day).unwrap();
+        let lines = vec![
+            r#"{"timestamp":"2026-08-12T01:00:00.000Z","type":"session_meta","payload":{"id":"019ff4c7","cwd":"C:\\Users\\u\\projects\\token-chan","git":{"branch":"main","commit_hash":"d6728af"}}}"#,
+            // 실측 그대로 — 첫 줄 뒤에 붙여넣은 JSON 이 이어진다
+            r#"{"timestamp":"2026-08-12T01:00:01.000Z","type":"event_msg","payload":{"type":"user_message","message":"상태 정보를 가져오는데\n{\n  \"a\": 1\n}"}}"#,
+            r#"{"timestamp":"2026-08-12T01:00:02.000Z","type":"event_msg","payload":{"type":"user_message","message":"두 번째 메시지는 제목이 아니다"}}"#,
+            r#"{"timestamp":"2026-08-12T01:00:03.000Z","type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":10,"output_tokens":1,"total_tokens":11}}}}"#,
+        ];
+        fs::write(day.join("rollout-2026-08-12T01-00-00-019ff4c7.jsonl"), lines.join("\n")).unwrap();
+
+        let mut adapter = CodexAdapter::new(vec![dir.path().to_path_buf()]);
+        adapter.scan(DateTime::UNIX_EPOCH.into());
+        let rows = adapter.sessions();
+
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].label, "상태 정보를 가져오는데", "첫 줄만, 첫 메시지만");
+        assert_eq!(rows[0].branch, "main");
+    }
+
+    /// 다른 도구가 Claude 대화를 그대로 입력으로 넣은 세션이 실측됐다
+    /// (`originator: "Codex Desktop"`, 50건). 그 첫 메시지는 Claude Code 의 명령 래퍼라
+    /// 제목이 되면 안 된다 — 걸러서 폴더명으로 떨어져야 한다.
+    #[test]
+    fn session_row_skips_injected_wrappers() {
+        let dir = tempfile::tempdir().unwrap();
+        let day = dir.path().join("sessions/2026/08/12");
+        fs::create_dir_all(&day).unwrap();
+        let lines = vec![
+            r#"{"timestamp":"2026-08-12T01:00:00.000Z","type":"session_meta","payload":{"id":"019ff4e0","cwd":"C:\\Users\\u\\projects\\token-chan\\src-tauri"}}"#,
+            r#"{"timestamp":"2026-08-12T01:00:01.000Z","type":"event_msg","payload":{"type":"user_message","message":"<command-name>/usage</command-name>\n<command-message>usage</command-message>"}}"#,
+            r#"{"timestamp":"2026-08-12T01:00:03.000Z","type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":10,"output_tokens":1,"total_tokens":11}}}}"#,
+        ];
+        fs::write(day.join("rollout-2026-08-12T01-00-00-019ff4e0.jsonl"), lines.join("\n")).unwrap();
+
+        let mut adapter = CodexAdapter::new(vec![dir.path().to_path_buf()]);
+        adapter.scan(DateTime::UNIX_EPOCH.into());
+        assert_eq!(adapter.sessions()[0].label, "src-tauri", "래퍼는 제목이 아니다");
+    }
+
+    /// 첫 사용자 메시지가 없으면(도구로만 돈 세션) 예전처럼 폴더명으로 떨어진다
+    #[test]
+    fn session_row_falls_back_to_folder_name() {
+        let dir = tempfile::tempdir().unwrap();
+        let day = dir.path().join("sessions/2026/08/12");
+        fs::create_dir_all(&day).unwrap();
+        let lines = vec![
+            r#"{"timestamp":"2026-08-12T01:00:00.000Z","type":"session_meta","payload":{"id":"019ff4c8","cwd":"/home/u/projects/api"}}"#,
+            r#"{"timestamp":"2026-08-12T01:00:03.000Z","type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":10,"output_tokens":1,"total_tokens":11}}}}"#,
+        ];
+        fs::write(day.join("rollout-2026-08-12T01-00-00-019ff4c8.jsonl"), lines.join("\n")).unwrap();
+
+        let mut adapter = CodexAdapter::new(vec![dir.path().to_path_buf()]);
+        adapter.scan(DateTime::UNIX_EPOCH.into());
+        let rows = adapter.sessions();
+
+        assert_eq!(rows[0].label, "api");
+        assert_eq!(rows[0].branch, "", "git 정보가 없으면 빈 값");
     }
 
     #[test]

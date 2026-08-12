@@ -20,7 +20,7 @@ use walkdir::WalkDir;
 use crate::context::{ContextState, RawContext};
 use crate::model::{ScanOutcome, Source, SourceStatus, UsageEvent};
 use crate::pricing::PriceTable;
-use crate::session::{dir_label, SessionRow};
+use crate::session::{dir_label, first_line, is_human_prompt, SessionRow};
 
 #[derive(Deserialize)]
 struct Row {
@@ -38,6 +38,9 @@ struct Row {
     cwd: Option<String>,
     #[serde(rename = "gitBranch")]
     git_branch: Option<String>,
+    /// 슬래시 명령 래퍼·주의문 등에 붙는다 — 제목 후보에서 빼는 데 쓴다
+    #[serde(rename = "isMeta")]
+    is_meta: Option<bool>,
     /// compact 실행 시 `type:"system"` 행에 붙는 실측 메타데이터
     #[serde(rename = "compactMetadata")]
     compact: Option<CompactMeta>,
@@ -57,6 +60,8 @@ struct Msg {
     id: Option<String>,
     model: Option<String>,
     usage: Option<Usage>,
+    /// 사용자 메시지 본문. 문자열이거나 블록 배열이라 `Value` 로 받아 둘 다 처리한다
+    content: Option<serde_json::Value>,
 }
 
 #[derive(Deserialize)]
@@ -189,12 +194,28 @@ impl ClaudeAdapter {
     }
 }
 
+/// `message.content` 에서 사람이 읽는 텍스트만 뽑는다.
+/// 문자열로 오기도 하고 블록 배열(`{type:"text"|"tool_result"|…}`)로 오기도 한다.
+fn user_text(content: &serde_json::Value) -> String {
+    if let Some(s) = content.as_str() {
+        return s.to_string();
+    }
+    let Some(blocks) = content.as_array() else { return String::new() };
+    blocks
+        .iter()
+        .filter(|b| b.get("type").and_then(|t| t.as_str()) == Some("text"))
+        .filter_map(|b| b.get("text").and_then(|t| t.as_str()))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 fn parse_transcript(path: &Path) -> (Vec<ParsedEvent>, RawContext, Option<SessionRow>) {
     let mut ctx = RawContext::default();
     let Ok(content) = std::fs::read_to_string(path) else {
         return (vec![], ctx, None);
     };
     let (mut cwd, mut branch) = (String::new(), String::new());
+    let mut title = String::new();
     let (mut last_at, mut last_model, mut tokens) = (None, String::new(), 0u64);
     // 서브에이전트 트랜스크립트는 자기만의 컨텍스트를 쓴다 — 세션 게이지에 섞으면 안 된다.
     let track_ctx = !path.components().any(|c| c.as_os_str() == "subagents");
@@ -220,6 +241,21 @@ fn parse_transcript(path: &Path) -> (Vec<ParsedEvent>, RawContext, Option<Sessio
             if let Some(c) = row.cwd.as_deref().filter(|c| !c.is_empty()) {
                 cwd = c.to_string();
                 branch = row.git_branch.clone().unwrap_or_default();
+            }
+        }
+
+        // 제목 = 첫 사용자 메시지 (Codex·agy 와 같은 규칙). 다만 Claude 트랜스크립트의
+        // `type:"user"` 행에는 사람이 친 것 말고도 슬래시 명령·그 출력·시스템 안내가
+        // 섞여 들어와서, 그대로 쓰면 제목이 `<command-name>/model</command-name>` 이 된다.
+        if title.is_empty() && row.kind.as_deref() == Some("user") && !sidechain {
+            if let Some(t) = row
+                .message
+                .as_ref()
+                .and_then(|m| m.content.as_ref())
+                .map(user_text)
+                .filter(|t| !row.is_meta.unwrap_or(false) && is_human_prompt(t))
+            {
+                title = first_line(&t);
             }
         }
 
@@ -323,7 +359,12 @@ fn parse_transcript(path: &Path) -> (Vec<ParsedEvent>, RawContext, Option<Sessio
     let session = (track_ctx && last_at.is_some()).then(|| SessionRow {
         source: Source::Claude,
         id: ctx.session.clone(),
-        label: if cwd.is_empty() { ctx.session.chars().take(8).collect() } else { dir_label(&cwd) },
+        // 제목 → 폴더명 → 세션 id 앞자리 (세 소스 공통 규칙)
+        label: match (title.is_empty(), cwd.is_empty()) {
+            (false, _) => title,
+            (true, false) => dir_label(&cwd),
+            (true, true) => ctx.session.chars().take(8).collect(),
+        },
         cwd,
         model: last_model,
         branch,
@@ -366,6 +407,67 @@ mod tests {
         let total_output: u64 = out.events.iter().map(|e| e.output).sum();
         assert_eq!(total_output, 1200); // 500 + 700 (중복 합산 시 2200이 됨)
         assert_eq!(out.status, SourceStatus::Ok);
+    }
+
+    /// 제목은 첫 **사람** 메시지다. Claude 트랜스크립트의 `type:"user"` 행에는
+    /// 슬래시 명령·그 출력·시스템 안내가 섞여 들어온다 — 아래는 전부 실측한 형태다.
+    #[test]
+    fn session_title_skips_command_wrappers() {
+        let dir = tempfile::tempdir().unwrap();
+        let proj = dir.path().join("-proj");
+        fs::create_dir_all(&proj).unwrap();
+        let lines = vec![
+            r#"{"type":"user","isMeta":true,"cwd":"/home/u/projects/api","gitBranch":"main","message":{"role":"user","content":"<local-command-caveat>Caveat: The messages below…</local-command-caveat>"}}"#.to_string(),
+            r#"{"type":"user","message":{"role":"user","content":"<command-name>/model</command-name>\n<command-message>model</command-message>"}}"#.to_string(),
+            r#"{"type":"user","message":{"role":"user","content":"<local-command-stdout>Set model to Opus 5</local-command-stdout>"}}"#.to_string(),
+            r#"{"type":"user","message":{"role":"user","content":"[Request interrupted by user for tool use]"}}"#.to_string(),
+            // 여기서부터가 사람이 친 것 — 붙여넣은 블록이 뒤에 이어진다
+            r#"{"type":"user","message":{"role":"user","content":"디렉터리명 변경하고 다시 실행하는데 에러\n에러 로그:\n..."}}"#.to_string(),
+            assistant_line("msg_T", "req_T", "claude-opus-5", "2026-08-12T01:00:00.000Z", 10, 20),
+        ];
+        fs::write(proj.join("s.jsonl"), lines.join("\n")).unwrap();
+
+        let mut adapter = ClaudeAdapter::new(vec![dir.path().to_path_buf()]);
+        adapter.scan(DateTime::UNIX_EPOCH.into());
+        let rows = adapter.sessions();
+
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].label, "디렉터리명 변경하고 다시 실행하는데 에러", "첫 줄만, 명령 래퍼는 건너뛴다");
+        assert_eq!(rows[0].branch, "main");
+    }
+
+    /// 블록 배열로 오는 경우도 텍스트 블록만 골라 읽어야 한다
+    #[test]
+    fn session_title_reads_content_blocks() {
+        let dir = tempfile::tempdir().unwrap();
+        let proj = dir.path().join("-proj");
+        fs::create_dir_all(&proj).unwrap();
+        let lines = vec![
+            r#"{"type":"user","cwd":"/home/u/projects/api","message":{"role":"user","content":[{"type":"tool_result","content":"..."},{"type":"text","text":"블록 배열 안의 텍스트"}]}}"#.to_string(),
+            assistant_line("msg_U", "req_U", "claude-opus-5", "2026-08-12T01:00:00.000Z", 10, 20),
+        ];
+        fs::write(proj.join("s.jsonl"), lines.join("\n")).unwrap();
+
+        let mut adapter = ClaudeAdapter::new(vec![dir.path().to_path_buf()]);
+        adapter.scan(DateTime::UNIX_EPOCH.into());
+        assert_eq!(adapter.sessions()[0].label, "블록 배열 안의 텍스트");
+    }
+
+    /// 사람 메시지가 하나도 없으면(명령만 돈 세션) 예전처럼 폴더명으로 떨어진다
+    #[test]
+    fn session_title_falls_back_to_folder_name() {
+        let dir = tempfile::tempdir().unwrap();
+        let proj = dir.path().join("-proj");
+        fs::create_dir_all(&proj).unwrap();
+        let lines = vec![
+            r#"{"type":"user","cwd":"/home/u/projects/api","message":{"role":"user","content":"<command-name>/usage</command-name>"}}"#.to_string(),
+            assistant_line("msg_V", "req_V", "claude-opus-5", "2026-08-12T01:00:00.000Z", 10, 20),
+        ];
+        fs::write(proj.join("s.jsonl"), lines.join("\n")).unwrap();
+
+        let mut adapter = ClaudeAdapter::new(vec![dir.path().to_path_buf()]);
+        adapter.scan(DateTime::UNIX_EPOCH.into());
+        assert_eq!(adapter.sessions()[0].label, "api");
     }
 
     #[test]
