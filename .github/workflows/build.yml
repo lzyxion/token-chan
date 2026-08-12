@@ -3,20 +3,38 @@ name: build
 on:
   push:
     branches: [main]
+    tags: ["v*"]
   pull_request:
   workflow_dispatch:
 
 jobs:
-  test-core:
+  # 워크스페이스 전체 테스트. ubuntu 는 차감 1배라 여기서 돌리는 게 가장 싸다
+  # (windows 2배, macOS 10배). 실측: 이 잡 25초 vs 번들 잡들 합쳐 ~46분 차감.
+  test:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: swatinem/rust-cache@v2
-      - run: cargo test -p usage-core
+      # `--workspace` 는 src-tauri 크레이트까지 컴파일하므로 리눅스에서는 Tauri 시스템
+      # 의존성이 필요하다. 목록은 README 개발 안내와 같다.
+      - name: Tauri 시스템 의존성
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libwebkit2gtk-4.1-dev libxdo-dev libssl-dev \
+            libayatana-appindicator3-dev librsvg2-dev
+      # `-p usage-core` 였을 때는 src-tauri 테스트가 어디서도 안 돌았다.
+      # 덤으로 token-chan 크레이트의 리눅스 컴파일도 여기서만 검증된다
+      # (번들 매트릭스는 windows/macOS 뿐) — cfg 분기 실수를 잡아 준다.
+      - run: cargo test --workspace
 
+  # 번들은 **릴리스용**이다. 매 푸시마다 돌리면 차감의 98% 를 여기서 쓴다
+  # (실측 1회: windows 6분×2배 + macOS 3분×10배 ≈ 46분).
+  # 그래서 `v*` 태그를 밀거나 수동 실행할 때만 돈다.
   bundle:
-    needs: test-core
+    needs: test
+    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
     strategy:
       fail-fast: false
       matrix:
