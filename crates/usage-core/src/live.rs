@@ -6,11 +6,26 @@
 //! - Windows 마운트(/mnt/...) 쪽 세션 파일은 pid 확인 불가 → 신선도만 사용
 //!
 //! Codex·Antigravity 는 그런 레지스트리가 없어서 **트랜스크립트 파일이 방금 쓰였는지**로
-//! 유도한다([`infer_busy`]). 둘 다 응답을 스트리밍하며 파일에 계속 덧쓰기 때문에 작업
-//! 중이면 mtime 이 계속 움직인다. 정확한 신호가 아니라 유도값이므로 상태 이름도
+//! 유도한다([`add_inferred`]). 정확한 신호가 아니라 유도값이므로 상태 이름도
 //! `busy` 가 아니라 `active` 로 구분해 둔다.
+//!
+//! **mtime 만 보면 안 된다.** Windows/NTFS 는 파일 핸들이 열려 있는 동안 last-write
+//! 타임스탬프 갱신을 미루고 핸들이 닫힐 때 반영한다. Codex 는 세션 내내 rollout 핸들을
+//! 열어 둔 채 append 하므로 **작업 중에는 mtime 이 아예 안 움직이고 세션이 끝나야 움직인다**
+//! — 신호가 정확히 반대로 뒤집힌다. 실측(2026-08-12, Windows 11):
+//!
+//! ```text
+//! 10:14:57  mtime=09:55:03  size=254494
+//! 10:15:27  mtime=09:55:03  size=325952   ← 30초간 +71KB, mtime 은 1초도 안 움직임
+//! ```
+//!
+//! 크기는 즉시 갱신되므로 **직전 관측과 비교해 크기나 mtime 이 달라졌는지**를 같이 본다
+//! ([`WatchTracker`]). mtime 신선도도 그대로 남겨 둔다 — 파일이 닫힌 직후처럼 그쪽만
+//! 잡히는 경우가 있어 둘의 합집합이 어느 하나보다 넓다.
 
+use std::collections::HashMap;
 use std::path::PathBuf;
+use std::time::SystemTime;
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -66,15 +81,52 @@ pub fn infer_busy(last_write: Option<DateTime<Utc>>, now: DateTime<Utc>) -> bool
         .unwrap_or(false)
 }
 
-/// 세션 레지스트리가 없는 소스의 활동을 감시 파일 mtime 으로 판정해 상태에 얹는다.
+/// 감시 파일의 직전 관측값. mtime 만으로는 작업 중을 못 잡아서(모듈 주석 참고) 크기 변화도
+/// 봐야 하는데, 그건 한 번의 stat 으로 알 수 없고 **호출 사이에 값을 들고 있어야** 한다.
+/// 라이브 스레드가 하나 만들어 매 회차 넘겨준다.
+#[derive(Default)]
+pub struct WatchTracker {
+    seen: HashMap<PathBuf, Seen>,
+}
+
+struct Seen {
+    size: u64,
+    mtime: Option<SystemTime>,
+    /// 크기·mtime 이 바뀐 것을 마지막으로 **관측한** 시각.
+    /// 첫 관측은 비교 대상이 없어 `None` 이다 — 그때는 mtime 신선도만으로 판정한다.
+    changed_at: Option<DateTime<Utc>>,
+}
+
+/// 세션 레지스트리가 없는 소스의 활동을 감시 파일로 판정해 상태에 얹는다.
 /// `watch` 는 소스별 (감시 파일, 세션 이름) — 어댑터의 `watch_path()` 결과다.
-pub fn add_inferred(state: &mut LiveState, watch: &[(Source, PathBuf, String)], now: DateTime<Utc>) {
+pub fn add_inferred(
+    state: &mut LiveState,
+    watch: &[(Source, PathBuf, String)],
+    now: DateTime<Utc>,
+    tracker: &mut WatchTracker,
+) {
+    // 세션이 바뀌면 감시 파일도 바뀐다 — 안 보는 경로는 들고 있을 이유가 없다
+    tracker.seen.retain(|p, _| watch.iter().any(|(_, w, _)| w == p));
+
     for (source, path, name) in watch {
-        let written: Option<DateTime<Utc>> = std::fs::metadata(path)
-            .and_then(|m| m.modified())
-            .ok()
-            .map(Into::into);
-        if !infer_busy(written, now) {
+        let meta = std::fs::metadata(path).ok();
+        let size = meta.as_ref().map(|m| m.len()).unwrap_or(0);
+        let mtime = meta.as_ref().and_then(|m| m.modified().ok());
+
+        let prev = tracker.seen.get(path);
+        let mut changed_at = prev.and_then(|s| s.changed_at);
+        if let Some(s) = prev {
+            if s.size != size || s.mtime != mtime {
+                changed_at = Some(now);
+            }
+        }
+        tracker.seen.insert(path.clone(), Seen { size, mtime, changed_at });
+
+        // 방금 자란 것을 봤거나(핸들이 열려 있어 mtime 이 멈춘 경우) mtime 이 신선하거나
+        let grew = changed_at
+            .map(|t| (now - t).num_milliseconds() < INFERRED_BUSY_MS)
+            .unwrap_or(false);
+        if !grew && !infer_busy(mtime.map(Into::into), now) {
             continue;
         }
         state.busy = true;
@@ -203,6 +255,94 @@ mod tests {
         assert!(!infer_busy(None, now), "쓴 적이 없으면 작업 중이 아니다");
         // 시계가 어긋나 미래로 찍혀도 방금 쓰인 것으로 본다
         assert!(infer_busy(Some(now + chrono::Duration::seconds(10)), now));
+    }
+
+    /// mtime 을 고정한 채 파일에 덧쓴다 — Codex 가 핸들을 열어 둔 채 append 할 때
+    /// Windows 가 보여주는 모습 그대로다 (크기만 자라고 mtime 은 그대로).
+    fn append_keeping_mtime(path: &std::path::Path, bytes: &[u8]) {
+        let frozen = fs::metadata(path).unwrap().modified().unwrap();
+        let mut f = std::fs::OpenOptions::new().append(true).open(path).unwrap();
+        use std::io::Write;
+        f.write_all(bytes).unwrap();
+        f.set_times(std::fs::FileTimes::new().set_modified(frozen)).unwrap();
+        drop(f);
+        assert_eq!(fs::metadata(path).unwrap().modified().unwrap(), frozen, "mtime 고정 실패");
+    }
+
+    fn watch_of(path: &std::path::Path) -> Vec<(Source, PathBuf, String)> {
+        vec![(Source::Codex, path.to_path_buf(), "codex".to_string())]
+    }
+
+    #[test]
+    fn growth_counts_as_busy_even_when_mtime_never_moves() {
+        let dir = tempfile::tempdir().unwrap();
+        let f = dir.path().join("rollout.jsonl");
+        fs::write(&f, b"{}\n").unwrap();
+        let watch = watch_of(&f);
+        let mut tracker = WatchTracker::default();
+
+        // mtime 이 이미 낡은 시점에서 본다 — 신선도만 보면 작업 중이 아니다
+        let now = Utc::now() + chrono::Duration::seconds(600);
+        let mut state = LiveState::default();
+        add_inferred(&mut state, &watch, now, &mut tracker);
+        assert!(!state.busy, "첫 관측은 비교 대상이 없어 작업 중이 아니다");
+
+        append_keeping_mtime(&f, b"{}\n");
+        let mut state = LiveState::default();
+        add_inferred(&mut state, &watch, now, &mut tracker);
+        assert!(state.busy, "mtime 이 멈춰 있어도 크기가 자랐으면 작업 중이다");
+        assert_eq!(state.sessions[0].status, "active");
+    }
+
+    #[test]
+    fn growth_goes_stale_after_the_window() {
+        let dir = tempfile::tempdir().unwrap();
+        let f = dir.path().join("rollout.jsonl");
+        fs::write(&f, b"{}\n").unwrap();
+        let watch = watch_of(&f);
+        let mut tracker = WatchTracker::default();
+
+        let seen_at = Utc::now() + chrono::Duration::seconds(600);
+        let mut state = LiveState::default();
+        add_inferred(&mut state, &watch, seen_at, &mut tracker);
+        append_keeping_mtime(&f, b"{}\n");
+        let mut state = LiveState::default();
+        add_inferred(&mut state, &watch, seen_at, &mut tracker);
+        assert!(state.busy);
+
+        // 더 자라지 않은 채 창(45초)이 지나면 작업 중이 아니다
+        let later = seen_at + chrono::Duration::milliseconds(INFERRED_BUSY_MS + 1);
+        let mut state = LiveState::default();
+        add_inferred(&mut state, &watch, later, &mut tracker);
+        assert!(!state.busy, "마지막 변화 뒤 창이 지나면 풀린다");
+    }
+
+    #[test]
+    fn fresh_mtime_alone_still_counts() {
+        let dir = tempfile::tempdir().unwrap();
+        let f = dir.path().join("rollout.jsonl");
+        fs::write(&f, b"{}\n").unwrap();
+        let mut tracker = WatchTracker::default();
+
+        // 방금 쓴 파일 — 크기 변화를 본 적이 없어도 mtime 신선도로 잡힌다
+        let mut state = LiveState::default();
+        add_inferred(&mut state, &watch_of(&f), Utc::now(), &mut tracker);
+        assert!(state.busy);
+    }
+
+    #[test]
+    fn dropped_watch_paths_are_forgotten() {
+        let dir = tempfile::tempdir().unwrap();
+        let f = dir.path().join("rollout.jsonl");
+        fs::write(&f, b"{}\n").unwrap();
+        let mut tracker = WatchTracker::default();
+        let now = Utc::now() + chrono::Duration::seconds(600);
+
+        add_inferred(&mut LiveState::default(), &watch_of(&f), now, &mut tracker);
+        assert_eq!(tracker.seen.len(), 1);
+        // 세션이 바뀌어 그 파일을 더는 안 보면 관측값도 버린다
+        add_inferred(&mut LiveState::default(), &[], now, &mut tracker);
+        assert!(tracker.seen.is_empty());
     }
 
     #[test]

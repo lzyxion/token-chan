@@ -353,6 +353,8 @@ fn spawn_usage_thread(app: AppHandle) {
 fn spawn_live_thread(app: AppHandle) {
     std::thread::spawn(move || {
         let mut prev = String::new();
+        // 감시 파일의 직전 관측값 — 회차 사이에 들고 있어야 크기 변화를 알 수 있다
+        let mut tracker = usage_core::live::WatchTracker::default();
         loop {
             // 라이브 세션도 활성 계정의 설치본만 본다 (계정을 끄면 그쪽 세션은 무시)
             let dirs = enabled_roots(&app).sessions;
@@ -363,7 +365,7 @@ fn spawn_live_thread(app: AppHandle) {
             // 사용량 스캔(10초)이 아니라 여기(2초)서 stat 해야 작업 시작이 늦게 안 보인다.
             {
                 let watch = { app.state::<AppState>().watch.lock().unwrap().clone() };
-                usage_core::live::add_inferred(&mut live, &watch, now);
+                usage_core::live::add_inferred(&mut live, &watch, now, &mut tracker);
             }
             let json = serde_json::to_string(&live).unwrap_or_default();
             if json != prev {
