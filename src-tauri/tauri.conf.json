@@ -24,7 +24,8 @@
         "resizable": false,
         "shadow": false,
         "visibleOnAllWorkspaces": true,
-        "acceptFirstMouse": true
+        "acceptFirstMouse": true,
+        "additionalBrowserArgs": "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --process-per-site"
       },
       {
         "label": "bubble",
@@ -39,7 +40,8 @@
         "skipTaskbar": true,
         "resizable": false,
         "shadow": false,
-        "visibleOnAllWorkspaces": true
+        "visibleOnAllWorkspaces": true,
+        "additionalBrowserArgs": "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --process-per-site"
       },
       {
         "label": "panel",
@@ -52,7 +54,8 @@
         "alwaysOnTop": true,
         "skipTaskbar": true,
         "resizable": false,
-        "shadow": false
+        "shadow": false,
+        "additionalBrowserArgs": "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --process-per-site"
       },
       {
         "label": "settings",
@@ -65,7 +68,8 @@
         "alwaysOnTop": false,
         "skipTaskbar": false,
         "resizable": false,
-        "shadow": false
+        "shadow": false,
+        "additionalBrowserArgs": "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --process-per-site"
       },
       {
         "label": "studio",
@@ -78,7 +82,8 @@
         "alwaysOnTop": false,
         "skipTaskbar": false,
         "resizable": false,
-        "shadow": false
+        "shadow": false,
+        "additionalBrowserArgs": "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --process-per-site"
       }
     ],
     "security": {
