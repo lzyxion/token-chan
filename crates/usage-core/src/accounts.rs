@@ -127,11 +127,15 @@ fn b64url(s: &str) -> Option<Vec<u8>> {
     Some(out)
 }
 
-/// JWT 페이로드에서 email 클레임을 꺼낸다. 서명은 검증하지 않는다 —
-/// 표시용 이름일 뿐이고 이 파일을 쓴 주체는 CLI 자신이다.
+/// JWT 페이로드(가운데 조각)를 JSON 으로. 서명은 검증하지 않는다 — 이 파일을 쓴 주체가
+/// CLI 자신이고, 꺼내는 건 표시용 이름과 만료 판정([`crate::plan`]의 `exp`) 클레임뿐이다.
+pub(crate) fn jwt_payload(token: &str) -> Option<serde_json::Value> {
+    serde_json::from_slice(&b64url(token.split('.').nth(1)?)?).ok()
+}
+
+/// JWT 페이로드에서 email 클레임을 꺼낸다.
 fn jwt_email(token: &str) -> Option<String> {
-    let payload = token.split('.').nth(1)?;
-    let json: serde_json::Value = serde_json::from_slice(&b64url(payload)?).ok()?;
+    let json = jwt_payload(token)?;
     for k in ["email", "preferred_username", "sub"] {
         if let Some(s) = json.get(k).and_then(|v| v.as_str()) {
             if s.contains('@') {

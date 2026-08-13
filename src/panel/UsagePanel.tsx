@@ -10,6 +10,7 @@ import {
   fmtCost,
   fmtRemaining,
   fmtTokens,
+  resetIsStale,
   shortModel,
   SOURCE_LABEL,
   totalOf,
@@ -39,11 +40,17 @@ function MeterRow({
   label,
   pct,
   resetAt,
+  stale,
+  computed,
   title,
 }: {
   label: string;
   pct: number;
   resetAt?: Date | null;
+  /** 리셋 시각이 이미 지났다 = 캐시가 굳었고 계산으로도 못 메웠다 */
+  stale?: boolean;
+  /** 리셋 시각을 백엔드가 계산했다 (공식 캐시가 굳어서) */
+  computed?: boolean;
   title?: string;
 }) {
   return (
@@ -53,14 +60,33 @@ function MeterRow({
         <div className={`bar-fill meter ${meterClass(pct)}`} style={{ width: `${pct}%` }} />
       </div>
       <span className={`plan-pct ${meterClass(pct)}`}>{pct}%</span>
-      <span className="vendor-reset">{resetAt ? fmtRemaining(resetAt) : ""}</span>
+      {/* 계산값이면 `~` 를 붙인다 — 숫자는 믿을 만하지만(실측에서 공식과 일치) 출처가
+          공식이 아니라는 건 밝혀야 한다. 리셋을 못 구하면 "낡음" 으로 이유를 적는다:
+          그냥 비우면 왜 사라졌는지 알 수 없고, "0분" 은 지금 막 리셋된다는 거짓말이다. */}
+      <span className={`vendor-reset${stale ? " stale" : ""}`}>
+        {resetAt ? `${computed ? "~" : ""}${fmtRemaining(resetAt)}` : stale ? "낡음" : ""}
+      </span>
     </div>
   );
 }
 
-/** 미터의 리셋 시각 — 두 소스 모두 파일에서 기계가 읽는 형식으로 준다 */
+/** 미터의 리셋 시각 — 두 소스 모두 파일에서 기계가 읽는 형식으로 준다.
+ *
+ *  **이미 지난 시각은 값이 아니다** — 굳은 캐시의 잔해다(`resetIsStale`). Claude 5시간
+ *  창은 백엔드가 계산값으로 갈아 끼워 주므로 여기까지 오는 일이 드물지만, 활동이 끊겨
+ *  창이 닫혀 있으면(계산도 못 하면) 그대로 온다. */
 function meterReset(m: PlanMeter): Date | null {
-  return m.resets_at ? new Date(m.resets_at) : null;
+  if (!m.resets_at) return null;
+  const d = new Date(m.resets_at);
+  if (Number.isNaN(d.getTime()) || resetIsStale(d)) return null;
+  return d;
+}
+
+/** 리셋 시각은 있는데 이미 지났다 = 그 미터가 굳었고 대체도 못 했다 */
+function meterIsStale(m: PlanMeter): boolean {
+  if (!m.resets_at) return false;
+  const d = new Date(m.resets_at);
+  return !Number.isNaN(d.getTime()) && resetIsStale(d);
 }
 
 /**
@@ -117,7 +143,21 @@ function VendorCard({
           label={m.label}
           pct={m.used_pct}
           resetAt={meterReset(m)}
-          title={m.resets_at ? new Date(m.resets_at).toLocaleString() : ""}
+          stale={meterIsStale(m)}
+          computed={m.resets_computed}
+          title={
+            m.resets_at
+              ? meterIsStale(m)
+                ? `${new Date(m.resets_at).toLocaleString()} 에 리셋됐어야 하는데 값이 그대로다` +
+                  ` — CLI 가 캐시를 갱신하지 않았고, 활동이 끊겨 계산으로도 메울 수 없다` +
+                  (plan ? ` (받아온 시각 ${new Date(plan.fetched_at).toLocaleString()})` : "")
+                : m.resets_computed
+                  ? `${new Date(m.resets_at).toLocaleString()} — 공식 캐시가 굳어(${
+                      plan ? new Date(plan.fetched_at).toLocaleString() : "?"
+                    } 이후 정지) 트랜스크립트에서 계산한 값이다. 왼쪽 %는 여전히 옛 창의 것이라 실제보다 높다`
+                  : new Date(m.resets_at).toLocaleString()
+              : ""
+          }
         />
       ))}
       {/* 한도 미터가 없어도 아무 말도 안 한다. 예전엔 "공식 한도 없음" 을 적었는데,

@@ -90,6 +90,12 @@ struct FileCache {
     ctx: RawContext,
     /// 최근 세션 목록용 (서브에이전트 파일은 None — 사용자가 연 세션이 아니다)
     session: Option<SessionRow>,
+    /// 타임스탬프가 있는 **모든 행**의 시각 — 5시간 창 계산용 ([`crate::blocks`]).
+    ///
+    /// 사용량 이벤트(=assistant 응답)만으로는 안 된다. 창은 **사용자 메시지**에서
+    /// 시작하는데 그 사이 간격이 실측 47분까지 벌어졌다. 서브에이전트 행도 넣는다 —
+    /// 그쪽도 같은 계정의 한도를 쓴다.
+    stamps: Vec<DateTime<Utc>>,
 }
 
 pub struct ClaudeAdapter {
@@ -109,6 +115,20 @@ impl ClaudeAdapter {
     /// 최근 세션 목록. 정렬·합치기는 여러 소스를 모으는 호출부(`session::merge`)가 한다.
     pub fn sessions(&self) -> Vec<SessionRow> {
         self.cache.values().filter_map(|fc| fc.session.clone()).collect()
+    }
+
+    /// 지금 열려 있는 5시간 창의 종료 시각 — **공식 캐시를 안 본다** ([`crate::blocks`]).
+    ///
+    /// 공식 값(`cachedUsageUtilization`)이 우선이지만 그건 CLI 가 갱신을 멈추면 굳어서
+    /// 리셋 시각이 과거로 남는다. 그때도 리셋은 보여줘야 하므로 이미 읽고 있는
+    /// 트랜스크립트에서 같은 값을 만든다.
+    ///
+    /// 창 하나가 5시간이라 최근 것만 있으면 되지만, 스캔 범위 전체를 넘겨도 정렬 한 번이라
+    /// 굳이 자르지 않는다 (실측 3만 건에 수 ms).
+    pub fn session_reset(&self, now: DateTime<Utc>) -> Option<DateTime<Utc>> {
+        let mut stamps: Vec<DateTime<Utc>> =
+            self.cache.values().flat_map(|fc| fc.stamps.iter().copied()).collect();
+        crate::blocks::active_block_end(&mut stamps, now)
     }
 
     /// `since` 이후의 이벤트 스냅샷을 반환. 내부 파일 캐시로 변경분만 재파싱.
@@ -147,9 +167,11 @@ impl ClaudeAdapter {
                     None => true,
                 };
                 if needs_parse {
-                    let (events, ctx, session) = parse_transcript(path);
-                    self.cache
-                        .insert(path.to_path_buf(), FileCache { mtime, size, events, ctx, session });
+                    let (events, ctx, session, stamps) = parse_transcript(path);
+                    self.cache.insert(
+                        path.to_path_buf(),
+                        FileCache { mtime, size, events, ctx, session, stamps },
+                    );
                 }
             }
         }
@@ -209,10 +231,12 @@ fn user_text(content: &serde_json::Value) -> String {
         .join(" ")
 }
 
-fn parse_transcript(path: &Path) -> (Vec<ParsedEvent>, RawContext, Option<SessionRow>) {
+fn parse_transcript(
+    path: &Path,
+) -> (Vec<ParsedEvent>, RawContext, Option<SessionRow>, Vec<DateTime<Utc>>) {
     let mut ctx = RawContext::default();
     let Ok(content) = std::fs::read_to_string(path) else {
-        return (vec![], ctx, None);
+        return (vec![], ctx, None, vec![]);
     };
     let (mut cwd, mut branch) = (String::new(), String::new());
     let mut title = String::new();
@@ -222,6 +246,7 @@ fn parse_transcript(path: &Path) -> (Vec<ParsedEvent>, RawContext, Option<Sessio
     let mut min_read: Option<u64> = None;
 
     let mut out = vec![];
+    let mut stamps: Vec<DateTime<Utc>> = vec![];
     for line in content.lines() {
         let line = line.trim();
         if line.is_empty() {
@@ -233,6 +258,11 @@ fn parse_transcript(path: &Path) -> (Vec<ParsedEvent>, RawContext, Option<Sessio
             .as_deref()
             .and_then(|t| DateTime::parse_from_rfc3339(t).ok())
             .map(|t| t.with_timezone(&Utc));
+        // 5시간 창은 **모든 활동**에서 시작한다 — 사용량 이벤트만 세면 첫 사용자 메시지를
+        // 놓쳐 창이 늦게 열린 것처럼 보인다 (실측 47분 어긋남).
+        if let Some(t) = ts {
+            stamps.push(t);
+        }
         let sidechain = row.is_sidechain.unwrap_or(false);
         let main_chain = track_ctx && !sidechain;
 
@@ -371,7 +401,7 @@ fn parse_transcript(path: &Path) -> (Vec<ParsedEvent>, RawContext, Option<Sessio
         at: last_at.unwrap(),
         tokens,
     });
-    (out, ctx, session)
+    (out, ctx, session, stamps)
 }
 
 #[cfg(test)]
