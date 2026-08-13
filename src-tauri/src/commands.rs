@@ -148,10 +148,18 @@ pub fn save_pet_position(state: State<'_, AppState>, x: i32, y: i32) {
 /// `headroom`은 머리 위 여백, `center_x`는 창 안에서의 캐릭터 가로 중심.
 /// 대사가 이벤트로 갑자기 떠도 꼬리가 머리에 정확히 닿게 하기 위해 캐시해 둔다.
 #[tauri::command]
-pub fn set_anchor(state: State<'_, AppState>, headroom: f64, footroom: f64, center_x: f64) {
-    *state.headroom.lock().unwrap() = headroom.max(0.0);
-    *state.footroom.lock().unwrap() = footroom.max(0.0);
-    *state.center_x.lock().unwrap() = Some(center_x);
+pub fn set_anchor(app: AppHandle, headroom: f64, footroom: f64, center_x: f64) {
+    {
+        let state = app.state::<AppState>();
+        *state.headroom.lock().unwrap() = headroom.max(0.0);
+        *state.footroom.lock().unwrap() = footroom.max(0.0);
+        *state.center_x.lock().unwrap() = Some(center_x);
+    }
+    // 상태 전이 대사는 새 포즈의 앵커가 보고되기 **전에** 뜬다(rAF 순서상 show_speech 가
+    // 먼저다). 창 크기가 바뀌면 Resized 가 reposition_bubble 을 불러 바로잡히지만,
+    // 크기가 같은 포즈로 바뀌면 이 보고가 마지막 신호다 — 여기서 안 옮기면 말풍선이
+    // 이전 포즈 기준 자리에 대사 내내 남는다.
+    reposition_bubble(&app);
 }
 
 /// 지금 펫 위치를 기준으로 말풍선이 놓일 좌표와 꼬리 방향을 계산한다.
@@ -317,7 +325,7 @@ fn place_panel(app: &AppHandle, panel: &tauri::WebviewWindow) {
     if let Some((w, h)) = saved_size {
         let _ = panel.set_size(tauri::PhysicalSize::new(w, h));
     }
-    if let Some((x, y)) = saved {
+    if let Some((x, y)) = saved.filter(|&(x, y)| position_on_screen(panel, x, y)) {
         let _ = panel.set_position(PhysicalPosition::new(x, y));
         return;
     }
@@ -333,6 +341,21 @@ fn place_panel(app: &AppHandle, panel: &tauri::WebviewWindow) {
         let y = mp.y + ms.height as i32 - psize.height as i32 - 96;
         let _ = panel.set_position(PhysicalPosition::new(x, y));
     }
+}
+
+/// 저장된 좌표가 현재 모니터 어딘가에 걸치는지. 멀티 모니터를 해제하면 예전 좌표가
+/// 화면 밖을 가리켜 창을 영영 못 찾으므로, 복원 전에 이걸로 걸러 기본 배치로 돌린다.
+/// 일부만 걸쳐 있는 건 의도된 배치일 수 있어 통과시킨다 (펫과 같은 규칙).
+pub(crate) fn position_on_screen(win: &tauri::WebviewWindow, x: i32, y: i32) -> bool {
+    let (Ok(size), Ok(monitors)) = (win.outer_size(), win.available_monitors()) else {
+        // 판정 자체가 안 되면 저장값을 믿는 쪽이 덜 놀랍다
+        return true;
+    };
+    let (w, h) = (size.width as i32, size.height as i32);
+    monitors.iter().any(|m| {
+        let (mp, ms) = (m.position(), m.size());
+        x + w > mp.x && x < mp.x + ms.width as i32 && y + h > mp.y && y < mp.y + ms.height as i32
+    })
 }
 
 /// 사용자가 옮긴 자리를 기억한다. `save_window_size` 와 같은 라벨 규칙을 쓴다 —
@@ -853,10 +876,10 @@ pub fn open_studio(app: AppHandle) {
         let _ = w.set_size(tauri::PhysicalSize::new(ww, wh));
     }
     match saved_pos {
-        Some((x, y)) => {
+        Some((x, y)) if position_on_screen(&w, x, y) => {
             let _ = w.set_position(tauri::PhysicalPosition::new(x, y));
         }
-        None => {
+        _ => {
             let _ = w.center();
         }
     }
@@ -885,7 +908,7 @@ pub fn open_settings(app: AppHandle, tab: Option<String>) {
     }
     // 옮겨 둔 자리가 있으면 그대로 — 최상단이 아니라 뒤로 갔다가 다시 부르는 일이
     // 잦은데, 그때마다 우하단으로 튀면 옮겨 둔 의미가 없다 (패널과 같은 규칙)
-    if let Some((x, y)) = saved_pos {
+    if let Some((x, y)) = saved_pos.filter(|&(x, y)| position_on_screen(&w, x, y)) {
         let _ = w.set_position(tauri::PhysicalPosition::new(x, y));
     } else if let (Ok(Some(mon)), Ok(size)) = (w.primary_monitor(), w.outer_size()) {
         let mp = mon.position();

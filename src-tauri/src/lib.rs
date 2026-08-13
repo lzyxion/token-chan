@@ -123,22 +123,13 @@ pub fn run() {
                         // 화면 밖으로 걸쳐 두는 건 의도된 배치일 수 있으므로 되돌리지 않는다.
                         // 다만 모니터 구성이 바뀌어 어느 화면에도 안 걸리면 창을 영영
                         // 못 찾으므로, 그때만 첫 모니터 안으로 복구한다.
-                        if let (Ok(size), Ok(monitors)) = (pet.outer_size(), pet.available_monitors())
-                        {
-                            let (w, h) = (size.width as i32, size.height as i32);
-                            let on_screen = monitors.iter().any(|m| {
-                                let (mp, ms) = (m.position(), m.size());
-                                x + w > mp.x
-                                    && x < mp.x + ms.width as i32
-                                    && y + h > mp.y
-                                    && y < mp.y + ms.height as i32
-                            });
-                            if !on_screen {
-                                if let Some(m) = monitors.first() {
-                                    let mp = m.position();
-                                    let _ = pet
-                                        .set_position(PhysicalPosition::new(mp.x + 40, mp.y + 40));
-                                }
+                        if !commands::position_on_screen(&pet, x, y) {
+                            if let Some(m) =
+                                pet.available_monitors().ok().and_then(|ms| ms.into_iter().next())
+                            {
+                                let mp = m.position();
+                                let _ =
+                                    pet.set_position(PhysicalPosition::new(mp.x + 40, mp.y + 40));
                             }
                         }
                     }
