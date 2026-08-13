@@ -63,7 +63,7 @@ pub struct Account {
     pub key: String,
     /// 사람이 읽는 이름 — 이메일이 있으면 이메일, 없으면 계정 id 앞자리
     pub label: String,
-    /// **로그인 방식** (예: "Claude 계정 로그인", "ChatGPT 로그인", "Google 로그인")
+    /// **로그인 방식** — 세 소스 모두 `{서비스} 로그인` 꼴 (예: "Claude 로그인", "ChatGPT 로그인")
     pub detail: String,
     /// **플랜 이름** (예: "Claude Max 5x"). 계정 파일에서 알 수 있는 소스만 채운다 —
     /// Codex 는 비고, 화면은 rollout 에서 온 [`crate::plan::PlanUsage::detail`] 로 채운다.
@@ -194,7 +194,7 @@ fn claude_account(home: &Path) -> Option<Ident> {
     // Codex 의 `auth_mode`, agy 의 `authMethod` 에 해당하는 필드가 **없다.** 대신 이
     // 객체의 이름이 `oauthAccount` 이고, API 키·Bedrock·Vertex 로 쓰면 이 객체 자체가
     // 없어 여기까지 오지도 않는다. 그래서 "여기 도달 = OAuth 로그인"으로 읽는다.
-    Some(Ident { key, label, detail: "Claude 계정 로그인".into(), plan })
+    Some(Ident { key, label, detail: "Claude 로그인".into(), plan })
 }
 
 /// `<홈>/auth.json` 에서 계정 식별.
@@ -499,7 +499,7 @@ mod tests {
         assert_eq!(accounts.len(), 1, "같은 계정의 설치본 둘은 하나로 묶여야 함");
         assert_eq!(accounts[0].label, "me@x.com");
         // `detail` 은 세 소스 공통으로 **로그인 방식** 자리다
-        assert_eq!(accounts[0].detail, "Claude 계정 로그인");
+        assert_eq!(accounts[0].detail, "Claude 로그인");
         // 플랜은 별도 필드. 원문(`claude_max` + `default_claude_max_5x`)이 아니라 읽을 수
         // 있는 이름이고, 티어가 플랜을 이미 포함하므로 둘을 잇지 않는다 (plan::plan_label)
         assert_eq!(accounts[0].plan, "Claude Max 5x");

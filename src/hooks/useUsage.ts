@@ -1,7 +1,34 @@
 import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import type { LiveState, PlanUsage, Source, Summary } from "../types";
+import { DEFAULT_CURRENCY, type Currency } from "../format";
+import type { AppSettings, LiveState, PlanUsage, Source, Summary } from "../types";
+
+/**
+ * 비용 표기 통화 구독 — 설정을 바꾸면 `settings-changed` 로 바로 반영된다.
+ * 비용을 찍는 창이 여럿이라(패널·펫) 각자 설정을 읽는 대신 여기서 한 번에 맞춘다.
+ */
+export function useCurrency(): Currency {
+  const [cur, setCur] = useState<Currency>(DEFAULT_CURRENCY);
+  useEffect(() => {
+    let alive = true;
+    const apply = (s: AppSettings | null) => {
+      if (!alive || !s) return;
+      setCur({
+        code: s.currency === "krw" ? "krw" : "usd",
+        // 0 이면 원 표기가 전부 ₩0 이 된다 — 설정이 비어 있을 때의 방어
+        usdToKrw: s.usdToKrw > 0 ? s.usdToKrw : DEFAULT_CURRENCY.usdToKrw,
+      });
+    };
+    invoke<AppSettings>("get_settings").then(apply).catch(() => {});
+    const un = listen<AppSettings>("settings-changed", (e) => apply(e.payload));
+    return () => {
+      alive = false;
+      un.then((f) => f());
+    };
+  }, []);
+  return cur;
+}
 
 /** 요약 데이터 구독: 초기 invoke + usage-updated 이벤트 */
 export function useSummary(): Summary | null {

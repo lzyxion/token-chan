@@ -53,6 +53,23 @@ pub struct DailyRow {
     pub cost: f64,
 }
 
+/// 하루에 모델 하나가 쓴 양. 비용은 담지 않는다 — 막대는 토큰 비중만 그린다.
+#[derive(Clone, Debug, Serialize)]
+pub struct DayModel {
+    pub model: String,
+    pub source: Source,
+    pub tokens: u64,
+}
+
+/// 하루치 모델 내역
+#[derive(Clone, Debug, Serialize)]
+pub struct DailyModels {
+    pub date: String,
+    /// 토큰 많은 순. **상위 N 추리기는 프론트가 한다** — 주 전체를 놓고 골라야
+    /// 막대마다 범례가 달라지지 않아서, 하루씩 자르는 여기서는 정할 수 없다.
+    pub models: Vec<DayModel>,
+}
+
 #[derive(Clone, Debug, Serialize)]
 pub struct Summary {
     pub generated_at: DateTime<Utc>,
@@ -63,6 +80,13 @@ pub struct Summary {
     pub sources: Vec<SourceSummary>,
     pub models_today: Vec<ModelRow>,
     pub daily: Vec<DailyRow>,
+    /// 최근 [`WEEK_DAYS`]일의 **날짜별 모델 내역** — 주간 막대를 모델로 쌓기 위한 것.
+    ///
+    /// `daily` 에 붙이지 않는다. `daily` 는 보존기간만큼 길어(최대 수개월) 10초마다
+    /// 통째로 직렬화되는데, 모델로 쌓아 보여주는 건 7일뿐이라 나머지 날의 모델 배열은
+    /// 아무도 읽지 않고 payload 만 불린다.
+    #[serde(default)]
+    pub week_models: Vec<DailyModels>,
     /// 스캔 범위에서 **가장 오래된** 이벤트 시각.
     /// 잔디에서 "그날 안 씀"과 "그때는 기록 자체가 없음"을 가르는 경계다 —
     /// 둘 다 0 으로 그리면 CLI 를 설치하기 전 날짜까지 "안 씀"으로 보인다.
@@ -91,6 +115,11 @@ impl Summary {
         self.contexts.iter().max_by_key(|c| c.at)
     }
 }
+
+/// 주간 막대(`WeekBars`)가 덮는 일수. 잔디와 달리 고정이다 — 요일별 크기를 읽는
+/// 그래프라 한 주가 곧 단위다. 프론트가 `daily` 꼬리를 자르는 길이와 같아야
+/// [`Summary::week_models`] 가 날짜별로 맞물린다.
+pub const WEEK_DAYS: usize = 7;
 
 /// 잔디 격자가 덮을 일수 — **보존기간에서 유도**한다.
 ///
@@ -129,6 +158,11 @@ pub fn build_summary(
     let mut per_source: std::collections::BTreeMap<Source, (Totals, f64, bool)> = Default::default();
     let mut per_model: std::collections::BTreeMap<(Source, String), (Totals, f64, bool)> = Default::default();
     let mut per_day: std::collections::BTreeMap<NaiveDate, (Totals, f64)> = Default::default();
+    // 주간 막대용 (날짜, 소스, 모델) → 토큰. 보존기간이 7일보다 짧으면 그만큼만 본다.
+    let week_len = days.min(WEEK_DAYS);
+    let week_start = today - Duration::days(week_len.max(1) as i64 - 1);
+    let mut per_day_model: std::collections::BTreeMap<(NaiveDate, Source, String), u64> =
+        Default::default();
 
     for ev in events {
         let d = local_date(ev.ts, offset);
@@ -137,6 +171,10 @@ pub fn build_summary(
         let day = per_day.entry(d).or_default();
         day.0.add_event(ev);
         day.1 += cost.unwrap_or(0.0);
+
+        if week_len > 0 && d >= week_start && d <= today {
+            *per_day_model.entry((d, ev.source, ev.model.clone())).or_default() += ev.total();
+        }
 
         if d == today {
             today_totals.add_event(ev);
@@ -197,6 +235,19 @@ pub fn build_summary(
         daily.push(DailyRow { date: d.to_string(), totals, cost });
     }
 
+    // 주간 막대용 모델 내역 — `daily` 꼬리와 같은 날짜·같은 순서여야 프론트가 붙일 수 있다
+    let mut by_date: std::collections::BTreeMap<NaiveDate, Vec<DayModel>> = Default::default();
+    for ((d, source, model), tokens) in per_day_model {
+        by_date.entry(d).or_default().push(DayModel { model, source, tokens });
+    }
+    let mut week_models = vec![];
+    for i in (0..week_len).rev() {
+        let d = today - Duration::days(i as i64);
+        let mut models = by_date.remove(&d).unwrap_or_default();
+        models.sort_by(|a, b| b.tokens.cmp(&a.tokens));
+        week_models.push(DailyModels { date: d.to_string(), models });
+    }
+
     let last_model = events.iter().rev().find(|e| !e.sidechain).map(|e| e.model.clone());
     let observed: std::collections::BTreeSet<String> =
         events.iter().map(|e| e.model.clone()).collect();
@@ -210,6 +261,7 @@ pub fn build_summary(
         sources,
         models_today,
         daily,
+        week_models,
         first_event_ts: events.first().map(|e| e.ts),
         last_event_ts: events.last().map(|e| e.ts),
         last_model,
@@ -279,6 +331,60 @@ mod tests {
         assert!(s.today_cost > 0.0);
         assert!(!s.cost_partial);
         assert_eq!(s.models_today.len(), 2);
+    }
+
+    /// 주간 막대가 모델로 쌓이려면 날짜별 내역이 `daily` 꼬리와 맞물려야 한다.
+    #[test]
+    fn week_models_line_up_with_the_daily_tail() {
+        let kst = FixedOffset::east_opt(9 * 3600).unwrap();
+        let now = DateTime::parse_from_rfc3339("2026-07-30T03:00:00Z").unwrap().with_timezone(&Utc);
+        let events = vec![
+            // KST 07-28 — 한 날에 모델 둘
+            ev(Source::Claude, "claude-opus-4-8", "2026-07-27T16:00:00Z", 100),
+            ev(Source::Codex, "gpt-5-codex", "2026-07-27T17:00:00Z", 900),
+            // KST 07-30 (오늘)
+            ev(Source::Claude, "claude-opus-4-8", "2026-07-30T01:00:00Z", 300),
+            // 주 밖 (KST 07-20) — 격자엔 있어도 주간 막대엔 없어야 한다
+            ev(Source::Claude, "claude-sonnet-4-5", "2026-07-20T01:00:00Z", 50),
+        ];
+        let statuses = vec![(Source::Claude, SourceStatus::Ok), (Source::Codex, SourceStatus::Ok)];
+        let s = build_summary(&events, &statuses, &PriceTable::builtin(), 28, now, kst);
+
+        // 날짜가 `daily` 의 마지막 7개와 같아야 프론트가 붙일 수 있다
+        assert_eq!(s.week_models.len(), WEEK_DAYS);
+        let tail: Vec<&str> = s.daily[s.daily.len() - WEEK_DAYS..].iter().map(|d| d.date.as_str()).collect();
+        let wk: Vec<&str> = s.week_models.iter().map(|d| d.date.as_str()).collect();
+        assert_eq!(wk, tail);
+
+        // 07-28: 토큰 많은 순 — codex(900+100+1000) 가 claude(100+100+1000) 앞
+        let d28 = s.week_models.iter().find(|d| d.date == "2026-07-28").unwrap();
+        assert_eq!(d28.models.len(), 2);
+        assert_eq!(d28.models[0].source, Source::Codex);
+        assert_eq!(d28.models[0].tokens, 2000);
+        assert_eq!(d28.models[1].tokens, 1200);
+
+        // 하루 합이 같은 날 `daily` 총량과 어긋나면 막대 비율이 거짓말이 된다
+        for row in &s.week_models {
+            let day = s.daily.iter().find(|d| d.date == row.date).unwrap();
+            let sum: u64 = row.models.iter().map(|m| m.tokens).sum();
+            assert_eq!(sum, day.totals.total(), "{}", row.date);
+        }
+
+        // 주 밖의 모델은 안 실린다 (격자에는 남아 있다)
+        assert!(!s.week_models.iter().any(|d| d.models.iter().any(|m| m.model.contains("sonnet"))));
+        assert!(s.observed_models.iter().any(|m| m.contains("sonnet")));
+    }
+
+    /// 보존기간이 한 주보다 짧으면 있는 만큼만 — 없는 날을 지어내지 않는다.
+    #[test]
+    fn week_models_shrink_with_a_short_window() {
+        let kst = FixedOffset::east_opt(9 * 3600).unwrap();
+        let now = DateTime::parse_from_rfc3339("2026-07-30T03:00:00Z").unwrap().with_timezone(&Utc);
+        let events = vec![ev(Source::Claude, "claude-opus-4-8", "2026-07-30T01:00:00Z", 10)];
+        let statuses = vec![(Source::Claude, SourceStatus::Ok)];
+        let s = build_summary(&events, &statuses, &PriceTable::builtin(), 3, now, kst);
+        assert_eq!(s.week_models.len(), 3);
+        assert_eq!(s.week_models.last().unwrap().date, "2026-07-30");
     }
 
     #[test]

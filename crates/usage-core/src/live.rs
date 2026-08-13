@@ -30,7 +30,7 @@
 //! 잡히는 경우가 있어 둘의 합집합이 어느 하나보다 넓다.
 
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
 use chrono::{DateTime, Utc};
@@ -70,10 +70,50 @@ pub const INFERRED_BUSY_MS: i64 = 45 * 1000;
 #[derive(Debug, Clone, Serialize)]
 pub struct LiveSessionView {
     pub source: Source,
+    /// 세션 id — [`crate::session::SessionRow::id`] 와 **같은 값**이라 최근 세션 목록의
+    /// 어느 줄이 지금 돌고 있는지 짚을 수 있다. 못 알아내면 빈 문자열(짚지 않는다).
+    ///
+    /// `name` 으로는 짚을 수 없다. Claude 는 사용자가 붙인 세션 이름이 있으면 그걸
+    /// 쓰고, 유도 경로는 소스 이름("agy")을 쓴다 — 둘 다 id 가 아니다.
+    pub id: String,
     pub name: String,
     /// `busy`/`idle` 은 세션 레지스트리에서 온 정확한 값, `active` 는 파일 신선도로 유도한 값
     pub status: String,
     pub cwd: String,
+}
+
+/// 감시 파일 경로 → 세션 id. 유도 경로에는 세션 식별자가 따로 없지만 **파일명이 곧
+/// 세션**이라 되짚을 수 있다 (실측):
+///
+/// | 소스 | 파일명 | id |
+/// |---|---|---|
+/// | agy | `conversations/<uuid>.db` (`.db-wal` 도) | 파일 이름 |
+/// | Codex | `rollout-<타임스탬프>-<uuid>.jsonl` | 뒤쪽 uuid |
+///
+/// 모양이 안 맞으면 빈 문자열 — 잘못 짚느니 안 짚는 게 낫다.
+fn session_id_from_path(path: &Path) -> String {
+    let Some(stem) = path.file_stem().and_then(|s| s.to_str()) else {
+        return String::new();
+    };
+    // Codex rollout 은 앞에 타임스탬프가 붙는다 — uuid 는 그 꼬리 36자다.
+    let candidate = match stem.strip_prefix("rollout-") {
+        Some(rest) if rest.len() >= UUID_LEN => &rest[rest.len() - UUID_LEN..],
+        Some(_) => return String::new(),
+        None => stem,
+    };
+    if is_uuid(candidate) { candidate.to_string() } else { String::new() }
+}
+
+const UUID_LEN: usize = 36;
+
+/// `8-4-4-4-12` 모양인지. 파일명이 예상과 다르면 엉뚱한 문자열을 세션 id 로 내보내게
+/// 되는데, 그러면 목록의 아무 줄도 안 맞거나 **엉뚱한 줄이 깜빡인다**.
+fn is_uuid(s: &str) -> bool {
+    s.len() == UUID_LEN
+        && s.as_bytes().iter().enumerate().all(|(i, c)| match i {
+            8 | 13 | 18 | 23 => *c == b'-',
+            _ => c.is_ascii_hexdigit(),
+        })
 }
 
 #[derive(Debug, Clone, Default, Serialize)]
@@ -143,6 +183,7 @@ pub fn add_inferred(
         state.busy_count += 1;
         state.sessions.push(LiveSessionView {
             source: *source,
+            id: session_id_from_path(path),
             name: name.clone(),
             // 레지스트리에서 온 `busy` 와 구분한다 — 이건 파일 신선도로 유도한 값이다
             status: "active".into(),
@@ -174,6 +215,7 @@ pub fn read_live_state(dirs: &[PathBuf], now_ms: i64) -> LiveState {
                 continue;
             }
 
+            let id = sf.session_id.clone().unwrap_or_default();
             let status = sf.status.unwrap_or_else(|| "unknown".into());
             if status == "busy" {
                 state.busy = true;
@@ -181,6 +223,7 @@ pub fn read_live_state(dirs: &[PathBuf], now_ms: i64) -> LiveState {
             }
             state.sessions.push(LiveSessionView {
                 source: Source::Claude,
+                id,
                 name: sf
                     .name
                     .or(sf.session_id.map(|s| s.chars().take(8).collect()))
@@ -197,6 +240,29 @@ pub fn read_live_state(dirs: &[PathBuf], now_ms: i64) -> LiveState {
 mod tests {
     use super::*;
     use std::fs;
+
+    /// 유도 경로에도 세션 id 가 있어야 "지금 도는 줄"만 짚을 수 있다 (실측 파일명).
+    #[test]
+    fn session_id_comes_back_from_the_watched_filename() {
+        let agy = "0f232cbb-b515-46e8-a6ca-f60532dca6d7";
+        assert_eq!(session_id_from_path(Path::new(&format!("c/{agy}.db"))), agy);
+        // WAL 이 더 최근이면 그쪽을 감시한다 — 같은 대화다
+        assert_eq!(session_id_from_path(Path::new(&format!("c/{agy}.db-wal"))), agy);
+
+        let codex = "019fca97-84d0-70b1-bbd3-2ba2d04389b7";
+        let roll = format!("s/rollout-2026-08-04T11-25-55-{codex}.jsonl");
+        assert_eq!(session_id_from_path(Path::new(&roll)), codex);
+    }
+
+    /// 모양이 다르면 빈 문자열 — 잘못 짚으면 엉뚱한 줄이 깜빡인다.
+    #[test]
+    fn unknown_filenames_point_at_nothing() {
+        for p in ["s/rollout-짧음.jsonl", "c/history.jsonl", "c/.db", "s/rollout-.jsonl"] {
+            assert_eq!(session_id_from_path(Path::new(p)), "", "{p}");
+        }
+        // 길이는 맞는데 uuid 가 아닌 경우
+        assert_eq!(session_id_from_path(Path::new("c/zzzzzzzz-b515-46e8-a6ca-f60532dca6d7.db")), "");
+    }
 
     fn session_json(pid: u64, status: &str, updated_at: i64) -> String {
         format!(

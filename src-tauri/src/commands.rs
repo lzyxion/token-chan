@@ -45,6 +45,16 @@ pub fn set_settings(app: AppHandle, state: State<'_, AppState>, mut new_settings
     new_settings.settings_size = old.settings_size;
     new_settings.studio_size = old.studio_size;
     new_settings.reset_notify_minutes = new_settings.reset_notify_minutes.min(120);
+    // 통화는 아는 값만 받는다 — 설정 파일은 사람이 고치는 JSON 이라 오타가 들어올 수 있고,
+    // 모르는 값이면 곱하지 않은 달러로 떨어지는 게 안전하다.
+    if new_settings.currency != "krw" {
+        new_settings.currency = "usd".into();
+    }
+    // 0 이나 음수면 비용이 전부 0/음수로 보인다. 상한은 자릿수 실수(1400 → 1400000) 방지.
+    if !new_settings.usd_to_krw.is_finite() || new_settings.usd_to_krw <= 0.0 {
+        new_settings.usd_to_krw = old.usd_to_krw;
+    }
+    new_settings.usd_to_krw = new_settings.usd_to_krw.clamp(1.0, 100_000.0);
     new_settings.sleep_after_minutes = new_settings.sleep_after_minutes.clamp(1, 480);
 
     if old.autostart != new_settings.autostart {

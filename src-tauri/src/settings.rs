@@ -80,6 +80,17 @@ pub struct Settings {
     /// 추가로 스캔할 Antigravity CLI(`agy`) 홈 (`antigravity-cli` 디렉토리).
     /// 그 아래 `conversations/<uuid>.db` 를 본다.
     pub extra_antigravity_homes: Vec<String>,
+    /// 비용 표기 통화: `usd` | `krw`.
+    ///
+    /// 기본값이 `usd` 인 이유는 **그게 우리가 아는 값**이라서다 — 단가표(`prices.json`)가
+    /// 달러이고, 원 표기는 아래 환율을 곱한 결과다. 곱하지 않은 쪽을 기본으로 두면
+    /// 사용자가 환율을 확인하고 켜는 셈이 된다.
+    pub currency: String,
+    /// 1 USD = ? 원. **직접 넣는 값이다** — 이 앱은 네트워크를 쓰지 않는다(HTTP 의존성
+    /// 자체가 없다). 자동 조회를 넣으면 실행 환경에 좌우되는 값이 하나 늘고, 방화벽
+    /// 뒤에서 조용히 낡은 값을 쓰게 된다. 어차피 `costUSD` 자체가 단가표 추정치라
+    /// 환율의 소수점 정밀도가 결과를 바꾸지 않는다.
+    pub usd_to_krw: f64,
     /// 게이지에 태울 벤더: `auto` | `claude` | `codex` | `antigravity`.
     ///
     /// 게이지는 링 3개뿐이라 벤더 하나만 보여준다. `auto` 는 지금 작업 중인 쪽을
@@ -124,6 +135,9 @@ impl Default for Settings {
             extra_claude_homes: vec![],
             extra_codex_homes: vec![],
             extra_antigravity_homes: vec![],
+            currency: "usd".into(),
+            // 고정 기본값이라 시간이 지나면 낡는다 — 설정에서 고치라고 화면에 적어 둔다
+            usd_to_krw: 1400.0,
             gauge_vendor: "auto".into(),
             accounts_enabled: Default::default(),
         }

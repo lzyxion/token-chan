@@ -395,6 +395,7 @@ fn spawn_live_thread(app: AppHandle) {
                 live.busy_count += 1;
                 live.sessions.push(usage_core::live::LiveSessionView {
                     source: Source::Codex,
+                    id: id.clone(),
                     name: id.chars().take(8).collect(),
                     status: "busy".into(),
                     cwd: String::new(),

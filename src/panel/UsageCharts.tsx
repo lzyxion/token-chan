@@ -1,5 +1,13 @@
-import { fmtCost, fmtTokens, shortModel, totalOf } from "../format";
-import type { DailyRow, ModelRow } from "../types";
+import { fmtCost, fmtTokens, shortModel, totalOf, type Currency } from "../format";
+import type { DailyModels, DailyRow, DayModel, ModelRow } from "../types";
+
+/** 주간 막대가 덮는 일수 — 백엔드 `aggregate::WEEK_DAYS` 와 같아야 날짜가 맞물린다 */
+const WEEK_DAYS = 7;
+/** 주간 막대에서 색을 따로 주는 모델 수 (나머지는 「기타」).
+ *  패널이 좁아(약 210px) 범례가 두 줄을 넘지 않는 선이다. */
+const WEEK_MODEL_MAX = 4;
+/** 한 벤더 안에서 쓰는 밝기 단계 수(원색 제외). 더 늘리면 서로 구분이 안 된다. */
+const SHADE_MAX = 2;
 
 /**
  * 칸 하나가 차지하는 최대 폭(칸 12 + 간격 2). 주 수는 백엔드가 보존기간에서
@@ -45,10 +53,12 @@ function levelOf(v: number, max: number): number {
 export function UsageHeatmap({
   daily,
   firstEvent,
+  currency,
 }: {
   daily: DailyRow[];
   /** 가장 오래된 이벤트 시각. 이전 날짜는 "안 씀"이 아니라 **기록이 없던 날**이다. */
   firstEvent: string | null;
+  currency: Currency;
 }) {
   if (daily.length === 0) return null;
   const days = daily;
@@ -92,7 +102,7 @@ export function UsageHeatmap({
             <span
               key={d.date}
               className={`grass-cell lv${levelOf(total, max)}`}
-              title={`${d.date} · ${fmtTokens(total)} tokens · ${fmtCost(d.cost, false)}`}
+              title={`${d.date} · ${fmtTokens(total)} tokens · ${fmtCost(d.cost, false, currency)}`}
             />
           );
         })}
@@ -171,34 +181,115 @@ export function ModelMix({ models }: { models: ModelRow[] }) {
   );
 }
 
-/** 최근 7일 막대 — 잔디가 흐름을 보여준다면 이쪽은 요일별 크기를 읽게 한다. */
-export function WeekBars({ daily }: { daily: DailyRow[] }) {
-  const days = daily.slice(-7);
+/**
+ * 최근 7일 막대 — 잔디가 흐름을 보여준다면 이쪽은 요일별 크기를 읽게 한다.
+ * 막대는 **모델별로 쌓는다**: 크기와 구성을 한 그래프에서 같이 읽는 게 목적이다.
+ *
+ * 색은 「오늘 모델」과 **같은 규칙(색 = 벤더)** 이고, 같은 벤더 안에서만 밝기로 가른다.
+ * 모델마다 새 색을 주면 한 페이지에서 같은 색이 한쪽은 벤더, 한쪽은 모델을 뜻하게 되고
+ * 색 수도 벤더 3 + 모델 4 로 불어난다. 색상은 벤더가 갖고 밝기는 모델이 갖는 쪽이,
+ * 두 구분을 한 막대에서 같이 읽게 해 준다.
+ */
+export function WeekBars({
+  daily,
+  weekModels,
+  currency,
+}: {
+  daily: DailyRow[];
+  weekModels: DailyModels[];
+  currency: Currency;
+}) {
+  const days = daily.slice(-WEEK_DAYS);
   if (days.length === 0) return null;
   const max = Math.max(...days.map((d) => totalOf(d.totals)), 1);
   const labels = ["일", "월", "화", "수", "목", "금", "토"];
 
+  const byDate = new Map(weekModels.map((w) => [w.date, w.models]));
+  const keyOf = (m: DayModel) => `${m.source}-${m.model}`;
+
+  // 색은 **주 전체 순위**로 정한다 — 하루씩 정하면 같은 모델이 날마다 색이 바뀐다.
+  const weekTotals = new Map<string, { label: string; source: string; tokens: number }>();
+  for (const w of weekModels) {
+    for (const m of w.models) {
+      const cur = weekTotals.get(keyOf(m));
+      if (cur) cur.tokens += m.tokens;
+      else weekTotals.set(keyOf(m), { label: shortModel(m.model), source: m.source, tokens: m.tokens });
+    }
+  }
+  const ranked = [...weekTotals.entries()].sort((a, b) => b[1].tokens - a[1].tokens);
+
+  // 밝기 단계는 **벤더 안에서** 매긴다 — 그 벤더의 주력 모델이 원색이고, 덜 쓴 모델일수록
+  // 밝아진다. 전체 순위로 매기면 Codex 를 조금만 써도 Claude 2위와 같은 단계가 된다.
+  const shadeCount = new Map<string, number>();
+  const legend = ranked.slice(0, WEEK_MODEL_MAX).map(([k, v]) => {
+    const n = shadeCount.get(v.source) ?? 0;
+    shadeCount.set(v.source, n + 1);
+    return {
+      key: k,
+      tone: n === 0 ? v.source : `${v.source} sh${Math.min(n, SHADE_MAX)}`,
+      label: v.label,
+      tokens: v.tokens,
+    };
+  });
+  const toneOf = new Map(legend.map((l) => [l.key, l.tone]));
+  const restTokens = ranked.slice(WEEK_MODEL_MAX).reduce((s, [, v]) => s + v.tokens, 0);
+  if (restTokens > 0) {
+    legend.push({ key: "rest", tone: "rest", label: "기타", tokens: restTokens });
+  }
+
   return (
-    <div className="weekbars">
-      {days.map((d) => {
-        const total = totalOf(d.totals);
-        return (
-          <div
-            className="weekbar"
-            key={d.date}
-            title={`${d.date} · ${fmtTokens(total)} tokens · ${fmtCost(d.cost, false)}`}
-          >
-            <div className="weekbar-track">
-              {/* 0 인 날도 바닥선이 보이도록 최소 높이를 준다 — 안 그러면 "데이터 없음"으로 읽힌다 */}
-              <div
-                className="weekbar-fill"
-                style={{ height: `${total > 0 ? Math.max(6, (total / max) * 100) : 2}%` }}
-              />
+    <div className="weekbars-wrap">
+      <div className="weekbars">
+        {days.map((d) => {
+          const total = totalOf(d.totals);
+          // 조각도 순위 순으로 쌓아야 날마다 같은 층에 같은 모델이 온다.
+          // 안 쓴 모델은 조각이 없을 뿐 순서는 유지된다.
+          const models = (byDate.get(d.date) ?? []).slice();
+          const segs = legend
+            .map((l) => ({
+              ...l,
+              tokens:
+                l.key === "rest"
+                  ? models.filter((m) => !toneOf.has(keyOf(m))).reduce((s, m) => s + m.tokens, 0)
+                  : models.filter((m) => keyOf(m) === l.key).reduce((s, m) => s + m.tokens, 0),
+            }))
+            .filter((s) => s.tokens > 0);
+          const detail = segs.map((s) => `${s.label} ${fmtTokens(s.tokens)}`).join("\n");
+          return (
+            <div
+              className="weekbar"
+              key={d.date}
+              title={`${d.date} · ${fmtTokens(total)} tokens · ${fmtCost(d.cost, false, currency)}${
+                detail ? `\n${detail}` : ""
+              }`}
+            >
+              <div className="weekbar-track">
+                {/* 0 인 날도 바닥선이 보이도록 최소 높이를 준다 — 안 그러면 "데이터 없음"으로 읽힌다 */}
+                <div
+                  className={`weekbar-fill${segs.length === 0 ? " empty" : ""}`}
+                  style={{ height: `${total > 0 ? Math.max(6, (total / max) * 100) : 2}%` }}
+                >
+                  {/* flex-grow 를 토큰 수로 주면 비율이 그대로 높이가 된다 (「오늘 모델」과 같은 방식) */}
+                  {segs.map((s) => (
+                    <span key={s.key} className={`weekbar-seg ${s.tone}`} style={{ flexGrow: s.tokens }} />
+                  ))}
+                </div>
+              </div>
+              <span className="weekbar-label">{labels[localDate(d.date).getDay()]}</span>
             </div>
-            <span className="weekbar-label">{labels[localDate(d.date).getDay()]}</span>
-          </div>
-        );
-      })}
+          );
+        })}
+      </div>
+      {legend.length > 0 && (
+        <div className="mix-legend">
+          {legend.map((l) => (
+            <span className="mix-item" key={l.key}>
+              <span className={`mix-dot ${l.tone}`} />
+              {l.label} <b>{fmtTokens(l.tokens)}</b>
+            </span>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
