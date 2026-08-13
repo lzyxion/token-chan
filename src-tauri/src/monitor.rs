@@ -11,12 +11,9 @@ use std::time::Duration;
 
 use chrono::{Local, Utc};
 use tauri::{AppHandle, Emitter, Manager};
-use usage_core::claude::ClaudeAdapter;
-use usage_core::codex::CodexAdapter;
-use usage_core::antigravity::AntigravityAdapter;
 use usage_core::live::read_live_state;
 use usage_core::pricing::PriceTable;
-use usage_core::{build_summary, Source, UsageEvent};
+use usage_core::{build_summary, Source, SourceAdapter, TurnWatch, UsageEvent};
 
 use crate::AppState;
 
@@ -90,6 +87,25 @@ pub struct EnabledRoots {
     /// Claude 홈 자체 — 공식 한도(`.claude.json`)가 트랜스크립트 루트가 아니라
     /// 홈에 있어서 따로 들고 간다
     pub claude_homes: Vec<PathBuf>,
+}
+
+/// 소스의 스캔 루트. 스레드들이 소스 불문 루프를 돌 때 이 매핑 하나만 소스를 안다.
+fn roots_for<'a>(r: &'a EnabledRoots, s: Source) -> &'a Vec<PathBuf> {
+    match s {
+        Source::Claude => &r.claude,
+        Source::Codex => &r.codex,
+        Source::Antigravity => &r.antigravity,
+    }
+}
+
+/// 소스 → 어댑터. 구체 타입 이름이 등장하는 유일한 곳 — 소스 추가는 여기와
+/// usage-core 의 계약 가입([`usage_core::SourceAdapter`] 구현)으로 닫힌다.
+fn make_adapter(source: Source, roots: Vec<PathBuf>) -> Box<dyn SourceAdapter> {
+    match source {
+        Source::Claude => Box::new(usage_core::claude::ClaudeAdapter::new(roots)),
+        Source::Codex => Box::new(usage_core::codex::CodexAdapter::new(roots)),
+        Source::Antigravity => Box::new(usage_core::antigravity::AntigravityAdapter::new(roots)),
+    }
 }
 
 fn enabled_roots(app: &AppHandle) -> EnabledRoots {
@@ -342,13 +358,12 @@ fn spawn_plan_thread(app: AppHandle) {
 
 fn spawn_usage_thread(app: AppHandle) {
     std::thread::spawn(move || {
-        // 루트는 설정(추가 스캔 경로)에 따라 달라지므로 첫 회차에 채워진다
-        let mut claude = ClaudeAdapter::new(vec![]);
-        let mut codex = CodexAdapter::new(vec![]);
-        let mut agy = AntigravityAdapter::new(vec![]);
-        let mut claude_roots: Vec<PathBuf> = vec![];
-        let mut codex_roots: Vec<PathBuf> = vec![];
-        let mut agy_roots: Vec<PathBuf> = vec![];
+        // 소스 불문 어댑터 목록 — 이 스레드는 계약([`usage_core::SourceAdapter`])만 안다.
+        // 루트는 설정(추가 스캔 경로)에 따라 달라지므로 첫 회차에 채워진다.
+        let mut adapters: Vec<(Source, Vec<PathBuf>, Box<dyn SourceAdapter>)> =
+            [Source::Claude, Source::Codex, Source::Antigravity]
+                .map(|s| (s, vec![], make_adapter(s, vec![])))
+                .into();
         let mut first = true;
 
         loop {
@@ -361,47 +376,38 @@ fn spawn_usage_thread(app: AppHandle) {
             // 활성 계정이 바뀌면(토글·재검색·경로 추가) 어댑터를 새로 만든다. 파일 캐시가
             // 비워져 다음 스캔은 전체 재파싱이지만, 설정을 건드릴 때만 일어난다.
             let roots = enabled_roots(&app);
-            if first || roots.claude != claude_roots {
-                claude_roots = roots.claude.clone();
-                claude = ClaudeAdapter::new(roots.claude);
-            }
-            if first || roots.codex != codex_roots {
-                codex_roots = roots.codex.clone();
-                codex = CodexAdapter::new(roots.codex);
-            }
-            if first || roots.antigravity != agy_roots {
-                agy_roots = roots.antigravity.clone();
-                agy = AntigravityAdapter::new(roots.antigravity);
+            for (source, cur, adapter) in adapters.iter_mut() {
+                let want = roots_for(&roots, *source);
+                if first || want != cur {
+                    *cur = want.clone();
+                    *adapter = make_adapter(*source, want.clone());
+                }
             }
             first = false;
             let since = Utc::now() - chrono::Duration::days(retention_days as i64);
 
-            let c = claude.scan(since);
-            let x = codex.scan(since);
-            let g = agy.scan(since);
-
-            let mut events: Vec<UsageEvent> = Vec::with_capacity(c.events.len() + x.events.len() + g.events.len());
-            events.extend(c.events);
-            events.extend(x.events);
-            events.extend(g.events);
+            let mut events: Vec<UsageEvent> = vec![];
+            let mut statuses = vec![];
+            for (source, _, adapter) in adapters.iter_mut() {
+                let out = adapter.scan(since);
+                events.extend(out.events);
+                statuses.push((*source, out.status));
+            }
             events.sort_by_key(|e| e.ts);
 
-            let statuses = vec![
-                (Source::Claude, c.status),
-                (Source::Codex, x.status),
-                (Source::Antigravity, g.status),
-            ];
-
-            // Claude 5시간 창의 끝을 트랜스크립트에서 계산해 둔다 — 어댑터가 여기 있어서
-            // 여기서 재고, 쓰는 곳은 플랜 스레드다(굳은 캐시를 대체할 때만).
-            // 창이 닫혀 있으면 None — 다음 창은 다음 메시지가 열어서 미리 알 수 없다.
-            *app.state::<AppState>().claude_reset.lock().unwrap() = claude.session_reset(Utc::now());
-
-            // Codex 공식 한도의 ② rollout 값 — 방금 읽은 파일에서 그냥 나온다.
-            // 플랜 스레드의 ① API 값과 같은 슬롯을 놓고 경쟁하지만, `set_plan` 이
-            // 서버 수신 시각으로 중재하므로 그냥 넣으면 된다.
-            if let Some(p) = codex.plan() {
-                set_plan(&app, p);
+            // 소스별 능력은 계약의 `Option` 메서드로 온다 — 어느 소스가 주는지는 여기서
+            // 특정하지 않는다 (지금은 리셋 계산 = Claude, 파일 한도 = Codex 뿐이다).
+            //
+            // 리셋 계산값을 쓰는 곳은 플랜 스레드다(굳은 캐시를 대체할 때만). 창이 닫혀
+            // 있으면 None — 다음 창은 다음 메시지가 열어서 미리 알 수 없다.
+            *app.state::<AppState>().claude_reset.lock().unwrap() =
+                adapters.iter().find_map(|(_, _, a)| a.session_reset(Utc::now()));
+            // 파일에 실려 온 공식 한도 — 플랜 스레드의 ① API 값과 같은 슬롯을 놓고
+            // 경쟁하지만, `set_plan` 이 서버 수신 시각으로 중재하므로 그냥 넣으면 된다.
+            for (_, _, adapter) in adapters.iter() {
+                if let Some(p) = adapter.plan() {
+                    set_plan(&app, p);
+                }
             }
             let pricing = PriceTable::with_overrides(
                 price_override.as_deref().map(std::path::Path::new),
@@ -415,17 +421,11 @@ fn spawn_usage_thread(app: AppHandle) {
             // 어댑터가 스캔하며 모아 둔 것 중 가장 최근에 움직인 세션을 얹는다.
             // (세 CLI 를 번갈아 쓰면 방금 만진 쪽이 게이지에 뜬다)
             // 어느 벤더를 게이지에 태울지는 프론트가 정하므로 여기서 고르지 않는다
-            summary.contexts = [
-                claude.context(&pricing),
-                codex.context(&pricing),
-                agy.context(&pricing),
-            ]
-            .into_iter()
-            .flatten()
-            .collect();
+            summary.contexts =
+                adapters.iter().filter_map(|(_, _, a)| a.context(&pricing)).collect();
             // 최근 세션 — 소스별 목록을 합쳐 최근순 상위 N개만
             summary.sessions = usage_core::session::merge(
-                [claude.sessions(), codex.sessions(), agy.sessions()].concat(),
+                adapters.iter().flat_map(|(_, _, a)| a.sessions()).collect(),
                 RECENT_SESSIONS,
             );
 
@@ -443,10 +443,13 @@ fn spawn_usage_thread(app: AppHandle) {
 fn spawn_live_thread(app: AppHandle) {
     std::thread::spawn(move || {
         let mut prev = String::new();
-        // 턴 추적 — 파일에 적힌 턴 경계를 직접 읽는다. 소스마다 파일이 달라
-        // 추적기도 따로지만 결과(`TurnPoll`)는 같은 모양이다.
-        let mut turns = usage_core::codex::TurnWatcher::default();
-        let mut agy_turns = usage_core::antigravity::TurnWatcher::default();
+        // 턴 추적 — 파일에 적힌 턴 경계를 직접 읽는다. 소스마다 파일이 달라 추적기도
+        // 따로지만 계약([`usage_core::TurnWatch`])이 같아 목록으로 돈다.
+        // Claude 가 여기 없는 건 방식이 달라서다 — 레지스트리 status 직독 (아래).
+        let mut watchers: Vec<(Source, Box<dyn TurnWatch>)> = vec![
+            (Source::Codex, Box::new(usage_core::codex::TurnWatcher::default())),
+            (Source::Antigravity, Box::new(usage_core::antigravity::TurnWatcher::default())),
+        ];
         // Claude 세션의 직전 회차 status. 저쪽은 턴 감시기가 아니라 레지스트리를 읽으므로
         // 완료를 여기서 가려낸다 — 세 소스를 프론트에 **같은 모양**으로 내보내기 위한 변환이고,
         // 소스별 지식은 프론트가 아니라 여기 남는다.
@@ -481,27 +484,22 @@ fn spawn_live_thread(app: AppHandle) {
 
             // Codex·Antigravity 는 턴 경계를 파일에서 **직접 읽는다**. 유도가 아니라
             // 사실이라 상태 이름도 Claude 와 같은 `busy` 를 쓴다.
-            let poll = turns.poll(&roots.codex, now);
-            let agy_poll = agy_turns.poll(&roots.antigravity, now);
-            let turn_sessions = [
-                (Source::Codex, &poll.running, &poll.completed),
-                (Source::Antigravity, &agy_poll.running, &agy_poll.completed),
-            ];
-            for (source, running, completed) in turn_sessions {
-                for id in running {
+            for (source, watcher) in watchers.iter_mut() {
+                let poll = watcher.poll(roots_for(&roots, *source), now);
+                for id in &poll.running {
                     live.busy = true;
                     live.busy_count += 1;
                     live.sessions.push(usage_core::live::LiveSessionView {
-                        source,
+                        source: *source,
                         id: id.clone(),
                         name: id.chars().take(8).collect(),
                         status: "busy".into(),
                         cwd: String::new(),
                     });
                 }
-                for id in completed {
+                for id in &poll.completed {
                     live.completed
-                        .push(usage_core::live::CompletedSession { source, id: id.clone() });
+                        .push(usage_core::live::CompletedSession { source: *source, id: id.clone() });
                 }
             }
 

@@ -4,6 +4,7 @@
 //! `cargo test -p usage-core`로 전체 검증 가능.
 
 pub mod accounts;
+pub mod adapter;
 pub mod aggregate;
 pub mod antigravity;
 pub mod blocks;
@@ -18,6 +19,7 @@ pub mod protobuf;
 pub mod roots;
 pub mod session;
 
+pub use adapter::{SourceAdapter, TurnPoll, TurnWatch};
 pub use aggregate::{build_summary, Summary};
 pub use context::ContextState;
 pub use model::{ScanOutcome, Source, SourceStatus, UsageEvent};
