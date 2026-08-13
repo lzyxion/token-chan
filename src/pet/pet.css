@@ -141,6 +141,73 @@
   filter: none;
 }
 
+/* ── RPG HP 바 모양 (설정 → 게이지 모양 → HP 바) ──
+   채움이 "남은 양"이다 — 가득 = 리셋 직후, 빈 바 = 소진. 색 인라인은 링과 같은
+   위험 단계(사용률 기준)라 바닥난 HP 가 빨갛게 물들고, 여기의 그라디언트는
+   색 위에 얹히는 유리광(위쪽이 밝은 그 광)만 담당한다. */
+.gauge-bar {
+  position: relative; /* 25% 눈금(::after)의 기준 */
+  flex: none;
+  width: 46px;
+  height: 9px;
+  border-radius: 3px;
+  /* RPG HP 바의 그 기울어진 틀 — 안쪽 채움·눈금도 같이 기울어진다 */
+  transform: skewX(-14deg);
+  margin: 0 2px; /* 기울어진 모서리가 이웃(로고·라벨)에 닿지 않게 */
+  background: rgba(10, 12, 16, 0.78);
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  box-shadow:
+    inset 0 1px 2px rgba(0, 0, 0, 0.65),
+    0 1px 3px rgba(0, 0, 0, 0.45);
+  overflow: hidden;
+}
+/* 25% 마다 구분선 — 채움 위에 얹혀 남은 칸 수를 셀 수 있게 한다 */
+.gauge-bar::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: repeating-linear-gradient(
+    90deg,
+    transparent,
+    transparent calc(25% - 1px),
+    rgba(0, 0, 0, 0.55) calc(25% - 1px),
+    rgba(0, 0, 0, 0.55) 25%
+  );
+}
+.gauge-bar.empty {
+  background: none;
+  border-style: dashed;
+  border-color: rgba(255, 255, 255, 0.22);
+  box-shadow: none;
+}
+.gauge-bar.empty::after {
+  content: none; /* 값이 없는 바에 눈금까지 그리면 0%처럼 읽힌다 */
+}
+.gauge-bar-fill {
+  height: 100%;
+  border-radius: 2px 1px 1px 2px;
+  transition: width 600ms ease;
+  background-image: linear-gradient(
+    rgba(255, 255, 255, 0.4),
+    rgba(255, 255, 255, 0.1) 45%,
+    rgba(0, 0, 0, 0.18) 55%,
+    rgba(0, 0, 0, 0.05)
+  );
+}
+/* 위험 구간(사용률 85%↑) — 낮은 HP 의 그 깜빡임 */
+.gauge-bar-fill.crit {
+  animation: gauge-bar-blink 1.1s ease-in-out infinite;
+}
+@keyframes gauge-bar-blink {
+  0%,
+  100% {
+    filter: brightness(1);
+  }
+  50% {
+    filter: brightness(1.7);
+  }
+}
+
 /* ── 벤더 아이콘 ──
    평상시 라벨이 안 보이므로(호버 전용) 지금 어느 CLI 를 보고 있는지 알릴 수단이
    이것뿐이다. 링 색은 이미 소진율 단계에 쓰고 있어 벤더를 실을 수 없다.

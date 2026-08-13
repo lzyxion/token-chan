@@ -240,6 +240,8 @@ export interface AppSettings {
   /** 게이지 라벨(벤더·수치·리셋) 상시 표시 — 끄면 호버할 때만 */
   gaugeLabels: boolean;
   gaugeSide: GaugeSide;
+  /** 게이지 모양 — ring(도넛) | bar(RPG HP 바: 채움이 남은 양) */
+  gaugeStyle: GaugeStyle;
   /** 상황 키("enter.working"·"poke"·"resetNotify" 등) → 사용자 문구 목록 (비면 내장 기본).
    *  캐릭터별 말투는 여기가 아니라 팩 폴더의 `speech.json` (`get_character_speech`) */
   speechLines: Record<string, string[]>;
@@ -265,6 +267,9 @@ export interface PackConfig {
 
 /** 도넛 게이지 위치 — off면 표시하지 않음 */
 export type GaugeSide = "right" | "left" | "off";
+
+/** 게이지 모양 — 도넛 링 또는 RPG HP 바 */
+export type GaugeStyle = "ring" | "bar";
 
 /** 모델 접두사(콤마 구분) → 캐릭터 팩 매핑 규칙 (최장 접두사 우선) */
 export interface CharacterRule {
