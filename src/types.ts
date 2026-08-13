@@ -34,6 +34,19 @@ export interface DailyRow {
   cost: number;
 }
 
+/** 하루에 모델 하나가 쓴 양 (주간 막대를 모델로 쌓기 위한 것) */
+export interface DayModel {
+  model: string;
+  source: Source;
+  tokens: number;
+}
+
+export interface DailyModels {
+  date: string;
+  /** 토큰 많은 순. 상위 N 추리기는 프론트 몫 — 주 전체를 놓고 골라야 범례가 고정된다 */
+  models: DayModel[];
+}
+
 /** 가장 최근에 움직인 세션의 컨텍스트 창 사용량 (Claude·Codex 지원) */
 export interface ContextState {
   source: Source;
@@ -81,6 +94,8 @@ export interface Summary {
   sources: SourceSummary[];
   models_today: ModelRow[];
   daily: DailyRow[];
+  /** 최근 7일의 날짜별 모델 내역 — `daily` 의 마지막 7개와 날짜가 맞물린다 */
+  week_models: DailyModels[];
   /** 스캔 범위에서 가장 오래된 이벤트 — 잔디의 "기록 없음" 경계 */
   first_event_ts: string | null;
   last_event_ts: string | null;
@@ -96,6 +111,8 @@ export interface Summary {
 
 export interface LiveSessionView {
   source: Source;
+  /** 세션 id — `SessionRow.id` 와 같은 값. 못 알아냈으면 빈 문자열 */
+  id: string;
   name: string;
   /** `busy`/`idle` 은 세션 레지스트리의 정확한 값, `active` 는 파일 신선도로 유도한 값 */
   status: string;
@@ -143,7 +160,7 @@ export interface Account {
   key: string;
   /** 사람이 읽는 이름 — 이메일이 있으면 이메일, 없으면 계정 id 앞자리 */
   label: string;
-  /** 로그인 방식 — 세 소스 공통 (예: "Claude 계정 로그인", "ChatGPT 로그인") */
+  /** 로그인 방식 — 세 소스 모두 `{서비스} 로그인` 꼴 (예: "Claude 로그인", "ChatGPT 로그인") */
   detail: string;
   /** 플랜 이름 (예: "Claude Max 5x"). 계정 파일에서 알 수 있는 소스만 —
    *  Codex 는 비어 있고 `PlanUsage.detail` 로 온다 */
@@ -205,6 +222,10 @@ export interface AppSettings {
   extraAntigravityHomes: string[];
   /** 게이지에 태울 벤더 — 링이 3개뿐이라 한 벤더만 보여준다 */
   gaugeVendor: "auto" | Source;
+  /** 비용 표기 통화. 기본 `usd` — 단가표가 달러라 그게 곱하지 않은 값이다 */
+  currency: "usd" | "krw";
+  /** 1 USD = ? 원 (직접 입력 — 앱이 네트워크를 쓰지 않는다) */
+  usdToKrw: number;
 }
 
 /** 팩별 동작 설정 (`characters/<팩>/pack.json`) — 없으면 모든 상태 사용 */

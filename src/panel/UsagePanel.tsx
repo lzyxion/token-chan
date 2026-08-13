@@ -4,7 +4,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import ResizeGrips from "../components/ResizeGrips";
 import VendorIcon from "../components/VendorIcon";
 import { ModelMix, recordedDays, UsageHeatmap, WeekBars } from "./UsageCharts";
-import { useLive, usePlans, useSummary } from "../hooks/useUsage";
+import { useCurrency, useLive, usePlans, useSummary } from "../hooks/useUsage";
 import {
   fmtAgo,
   fmtCost,
@@ -13,6 +13,7 @@ import {
   shortModel,
   SOURCE_LABEL,
   totalOf,
+  type Currency,
 } from "../format";
 import type { ContextState, PlanMeter, PlanUsage, SourceStatus, SourceSummary } from "../types";
 import "./panel.css";
@@ -72,12 +73,14 @@ function VendorCard({
   plan,
   active,
   busy,
+  currency,
 }: {
   s: SourceSummary;
   context: ContextState | null;
   plan: PlanUsage | null;
   active: boolean;
   busy: boolean;
+  currency: Currency;
 }) {
   const total = totalOf(s.today);
   const chip = statusChip(s.status);
@@ -95,7 +98,7 @@ function VendorCard({
         {busy && <span className="chip busy-chip">작업 중</span>}
         {chip}
         <span className="vendor-today">
-          <b>{fmtTokens(total)}</b> {fmtCost(s.today_cost, s.cost_partial)}
+          <b>{fmtTokens(total)}</b> {fmtCost(s.today_cost, s.cost_partial, currency)}
         </span>
       </div>
       {pct != null && context && (
@@ -135,6 +138,7 @@ export default function UsagePanel() {
   const summary = useSummary();
   const live = useLive();
   const plans = usePlans();
+  const currency = useCurrency();
   const [page, setPage] = useState(0);
   const bodyRef = useRef<HTMLDivElement | null>(null);
 
@@ -193,10 +197,12 @@ export default function UsagePanel() {
   // 구간이면 "84일에 42.3M" 으로 읽혀 일평균을 잘못 계산하게 된다 (잔디 범례와 같은 값).
   const recorded = recordedDays(summary.daily, summary.first_event_ts);
 
-  // 지금 돌고 있는 벤더들 (busy 는 세션 레지스트리, active 는 파일 신선도로 유도한 값)
-  const busySources = new Set(
-    live.sessions.filter((s) => s.status === "busy" || s.status === "active").map((s) => s.source),
-  );
+  // 지금 돌고 있는 세션들 (busy 는 세션 레지스트리, active 는 파일 신선도로 유도한 값)
+  const running = live.sessions.filter((s) => s.status === "busy" || s.status === "active");
+  const busySources = new Set(running.map((s) => s.source));
+  // 최근 세션 목록에서 **그 줄**만 짚기 위한 키. id 를 못 알아낸 세션은 넣지 않는다 —
+  // 빈 문자열을 넣으면 id 가 빈 다른 줄과 잘못 맞물린다.
+  const runningKeys = new Set(running.filter((s) => s.id).map((s) => `${s.source}:${s.id}`));
   // 게이지가 보여주는 벤더와 같은 기준 — 작업 중 우선, 없으면 마지막으로 움직인 세션.
   // 게이지와 달리 여기선 깜빡임이 문제되지 않아 히스테리시스를 걸지 않는다.
   const latestContext = summary.contexts.length
@@ -256,6 +262,7 @@ export default function UsagePanel() {
                     plan={plans.find((p) => p.source === s.source) ?? null}
                     active={s.source === activeSource}
                     busy={busySources.has(s.source)}
+                    currency={currency}
                   />
                 ))}
             </div>
@@ -272,7 +279,7 @@ export default function UsagePanel() {
                   <span className="total-label">오늘</span>
                   <span className="total-tokens">{fmtTokens(todayTotal)}</span>
                   <span className="total-cost">
-                    {fmtCost(summary.today_cost, summary.cost_partial)}
+                    {fmtCost(summary.today_cost, summary.cost_partial, currency)}
                   </span>
                 </div>
                 <div className="total-item">
@@ -280,7 +287,7 @@ export default function UsagePanel() {
                       기록 전 구간까지 포함한 숫자로 나누면 일평균이 어긋난다 */}
                   <span className="total-label">{recorded}일</span>
                   <span className="total-tokens">{fmtTokens(periodTotal)}</span>
-                  <span className="total-cost">{fmtCost(periodCost)}</span>
+                  <span className="total-cost">{fmtCost(periodCost, false, currency)}</span>
                 </div>
               </div>
               {/* 어느 기간의 내역인지 앞에 못 박는다 (위 두 숫자와 헷갈리지 않게) */}
@@ -292,12 +299,12 @@ export default function UsagePanel() {
 
               <div className="chart-block">
                 <div className="chart-title">일별 사용량</div>
-                <UsageHeatmap daily={summary.daily} firstEvent={summary.first_event_ts} />
+                <UsageHeatmap daily={summary.daily} firstEvent={summary.first_event_ts} currency={currency} />
               </div>
 
               <div className="chart-block">
                 <div className="chart-title">최근 7일</div>
-                <WeekBars daily={summary.daily} />
+                <WeekBars daily={summary.daily} weekModels={summary.week_models ?? []} currency={currency} />
               </div>
 
               {topModels.length > 0 && (
@@ -316,10 +323,12 @@ export default function UsagePanel() {
               ) : (
                 summary.sessions.map((r) => (
                   <div className="session-row" key={`${r.source}:${r.id}`} title={r.cwd || r.id}>
+                    {/* 벤더가 아니라 **이 세션**이 도는지로 판단한다 — 벤더로 보면
+                        한 세션만 돌아도 그 벤더의 지난 세션까지 전부 깜빡였다 */}
                     <VendorIcon
                       source={r.source}
                       size={12}
-                      className={busySources.has(r.source) ? "busy" : ""}
+                      className={runningKeys.has(`${r.source}:${r.id}`) ? "busy" : ""}
                     />
                     <span className="session-label">{r.label}</span>
                     <span className="session-ago">{fmtAgo(r.at)}</span>

@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { useLive, usePlans, useSummary } from "../hooks/useUsage";
+import { useCurrency, useLive, usePlans, useSummary } from "../hooks/useUsage";
 import { useActiveVendor } from "../hooks/useActiveVendor";
 import VendorIcon from "../components/VendorIcon";
 import {
@@ -75,6 +75,7 @@ export default function Pet() {
   const live = useLive();
   const summary = useSummary();
   const plans = usePlans();
+  const currency = useCurrency();
   const [gaugeVendor, setGaugeVendor] = useState<"auto" | Source>("auto");
   // 게이지는 링이 3개뿐이라 벤더 하나만 태운다. 어느 벤더인지는 벤더 점으로 밝힌다.
   const active = useActiveVendor(summary, live, plans, gaugeVendor);
@@ -391,7 +392,7 @@ export default function Pet() {
     const resetAt = resets ? new Date(resets) : null;
     return {
       오늘토큰: summary ? fmtTokens(totalOf(summary.today)) : null,
-      오늘비용: summary ? fmtCost(summary.today_cost, summary.cost_partial) : null,
+      오늘비용: summary ? fmtCost(summary.today_cost, summary.cost_partial, currency) : null,
       세션: sessionPct != null ? String(sessionPct) : null,
       주간: weeklyPct != null ? String(weeklyPct) : null,
       컨텍스트: active?.context ? String(Math.round(active.context.used_pct)) : null,

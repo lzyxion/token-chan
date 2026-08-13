@@ -235,8 +235,49 @@
 }
 .weekbar-fill {
   width: 100%;
-  background: linear-gradient(180deg, #35d07f, #27a866);
   border-radius: 3px;
+  overflow: hidden;
+  /* column-reverse 로 1위 모델이 **바닥**에 온다 — 날마다 같은 층에 같은 모델이 있어야
+     막대끼리 비교가 된다 (위에서 쌓으면 그날 안 쓴 모델만큼 층이 밀린다) */
+  display: flex;
+  flex-direction: column-reverse;
+}
+/* 기록이 없는 날의 바닥선 — 모델 조각이 하나도 없을 때만 */
+.weekbar-fill.empty {
+  background: rgba(255, 255, 255, 0.14);
+}
+.weekbar-seg {
+  width: 100%;
+  /* 비중이 아주 작아도 사라지지는 않게 (조각이 없으면 범례가 거짓말이 된다) */
+  min-height: 2px;
+  position: relative;
+}
+
+/* 같은 벤더 안에서 모델을 가르는 밝기 단계.
+   색상은 벤더가 갖고(아래 .mix-seg 색을 그대로 쓴다) 밝기만 모델이 갖는다. 흰 막을
+   덮는 방식이라 벤더가 몇이든 규칙은 이 둘뿐이고, 「오늘 모델」과 색이 어긋나지 않는다. */
+.weekbar-seg.sh1::after,
+.weekbar-seg.sh2::after,
+.mix-dot.sh1::after,
+.mix-dot.sh2::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+}
+.weekbar-seg.sh1::after,
+.mix-dot.sh1::after {
+  background: rgba(255, 255, 255, 0.3);
+}
+.weekbar-seg.sh2::after,
+.mix-dot.sh2::after {
+  background: rgba(255, 255, 255, 0.55);
+}
+
+.weekbars-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
 }
 .weekbar-label {
   text-align: center;
@@ -539,20 +580,26 @@
   /* 비중이 아주 작아도 사라지지는 않게 (조각이 없으면 범례가 거짓말이 된다) */
   min-width: 4px;
 }
+/* 벤더 색 — 「오늘 모델」과 주간 막대가 **같은 값을 공유한다**.
+   한 페이지에 두 그래프가 있어 색이 갈리면 같은 색이 서로 다른 뜻이 된다. */
 .mix-seg.claude,
-.mix-dot.claude {
+.mix-dot.claude,
+.weekbar-seg.claude {
   background: #c07a5e;
 }
 .mix-seg.codex,
-.mix-dot.codex {
+.mix-dot.codex,
+.weekbar-seg.codex {
   background: #3c8f8f;
 }
 .mix-seg.antigravity,
-.mix-dot.antigravity {
+.mix-dot.antigravity,
+.weekbar-seg.antigravity {
   background: #5a7fc4;
 }
 .mix-seg.rest,
-.mix-dot.rest {
+.mix-dot.rest,
+.weekbar-seg.rest {
   background: #5b6274;
 }
 .mix-legend {
@@ -575,4 +622,6 @@
   width: 6px;
   height: 6px;
   border-radius: 2px;
+  /* 주간 막대 범례가 밝기 막(.sh1/.sh2)을 ::after 로 얹는다 */
+  position: relative;
 }

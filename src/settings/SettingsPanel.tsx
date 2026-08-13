@@ -321,6 +321,43 @@ export default function SettingsPanel() {
         {tab === "general" && (
           <>
             <div className="settings-group">
+              <div className="settings-label">비용 표기</div>
+              <div className="settings-row">
+                <select
+                  className="settings-select"
+                  value={s.currency ?? "usd"}
+                  onChange={(e) =>
+                    update({ currency: e.currentTarget.value as AppSettings["currency"] })
+                  }
+                >
+                  <option value="usd">달러 · $</option>
+                  <option value="krw">원 · ₩</option>
+                </select>
+              </div>
+              {/* 환율은 원 표기일 때만 물어본다 — 달러로 두면 쓰이지 않는 값이다 */}
+              {s.currency === "krw" && (
+                <>
+                  <div className="settings-row">
+                    <span className="settings-sublabel">1 USD =</span>
+                    <input
+                      className="settings-input rate-input"
+                      type="number"
+                      min={1}
+                      max={100000}
+                      step={10}
+                      value={s.usdToKrw || 1400}
+                      onChange={(e) =>
+                        update({ usdToKrw: parseFloat(e.currentTarget.value) || 0 })
+                      }
+                    />
+                    <span className="settings-sublabel">원</span>
+                  </div>
+                  <div className="settings-hint">환율은 직접 넣습니다.</div>
+                </>
+              )}
+            </div>
+
+            <div className="settings-group">
               <div className="settings-label">
                 위험 한도 · 세션{" "}
                 <b className="warn-b">{Math.round(s.alertThreshold * 100)}%</b>

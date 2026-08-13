@@ -222,7 +222,7 @@ pnpm tauri build           # 패키징 (msi/dmg는 GitHub Actions 매트릭스 �
 ```
 연결된 계정                                   [다시 검색]
  ☑ ⬤ you@example.com           [Claude Max 5x]
-      Claude 계정 로그인
+      Claude 로그인
       C:\Users\you                              [표준]
       \\wsl.localhost\Ubuntu\home\you           [표준]
  ☑ ⬤ you@example.com                    [Plus]
@@ -235,7 +235,7 @@ pnpm tauri build           # 패키징 (msi/dmg는 GitHub Actions 매트릭스 �
 
 | | 플랜 (칩) | 로그인 방식 |
 |---|---|---|
-| Claude | `.claude.json` → `oauthAccount.organizationRateLimitTier` (없으면 `organizationType`) → **Claude Max 5x** | `oauthAccount` 가 있다는 것 자체 → **Claude 계정 로그인** |
+| Claude | `.claude.json` → `oauthAccount.organizationRateLimitTier` (없으면 `organizationType`) → **Claude Max 5x** | `oauthAccount` 가 있다는 것 자체 → **Claude 로그인** |
 | Codex | rollout `rate_limits.plan_type` → **Plus** | `auth.json` 의 `auth_mode` → **ChatGPT 로그인** |
 | AGY | 없음 (한도 자체를 제공하지 않음) | 로그의 `authMethod` → **Google 로그인** |
 

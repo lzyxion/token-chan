@@ -415,3 +415,11 @@
 .home-row {
   padding-left: 18px;
 }
+
+/* 환율 입력 — 숫자 네다섯 자리라 텍스트 칸 전체 폭이 필요 없다.
+   flex:1 인 .settings-input 을 그대로 두면 "1 USD =" 와 "원" 이 양끝으로 밀린다. */
+.rate-input.rate-input {
+  flex: 0 0 auto;
+  width: 84px;
+  text-align: right;
+}
