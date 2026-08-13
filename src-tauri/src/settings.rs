@@ -75,6 +75,8 @@ pub struct Settings {
     pub gauge_labels: bool,
     /// 도넛 게이지 위치 — "right" | "left" | "off"
     pub gauge_side: String,
+    /// 게이지 모양 — "ring"(도넛) | "bar"(RPG HP 바 — 채움이 남은 양)
+    pub gauge_style: String,
     /// 상황별 사용자 문구 — 키("enter.working"·"poke"·"resetNotify" 등) → 문구 목록.
     /// 비어 있으면 내장 기본 문구. `{변수}` 는 표시 시점에 값으로 치환된다.
     /// 캐릭터별 말투는 여기가 아니라 팩 폴더의 `speech.json` 에 있다 (`pack_speech`).
@@ -104,8 +106,9 @@ pub struct Settings {
     pub usd_to_krw: f64,
     /// 게이지에 태울 벤더: `auto` | `claude` | `codex` | `antigravity`.
     ///
-    /// 게이지는 링 3개뿐이라 벤더 하나만 보여준다. `auto` 는 지금 작업 중인 쪽을
-    /// 따라가지만, 한 벤더만 지켜보고 싶은 경우를 위해 고정할 수 있게 둔다.
+    /// 게이지는 링 3개뿐이라 벤더 하나만 태운다. `auto` 는 마지막으로 쓴 쪽을 따라가고
+    /// 함께 도는 나머지 벤더는 로고로만 표시된다 — 한 벤더만 지켜보고 싶은 경우를
+    /// 위해 고정할 수 있게 둔다.
     pub gauge_vendor: String,
     /// 계정별 집계 포함 여부의 **사용자 지정값**만 담는다 (`Account::setting_key()` → on/off).
     ///
@@ -145,6 +148,7 @@ impl Default for Settings {
             disabled_states: vec![],
             gauge_labels: false,
             gauge_side: "right".into(),
+            gauge_style: "ring".into(),
             speech_lines: Default::default(),
             extra_claude_homes: vec![],
             extra_codex_homes: vec![],

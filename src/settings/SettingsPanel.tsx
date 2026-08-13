@@ -587,7 +587,7 @@ export default function SettingsPanel() {
         {tab === "general" && (
           <>
             <div className="settings-group">
-              <div className="settings-label">소진율 도넛 게이지</div>
+              <div className="settings-label">소진율 게이지</div>
               <div className="settings-row">
                 <select
                   className="settings-select"
@@ -603,6 +603,27 @@ export default function SettingsPanel() {
               </div>
               {s.gaugeSide !== "off" && (
                 <div className="settings-row">
+                  <span className="settings-sublabel">모양</span>
+                  <select
+                    className="settings-select"
+                    value={s.gaugeStyle ?? "ring"}
+                    onChange={(e) =>
+                      update({ gaugeStyle: e.currentTarget.value as AppSettings["gaugeStyle"] })
+                    }
+                  >
+                    <option value="ring">도넛 링</option>
+                    <option value="bar">HP 바 (RPG)</option>
+                  </select>
+                </div>
+              )}
+              {/* HP 바는 채움이 "남은 양"이다 — 링(사용률 채움)과 반대라 여기서 못 박는다 */}
+              {s.gaugeSide !== "off" && s.gaugeStyle === "bar" && (
+                <div className="settings-hint">
+                  바는 남은 양입니다 — 가득 = 리셋 직후, 빈 바 = 소진
+                </div>
+              )}
+              {s.gaugeSide !== "off" && (
+                <div className="settings-row">
                   <span className="settings-sublabel">보여줄 벤더</span>
                   <select
                     className="settings-select"
@@ -611,7 +632,7 @@ export default function SettingsPanel() {
                       update({ gaugeVendor: e.currentTarget.value as AppSettings["gaugeVendor"] })
                     }
                   >
-                    <option value="auto">자동 (작업 중인 쪽)</option>
+                    <option value="auto">자동 (작업 중인 벤더)</option>
                     <option value="claude">Claude 고정</option>
                     <option value="codex">Codex 고정</option>
                     <option value="antigravity">Antigravity 고정</option>

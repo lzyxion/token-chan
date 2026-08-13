@@ -21,6 +21,7 @@ import type {
   CharacterImages,
   CharacterRule,
   GaugeSide,
+  GaugeStyle,
   LiveSessionView,
   PackConfig,
   PetState,
@@ -102,6 +103,7 @@ export default function Pet() {
   const [disabledStates, setDisabledStates] = useState<string[]>([]);
   const [gaugeLabels, setGaugeLabels] = useState(false);
   const [gaugeSide, setGaugeSide] = useState<GaugeSide>("right");
+  const [gaugeStyle, setGaugeStyle] = useState<GaugeStyle>("ring");
   const [speechLines, setSpeechLines] = useState<Record<string, string[]>>({});
   /** 활성 팩의 speech.json (없으면 null → 기본 문구) — 대사는 캐릭터의 속성 */
   const [packSpeech, setPackSpeech] = useState<Record<string, string[]> | null>(null);
@@ -129,6 +131,7 @@ export default function Pet() {
       setDisabledStates(s.disabledStates ?? []);
       setGaugeLabels(s.gaugeLabels ?? false);
       setGaugeSide(s.gaugeSide ?? "right");
+      setGaugeStyle(s.gaugeStyle === "bar" ? "bar" : "ring");
       setGaugeVendor(s.gaugeVendor ?? "auto");
       setSpeechLines(s.speechLines ?? {});
       // 설정 변경 시 팩 파일이 바뀌었을 수 있으므로 이미지 캐시 무효화
@@ -376,6 +379,7 @@ export default function Pet() {
     packImages,
     state,
     gaugeSide,
+    gaugeStyle,
     sessionPct != null,
     weeklyPct != null,
     active?.source,
@@ -619,21 +623,37 @@ export default function Pet() {
   const contextPct = ctx ? Math.round(ctx.used_pct) : null;
 
   /**
-   * 링 한 줄. `pct`가 null 이면 **값이 없다**는 뜻이라 0%처럼 보이면 안 된다 —
+   * 게이지 한 줄. `pct`가 null 이면 **값이 없다**는 뜻이라 0%처럼 보이면 안 된다 —
    * 점선 테두리로 "아직 모름"과 "0%"를 구분한다 (컨텍스트가 아직 안 잡힌 경우).
+   *
+   * 모양이 둘이다 (설정 → 게이지 모양):
+   *  · ring — 도넛. 채움이 **사용률**이다 (패널 막대와 같은 방향)
+   *  · bar — RPG HP 바. 채움이 **남은 양**이다 (가득 = 리셋 직후, 빈 바 = 소진).
+   *    색은 링과 같은 위험 단계(사용률 기준)를 쓰므로 바닥난 HP 가 빨갛게 물든다.
    */
   const ringRow = (key: string, pct: number | null, label: React.ReactNode) => (
     <div className="gauge-row" key={key}>
-      <div
-        className={`gauge-ring ${pct == null ? "empty" : ""}`}
-        style={
-          pct == null
-            ? undefined
-            : {
-                background: `conic-gradient(${ringColor(pct)} ${pct}%, rgba(255,255,255,0.14) 0)`,
-              }
-        }
-      />
+      {gaugeStyle === "bar" ? (
+        <div className={`gauge-bar ${pct == null ? "empty" : ""}`}>
+          {pct != null && (
+            <div
+              className={`gauge-bar-fill${pct >= 85 ? " crit" : ""}`}
+              style={{ width: `${100 - pct}%`, backgroundColor: ringColor(pct) }}
+            />
+          )}
+        </div>
+      ) : (
+        <div
+          className={`gauge-ring ${pct == null ? "empty" : ""}`}
+          style={
+            pct == null
+              ? undefined
+              : {
+                  background: `conic-gradient(${ringColor(pct)} ${pct}%, rgba(255,255,255,0.14) 0)`,
+                }
+          }
+        />
+      )}
       <span className="gauge-label">{label}</span>
     </div>
   );
