@@ -10,6 +10,7 @@ import {
   fmtDuration,
   fmtMinutes,
   fmtTokens,
+  resetIsStale,
   shortModel,
   SOURCE_LABEL,
   SOURCE_SHORT,
@@ -223,14 +224,20 @@ export default function Pet() {
   // 시각으로 주므로 문자열을 파싱하지 않는다.
   const resets = plan?.meters?.[0]?.resets_at ?? null;
 
-  // 세션 라벨·대사 변수용 리셋 카운트다운 (summary 갱신 주기(10s)에 맞춰 재계산)
-  const resetRemainMin = useMemo(() => {
+  /** 아직 오지 않은 리셋 시각만. 이미 지났으면 낡은 캐시라 null (`resetIsStale` 참고) */
+  const resetAt = useMemo(() => {
     if (!resets) return null;
     const d = new Date(resets);
-    if (Number.isNaN(d.getTime())) return null;
-    return Math.max(0, Math.round((d.getTime() - Date.now()) / 60000));
+    if (Number.isNaN(d.getTime()) || resetIsStale(d)) return null;
+    return d;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [resets, summary?.generated_at]);
+
+  // 세션 라벨·대사 변수용 리셋 카운트다운 (summary 갱신 주기(10s)에 맞춰 재계산)
+  const resetRemainMin = useMemo(
+    () => (resetAt ? Math.max(0, Math.round((resetAt.getTime() - Date.now()) / 60000)) : null),
+    [resetAt],
+  );
 
   // 블록 초기화 감지: 공식 리셋 시각이 바뀌면 새 창이 열린 것 → 5분간 refreshed
   const [refreshedUntil, setRefreshedUntil] = useState(0);
@@ -423,7 +430,6 @@ export default function Pet() {
   // 전역 상태로는 못 구하는 것들이고, 겹치는 이름은 사건 쪽이 이긴다
   // (`{벤더}` 는 평소엔 게이지가 보는 벤더지만 완료 대사에선 **끝난 세션의** 벤더다).
   const speechVars = (extra?: Record<string, string | null>): Record<string, string | null> => {
-    const resetAt = resets ? new Date(resets) : null;
     return {
       오늘토큰: summary ? fmtTokens(totalOf(summary.today)) : null,
       오늘비용: summary ? fmtCost(summary.today_cost, summary.cost_partial, currency) : null,
@@ -647,8 +653,11 @@ export default function Pet() {
       m.used_pct,
       <>
         {m.label} <b>{m.used_pct}%</b>
-        {/* 리셋은 첫 미터(가장 짧은 창)의 것 — 그 창이 리셋되는 시각이라 같은 줄에 얹는다 */}
-        {slot === 0 && resetRemainMin != null ? <> · 리셋 {fmtMinutes(resetRemainMin)}</> : null}
+        {/* 리셋은 첫 미터(가장 짧은 창)의 것 — 그 창이 리셋되는 시각이라 같은 줄에 얹는다.
+            `~` 는 공식 캐시가 굳어 백엔드가 계산한 값이라는 표시 (패널 툴팁에 설명이 있다) */}
+        {slot === 0 && resetRemainMin != null ? (
+          <> · 리셋 {m.resets_computed ? "~" : ""}{fmtMinutes(resetRemainMin)}</>
+        ) : null}
       </>,
     );
   };

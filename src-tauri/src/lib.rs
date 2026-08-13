@@ -30,6 +30,11 @@ pub struct AppState {
     /// 소스별 공식 한도. Claude 는 CLI 실행으로, Codex 는 rollout 파싱으로 채워지므로
     /// 서로 다른 스레드가 각자 자기 소스만 갱신한다 (`monitor::set_plan`).
     pub plan: Mutex<Vec<usage_core::plan::PlanUsage>>,
+    /// Claude 5시간 창의 종료 시각을 **트랜스크립트에서 계산한 값** (`usage_core::blocks`).
+    ///
+    /// 사용량 스레드(10초)가 채우고 플랜 스레드(30초)가 읽는다 — 어댑터가 저쪽에 있어서다.
+    /// 공식 캐시가 굳어 리셋이 과거로 남을 때만 쓰인다.
+    pub claude_reset: Mutex<Option<chrono::DateTime<chrono::Utc>>>,
     pub settings: Mutex<settings::Settings>,
     /// 발견된 계정 목록 (설치본 포함). 마커 스캔이 수백 ms 들므로 캐시하고,
     /// 시작 시 1회 + 사용자가 "다시 검색" 할 때만 갱신한다.
@@ -89,6 +94,7 @@ pub fn run() {
             summary: Mutex::new(None),
             live: Mutex::new(usage_core::live::LiveState::default()),
             plan: Mutex::new(vec![]),
+            claude_reset: Mutex::new(None),
             settings: Mutex::new(loaded.clone()),
             accounts: Mutex::new(vec![]),
             headroom: Mutex::new(0.0),

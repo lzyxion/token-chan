@@ -13,6 +13,9 @@ dirs = "6"
 # Antigravity CLI 는 대화를 SQLite 로 남긴다. bundled 로 붙여야 사용자 머신에
 # sqlite3 설치를 요구하지 않는다.
 rusqlite = { version = "0.32", features = ["bundled"] }
+# Claude·Codex 공식 한도의 실시간 조회 — 이 앱의 네트워크 호출 전부다 (plan.rs 모듈
+# 주석 참고). 읽기 전용 GET 둘이라 블로킹 클라이언트로 충분하다.
+ureq = "2"
 
 [dev-dependencies]
 tempfile = "3"

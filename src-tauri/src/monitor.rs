@@ -26,6 +26,10 @@ const LIVE_INTERVAL: Duration = Duration::from_secs(2);
 /// (예전엔 CLI 를 띄워 300초였다). 원본 캐시가 5분마다 갱신되므로 이보다 촘촘히
 /// 읽어도 더 새 값이 나오진 않지만, 갱신을 늦게 보는 일은 없어진다.
 const PLAN_INTERVAL: Duration = Duration::from_secs(30);
+/// 사용량 API 호출 주기 (플랜 루프 안에서 이 간격으로만 실제 호출한다).
+/// Claude Code 자신이 5분마다 받아오므로 그보다 촘촘히 부를 이유가 없다 —
+/// 루프(30초)는 캐시 파일 확인과 리셋 임박 판정을 위해 그대로 촘촘하게 둔다.
+const PLAN_FETCH_INTERVAL: Duration = Duration::from_secs(300);
 /// 최근 세션 목록에 실을 개수 — 패널 한 페이지에 들어가는 만큼
 const RECENT_SESSIONS: usize = 8;
 
@@ -113,13 +117,20 @@ fn enabled_roots(app: &AppHandle) -> EnabledRoots {
     r
 }
 
-/// 한 소스의 공식 한도를 갱신하고 프론트에 알린다.
-/// Claude 는 플랜 스레드가, Codex 는 사용량 스레드가 부르므로 소스별로만 덮어쓴다.
+/// 한 소스의 공식 한도를 갱신하고 프론트에 알린다. 소스별로만 덮어쓴다.
+///
+/// Codex 슬롯엔 **두 스레드가 쓴다** — 사용량 스레드가 rollout 값(10초 주기)을, 플랜
+/// 스레드가 API 값(5분 주기)을 넣는다. 어느 쪽이 이기는지는 여기서 한 번만 정한다:
+/// **서버에서 더 최근에 받은 값**이다. 방금 턴이 돌았으면 rollout 이 API 보다 새것이라
+/// 이기고, 턴이 없는 동안엔 API 가 이긴다 — 호출 순서와 무관하게 결과가 같다.
+/// 같으면 덮어쓴다 — Claude 플랜 스레드는 같은 fetched_at 으로 리셋 시각만 갈아 끼워
+/// 다시 부르기 때문이다.
 fn set_plan(app: &AppHandle, plan: usage_core::plan::PlanUsage) {
     let all = {
         let state = app.state::<AppState>();
         let mut list = state.plan.lock().unwrap();
         match list.iter_mut().find(|p| p.source == plan.source) {
+            Some(slot) if plan.fetched_at < slot.fetched_at => return,
             Some(slot) => *slot = plan,
             None => list.push(plan),
         }
@@ -164,7 +175,9 @@ fn pick_line(lines: &[String], last: Option<&str>) -> String {
     from[idx].clone()
 }
 
-/// 공식 플랜 한도 미터 폴링 (Claude Code 미설치·미로그인 시 조용히 비활성)
+/// 공식 플랜 한도 미터 폴링 (CLI 미설치·미로그인 시 소스별로 조용히 비활성)
+/// — Claude 는 ① API 실시간 → ② 캐시 파일 → ③ 트랜스크립트 계산의 3단 사슬,
+///   Codex 는 ① API 실시간 → ② rollout(사용량 스레드가 넣는다)의 2단 — 중재는 `set_plan`
 /// + 블록 리셋 임박 시 캐릭터 대사 (설정 분 전, 0=끔, 리셋 시각당 1회)
 fn spawn_plan_thread(app: AppHandle) {
     std::thread::spawn(move || {
@@ -173,16 +186,76 @@ fn spawn_plan_thread(app: AppHandle) {
         let mut last_notified_reset: Option<chrono::DateTime<Local>> = None;
         // 직전에 쓴 문구 — 후보가 둘 이상이면 연속 중복을 피한다 (프론트 speech.ts pick 과 동일 규칙)
         let mut last_notify_line: Option<String> = None;
+        // 홈별 API 최근 성공값 — 호출 사이(5분) + 일시 실패(오프라인) 동안 유지한다.
+        // 실패한 홈만 낡은 값으로 남고, 후보 선정(max fetched_at)이 알아서 가려낸다.
+        let mut api_plans: std::collections::HashMap<PathBuf, usage_core::plan::PlanUsage> =
+            std::collections::HashMap::new();
+        let mut codex_api_plans: std::collections::HashMap<PathBuf, usage_core::plan::PlanUsage> =
+            std::collections::HashMap::new();
+        let mut last_fetch: Option<std::time::Instant> = None;
 
         loop {
-            // 활성 계정의 홈들 중 서버에서 가장 최근에 받아온 값을 쓴다.
-            // (Codex 가 `CodexAdapter::plan()` 에서 하는 것과 같은 규칙)
-            let plan = enabled_roots(&app)
-                .claude_homes
+            let now = Utc::now();
+            let roots = enabled_roots(&app);
+            let homes = roots.claude_homes;
+            // Codex 는 트랜스크립트 루트가 곧 홈이다 (auth.json 도 거기 있다)
+            let codex_homes = roots.codex;
+            // ① 사용량 API 실시간 (plan.rs 모듈 주석) — 5분마다, 홈별로(=계정별로) 시도
+            let due = last_fetch.map(|t| t.elapsed() >= PLAN_FETCH_INTERVAL).unwrap_or(true);
+            if due && !(homes.is_empty() && codex_homes.is_empty()) {
+                last_fetch = Some(std::time::Instant::now());
+                for h in &homes {
+                    if let Some(p) = usage_core::plan::fetch_claude_usage(h, now) {
+                        api_plans.insert(h.clone(), p);
+                    }
+                }
+                for h in &codex_homes {
+                    if let Some(p) = usage_core::plan::fetch_codex_usage(h, now) {
+                        codex_api_plans.insert(h.clone(), p);
+                    }
+                }
+            }
+            // Codex 는 여기서 API 성공값만 올린다 — rollout 값은 사용량 스레드가 계속
+            // 넣고 있고, 누가 이기는지는 `set_plan` 의 최신 수신값 규칙이 정한다.
+            if let Some(p) = codex_homes
                 .iter()
-                .filter_map(|h| usage_core::plan::read_utilization(h))
+                .filter_map(|h| codex_api_plans.get(h).cloned())
+                .max_by_key(|p| p.fetched_at)
+            {
+                set_plan(&app, p);
+            }
+            // ② 캐시 파일도 매 회차 후보에 넣는다 — 후보 전체에서 서버에서 가장 최근에
+            // 받아온 값을 쓴다 (Codex 가 `CodexAdapter::plan()` 에서 하는 것과 같은 규칙).
+            // API 성공값은 fetched_at 이 방금이라 자연히 이기고, API 가 죽어 있으면
+            // (오프라인·토큰 만료·macOS 키체인) CLI 가 갱신하는 캐시가 이긴다.
+            let plan = homes
+                .iter()
+                .filter_map(|h| api_plans.get(h).cloned())
+                .chain(homes.iter().filter_map(|h| usage_core::plan::read_utilization(h)))
                 .max_by_key(|p| p.fetched_at);
-            if let Some(plan) = plan {
+            if let Some(mut plan) = plan {
+                // ③ 굳은 캐시의 리셋 시각을 우리 계산으로 갈아 끼운다.
+                //
+                // API 가 살아 있으면 리셋이 과거일 일이 없어 여기 안 걸린다. 걸리는 건
+                // API 가 물러난 채(오프라인·토큰 만료·macOS 키체인) 캐시마저 굳었을 때다
+                // (실측: 세션이 도는데도 6시간 정지, 리셋은 2시간 전). 그때 "0분 남음" 을
+                // 보여주면 지금 막 리셋된다는 거짓말이고, 창 길이가 `limits[]` 에 없어
+                // 다음 리셋을 유도할 수도 없다. 대신 우리가 늘 읽는 트랜스크립트에서
+                // 같은 값을 만든다 (`blocks` — 실측으로 공식 값과 일치 확인).
+                //
+                // **첫 미터만** 손댄다. 5시간 창은 자주 갈리지만 주간 창은 며칠이 남아 있어
+                // 같은 캐시라도 아직 사실이고, 무엇보다 주간은 우리가 계산할 수 없다.
+                if let Some(m) = plan.meters.first_mut() {
+                    let expired = m.resets_at.map(|r| r <= now).unwrap_or(true);
+                    if expired {
+                        let computed =
+                            { app.state::<AppState>().claude_reset.lock().unwrap().to_owned() };
+                        if let Some(end) = computed {
+                            m.resets_at = Some(end);
+                            m.resets_computed = true;
+                        }
+                    }
+                }
                 set_plan(&app, plan.clone());
 
                 // 리셋 임박 — OS 알림 대신 캐릭터가 직접 말한다.
@@ -319,8 +392,14 @@ fn spawn_usage_thread(app: AppHandle) {
                 (Source::Antigravity, g.status),
             ];
 
-            // Codex 는 공식 한도가 rollout 안에 들어 있다 — CLI 를 띄우는 Claude 와 달리
-            // 방금 읽은 파일에서 그냥 나온다
+            // Claude 5시간 창의 끝을 트랜스크립트에서 계산해 둔다 — 어댑터가 여기 있어서
+            // 여기서 재고, 쓰는 곳은 플랜 스레드다(굳은 캐시를 대체할 때만).
+            // 창이 닫혀 있으면 None — 다음 창은 다음 메시지가 열어서 미리 알 수 없다.
+            *app.state::<AppState>().claude_reset.lock().unwrap() = claude.session_reset(Utc::now());
+
+            // Codex 공식 한도의 ② rollout 값 — 방금 읽은 파일에서 그냥 나온다.
+            // 플랜 스레드의 ① API 값과 같은 슬롯을 놓고 경쟁하지만, `set_plan` 이
+            // 서버 수신 시각으로 중재하므로 그냥 넣으면 된다.
             if let Some(p) = codex.plan() {
                 set_plan(&app, p);
             }

@@ -466,6 +466,8 @@ fn parse_rate_limits(v: &Value, at: DateTime<Utc>) -> Option<PlanUsage> {
                 label: window_label(minutes),
                 used_pct: pct.round().clamp(0.0, 100.0) as u8,
                 resets_at,
+                // rollout 이 준 값을 그대로 쓴다 — Codex 는 캐시가 아니라 이벤트라 안 굳는다
+                resets_computed: false,
             },
         ));
     }

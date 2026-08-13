@@ -1,18 +1,44 @@
 //! 공식 플랜 한도 미터.
 //!
 //! 계정의 **공식** 소진율이다 — 로컬 추정치와 달리 다른 기기 사용량까지 반영된다.
-//! 한도를 주는 두 소스 모두 **이미 읽고 있는 파일**에서 나온다. 프로세스를 띄우지 않는다:
+//! Claude·Codex 는 실시간 API 가 1순위고, 폴백은 이미 읽고 있는 파일에서 나온다:
 //!
-//! | 소스 | 파일 | 필드 |
+//! | 소스 | 경로 | 값 |
 //! |---|---|---|
-//! | Claude | `<홈>/.claude.json` (이 파일) | `cachedUsageUtilization` |
-//! | Codex | rollout 의 `token_count` ([`crate::codex`]) | `payload.rate_limits` |
-//! | Antigravity | **없음** — `quota_manager` 가 서버에서 받아 메모리에만 둔다 | — |
+//! | Claude ① | 사용량 API `GET /api/oauth/usage` ([`fetch_claude_usage`]) | 응답 본문 |
+//! | Claude ② 폴백 | `<홈>/.claude.json` ([`read_utilization`]) | `cachedUsageUtilization` |
+//! | Codex ① | 사용량 API `GET /backend-api/codex/usage` ([`fetch_codex_usage`]) | `rate_limit` |
+//! | Codex ② 폴백 | rollout 의 `token_count` ([`crate::codex`]) | `payload.rate_limits` |
+//! | Antigravity | **없음** — `quota_manager` 가 서버에서 받아 메모리에만 둔다\* | — |
+//!
+//! ① 두 개가 **이 앱의 네트워크 호출 전부**다. "홈 직독" 규칙의 예외인데, 예외 없이는
+//! 사실을 보여줄 수 없어서다 — 두 소스의 ② 는 서로 다른 이유로 낡는다:
+//!
+//! - Claude ② 는 캐시라 아래 ⚠️ 처럼 세션이 도는 중에도 굳는다. 굳은 순간의 실측
+//!   (2026-08-13): 캐시는 4% · 리셋 3시간 전(잔해), API 는 22% · 1시간 45분 남음 —
+//!   **창 자체가 다른 세대였다.**
+//! - Codex ② 는 캐시가 아니라 이벤트라 굳지는 않지만, **턴을 돌려야만 새 이벤트가
+//!   생긴다** — 마지막 턴 이후의 리셋도, 다른 기기의 사용량도 다음 턴까지 안 보인다.
+//!
+//! 인증은 둘 다 이미 읽는 홈 파일에서 나온다 — Claude 는 `.claude/.credentials.json`,
+//! Codex 는 `auth.json`(계정 식별에 쓰는 그 파일). 그래서 "홈마다 = 계정마다"라는 성질은
+//! 그대로고, 규칙이 막으려던 것들(실행 환경 의존, 다중 계정 불가)은 생기지 않는다.
+//! 실측 토큰 수명: Claude 는 수 시간, Codex 는 약 9.6일 — 만료면 호출 없이 ② 로 간다.
+//!
+//! \* Antigravity 도 quota RPC 자체는 있지만(바이너리에 `FetchQuotaStatus` 실재) 토큰이
+//! OS 키링에만 있고 protobuf 요청을 리버싱해야 해서, 홈 파일로 인증하는 위 둘과 달리
+//! 붙이지 않는다.
+//!
+//! ①과 ②는 **같은 모양을 준다.** Claude 는 API 응답 본문이 캐시의 `utilization` 과
+//! 동일한 객체라(실측 대조) 미터 파싱을 공유하고, Codex 는 필드 이름만 다르다
+//! (`primary_window`/`limit_window_seconds` vs rollout 의 `primary`/`window_minutes`).
+//! 어느 쪽이든 같은 [`PlanUsage`] 로 나온다. 다른 건 `fetched_at` 뿐이다 — ① 은 방금
+//! 받았고 ② 는 파일이 기록한 시각이 사실이다.
 //!
 //! Claude 는 예전에 `claude -p "/usage"` 를 띄워 텍스트 출력을 파싱했다. 그 방식은 셋을
 //! 잃었다: 실행 방식에 좌우됐고(PATH·셸 심), 리셋 시각을 로컬 타임존 **문자열**로만 줘서
-//! 다시 파싱해야 했고, 프로세스 하나 = 계정 하나라 다중 계정에 쓸 수 없었다. 같은 값이
-//! 홈마다 파일로 있으므로 셋 다 사라지고, 홈 직독이라는 이 앱의 규칙과도 맞는다.
+//! 다시 파싱해야 했고, 프로세스 하나 = 계정 하나라 다중 계정에 쓸 수 없었다. API 는
+//! 셋 다 잃지 않는다 — CLI 실행의 대체가 아니라 캐시 파일 직독의 상위 호환이다.
 //!
 //! 실측 `cachedUsageUtilization` (Claude Code 2.1.220):
 //! ```json
@@ -30,9 +56,20 @@
 //! 창(`tangelo`, `nimbus_quill` 등)이 형제 키로 섞여 오지만 전부 무시한다 — 공개된
 //! 목록이 아니라 의미를 모르는 값을 화면에 올릴 수 없다.
 //!
-//! ⚠️ **캐시다.** Claude Code 가 돌지 않으면 갱신되지 않는다. 실측 갱신 주기는 세션이
+//! ⚠️ **② 는 캐시다.** Claude Code 가 돌지 않으면 갱신되지 않는다. 실측 갱신 주기는 세션이
 //! 도는 동안 5분이고, 낡음은 `fetchedAtMs` 로 판단한다 (그래서 [`PlanUsage::fetched_at`]
 //! 에 `Utc::now()` 가 아니라 이 값을 넣는다 — 언제 서버에서 받은 값인지가 사실이다).
+//!
+//! ⚠️ **세션이 도는 중에도 굳는다.** "5분마다 갱신" 은 늘 성립하지 않는다. 실측
+//! (2026-08-13): Claude Code 가 계속 돌고 `.claude.json` 자체는 43분 전에 쓰였는데
+//! `fetchedAtMs` 는 **6시간 전**이었고, 그 사이 5시간 창의 `resets_at` 이 **2시간 전**으로
+//! 지나가 있었다. 파일의 다른 필드는 갱신되면서 이 캐시만 굳는다.
+//!
+//! 그래서 **리셋 시각이 과거인 미터는 값이 아니라 잔해다** — 창은 이미 갈렸고 `percent`
+//! 도 죽은 창의 것이다. 남은 시간을 0으로 깎으면 "지금 막 리셋된다" 는 거짓말이 되고,
+//! 다음 리셋을 계산할 수도 없다(`limits[]` 에 창 길이가 없다). 화면에서 그 판정을 한다
+//! — 프론트의 `resetIsStale`. 여기서 버리지 않는 이유는 "리셋 정보 없음"(agy)과
+//! "리셋 정보가 낡음"(굳은 캐시)이 서로 다른 사실이기 때문이다.
 
 use std::path::Path;
 
@@ -51,6 +88,12 @@ pub struct PlanMeter {
     /// Claude 는 RFC 3339 — 그래서 프론트가 문자열을 파싱할 일이 없다.
     /// 창에 리셋 개념이 없으면 None.
     pub resets_at: Option<DateTime<Utc>>,
+    /// 이 리셋 시각을 **우리가 계산했는가** ([`crate::blocks`]).
+    ///
+    /// 공식 캐시가 굳어 리셋이 과거로 남으면 트랜스크립트에서 계산한 값으로 갈아 끼운다.
+    /// 화면이 둘을 구분해 표시할 수 있게 표시를 남긴다 — 같은 숫자라도 출처가 다르다.
+    /// Codex 는 늘 `false` (rollout 이 준 값을 그대로 쓴다).
+    pub resets_computed: bool,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -173,6 +216,7 @@ fn parse_limit(v: &Value) -> Option<(u8, bool, PlanMeter)> {
             label: meter_label(group, model),
             used_pct: pct.round().clamp(0.0, 100.0) as u8,
             resets_at: parse_rfc3339(v.get("resets_at")),
+            resets_computed: false,
         },
     ))
 }
@@ -190,7 +234,31 @@ fn parse_named_window(v: &Value, key: &str, minutes: u64) -> Option<PlanMeter> {
         label: window_label(minutes),
         used_pct: pct.round().clamp(0.0, 100.0) as u8,
         resets_at: parse_rfc3339(w.get("resets_at")),
+        resets_computed: false,
     })
+}
+
+/// utilization 객체 → 미터들. 캐시의 `utilization` 과 API 응답 본문이 **같은 모양**이라
+/// (모듈 주석) 두 경로가 이 함수를 공유한다. 창이 하나도 없으면 빈 벡터.
+fn parse_meters(util: &Value) -> Vec<PlanMeter> {
+    let mut ranked: Vec<(u8, bool, PlanMeter)> = util
+        .get("limits")
+        .and_then(Value::as_array)
+        .map(|a| a.iter().filter_map(parse_limit).collect())
+        .unwrap_or_default();
+    // 정렬 기준이 같으면 payload 순서를 지킨다 (sort_by_key 는 안정 정렬)
+    ranked.sort_by_key(|(rank, scoped, _)| (*rank, *scoped));
+    let meters: Vec<PlanMeter> = ranked.into_iter().map(|(_, _, m)| m).collect();
+    if !meters.is_empty() {
+        return meters;
+    }
+    [
+        parse_named_window(util, "five_hour", 300),
+        parse_named_window(util, "seven_day", 10080),
+    ]
+    .into_iter()
+    .flatten()
+    .collect()
 }
 
 /// `<홈>/.claude.json` 의 `cachedUsageUtilization` → 공식 한도 미터.
@@ -208,26 +276,7 @@ pub fn read_utilization(home: &Path) -> Option<PlanUsage> {
         .get("fetchedAtMs")
         .and_then(Value::as_i64)
         .and_then(DateTime::from_timestamp_millis)?;
-    let util = cached.get("utilization")?;
-
-    let mut ranked: Vec<(u8, bool, PlanMeter)> = util
-        .get("limits")
-        .and_then(Value::as_array)
-        .map(|a| a.iter().filter_map(parse_limit).collect())
-        .unwrap_or_default();
-    // 정렬 기준이 같으면 payload 순서를 지킨다 (sort_by_key 는 안정 정렬)
-    ranked.sort_by_key(|(rank, scoped, _)| (*rank, *scoped));
-    let mut meters: Vec<PlanMeter> = ranked.into_iter().map(|(_, _, m)| m).collect();
-
-    if meters.is_empty() {
-        meters = [
-            parse_named_window(util, "five_hour", 300),
-            parse_named_window(util, "seven_day", 10080),
-        ]
-        .into_iter()
-        .flatten()
-        .collect();
-    }
+    let meters = parse_meters(cached.get("utilization")?);
     if meters.is_empty() {
         return None;
     }
@@ -242,6 +291,183 @@ pub fn read_utilization(home: &Path) -> Option<PlanUsage> {
         .unwrap_or_default();
 
     Some(PlanUsage { source: Source::Claude, meters, detail, fetched_at })
+}
+
+/// Claude Code 가 로그인 시 남기는 OAuth 자격증명 — `<홈>/.claude/.credentials.json`.
+/// (macOS 는 파일이 아니라 키체인에 두므로 이 경로가 없다 → API 없이 폴백으로 간다.)
+pub struct OauthCreds {
+    pub access_token: String,
+    /// 액세스 토큰 만료 시각. 실측 수명은 수 시간이고 CLI 가 도는 동안 계속 갱신된다.
+    pub expires_at: Option<DateTime<Utc>>,
+    /// 플랜 티어 원문 (예: `default_claude_max_5x`) — `.claude.json` 의
+    /// `organizationRateLimitTier` 와 같은 값이 여기에도 있다(실측).
+    pub rate_limit_tier: String,
+}
+
+/// 자격증명 파일 직독. 없거나(미로그인·macOS) 토큰이 비어 있으면 None.
+pub fn read_credentials(home: &Path) -> Option<OauthCreds> {
+    let path = home.join(".claude").join(".credentials.json");
+    let text = std::fs::read_to_string(path).ok()?;
+    let v: Value = serde_json::from_str(&text).ok()?;
+    let oa = v.get("claudeAiOauth")?;
+    let access_token = oa
+        .get("accessToken")
+        .and_then(Value::as_str)
+        .filter(|s| !s.is_empty())?
+        .to_string();
+    let expires_at = oa
+        .get("expiresAt")
+        .and_then(Value::as_i64)
+        .and_then(DateTime::from_timestamp_millis);
+    let rate_limit_tier = oa
+        .get("rateLimitTier")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+    Some(OauthCreds { access_token, expires_at, rate_limit_tier })
+}
+
+/// Claude Code 자신이 `cachedUsageUtilization` 을 채울 때 부르는 것과 같은 엔드포인트.
+const CLAUDE_USAGE_URL: &str = "https://api.anthropic.com/api/oauth/usage";
+/// OAuth 토큰 인증에 필요한 베타 헤더 (Claude Code 와 동일하게 보낸다)
+const OAUTH_BETA: (&str, &str) = ("anthropic-beta", "oauth-2025-04-20");
+/// Codex CLI 가 한도를 받는 것과 같은 엔드포인트 (바이너리 문자열에서 실측 확인).
+const CODEX_USAGE_URL: &str = "https://chatgpt.com/backend-api/codex/usage";
+
+/// 두 벤더 호출이 공유하는 GET — 클라이언트 설정(10초 제한)을 한 곳에 둔다.
+fn http_get(url: &str, headers: &[(&str, &str)]) -> Option<String> {
+    let mut req = ureq::AgentBuilder::new()
+        .timeout(std::time::Duration::from_secs(10))
+        .build()
+        .get(url);
+    for (k, v) in headers {
+        req = req.set(k, v);
+    }
+    req.call().ok()?.into_string().ok()
+}
+
+/// Claude 공식 사용량 API 실시간 조회 (모듈 주석의 ①). 자격증명이 없거나, 토큰이
+/// 만료됐거나, 네트워크가 안 되면 None — 호출자는 ② 캐시로 폴백한다.
+///
+/// ⚠️ **토큰 갱신은 절대 하지 않는다.** 리프레시 토큰은 회전식이라 여기서 갱신하면
+/// CLI 자신의 갱신과 경합해 사용자가 로그아웃당할 수 있다. 만료면 그냥 물러난다 —
+/// CLI 가 도는 동안 토큰은 어차피 새로 채워진다. (Codex 도 같은 규칙.)
+pub fn fetch_claude_usage(home: &Path, now: DateTime<Utc>) -> Option<PlanUsage> {
+    let creds = read_credentials(home)?;
+    if creds.expires_at.map(|e| e <= now).unwrap_or(false) {
+        return None;
+    }
+    let body = http_get(
+        CLAUDE_USAGE_URL,
+        &[("Authorization", &format!("Bearer {}", creds.access_token)), OAUTH_BETA],
+    )?;
+    parse_claude_api_usage(&body, &creds.rate_limit_tier, now)
+}
+
+/// Claude API 응답 본문 → [`PlanUsage`]. 본문이 캐시의 `utilization` 과 같은 객체라
+/// 파서를 공유한다. `fetched_at` 은 수신 시각 — 이 경로에서는 방금이 곧 사실이다.
+pub fn parse_claude_api_usage(
+    body: &str,
+    tier: &str,
+    fetched_at: DateTime<Utc>,
+) -> Option<PlanUsage> {
+    let v: Value = serde_json::from_str(body).ok()?;
+    let meters = parse_meters(&v);
+    if meters.is_empty() {
+        return None;
+    }
+    Some(PlanUsage { source: Source::Claude, meters, detail: plan_label(tier), fetched_at })
+}
+
+/// Codex CLI 의 OAuth 자격증명 — `<홈>/auth.json`, 계정 식별([`crate::accounts`])에
+/// 쓰는 그 파일이다. 필요한 세 값이 전부 여기 있다.
+pub struct CodexAuth {
+    pub access_token: String,
+    /// `chatgpt-account-id` 헤더로 보낸다 — 같은 로그인의 워크스페이스 구분자
+    pub account_id: String,
+    /// 액세스 토큰(JWT)의 `exp` 클레임. 실측 수명 약 9.6일 — Claude 보다 훨씬 길다.
+    pub expires_at: Option<DateTime<Utc>>,
+}
+
+/// 자격증명 직독. 없거나(미로그인) 토큰이 비면 None.
+pub fn read_codex_auth(home: &Path) -> Option<CodexAuth> {
+    let text = std::fs::read_to_string(home.join("auth.json")).ok()?;
+    let v: Value = serde_json::from_str(&text).ok()?;
+    let t = v.get("tokens")?;
+    let access_token = t
+        .get("access_token")
+        .and_then(Value::as_str)
+        .filter(|s| !s.is_empty())?
+        .to_string();
+    let account_id = t
+        .get("account_id")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+    let expires_at = crate::accounts::jwt_payload(&access_token)
+        .and_then(|p| p.get("exp").and_then(Value::as_i64))
+        .and_then(|s| DateTime::from_timestamp(s, 0));
+    Some(CodexAuth { access_token, account_id, expires_at })
+}
+
+/// Codex 공식 사용량 API 실시간 조회 (모듈 주석의 ①). 실패하면 None —
+/// 호출자는 ② rollout 값으로 폴백한다. 토큰 갱신 금지 규칙은 Claude 와 같다.
+pub fn fetch_codex_usage(home: &Path, now: DateTime<Utc>) -> Option<PlanUsage> {
+    let auth = read_codex_auth(home)?;
+    if auth.expires_at.map(|e| e <= now).unwrap_or(false) {
+        return None;
+    }
+    let bearer = format!("Bearer {}", auth.access_token);
+    let mut headers: Vec<(&str, &str)> = vec![("Authorization", &bearer)];
+    if !auth.account_id.is_empty() {
+        headers.push(("chatgpt-account-id", &auth.account_id));
+    }
+    let body = http_get(CODEX_USAGE_URL, &headers)?;
+    parse_codex_api_usage(&body, now)
+}
+
+/// Codex API 응답 본문 → [`PlanUsage`]. rollout 의 `rate_limits` 와 내용은 같고 필드
+/// 이름만 다르다 — `primary_window`/`limit_window_seconds`/`reset_at`(unix 초) vs
+/// `primary`/`window_minutes`/`resets_at`. 정렬·이름 규칙은 [`crate::codex`] 와 동일하다.
+pub fn parse_codex_api_usage(body: &str, fetched_at: DateTime<Utc>) -> Option<PlanUsage> {
+    let v: Value = serde_json::from_str(body).ok()?;
+    let rl = v.get("rate_limit")?;
+    let mut meters: Vec<(u64, PlanMeter)> = vec![];
+    for key in ["primary_window", "secondary_window"] {
+        let Some(w) = rl.get(key).filter(|w| w.is_object()) else { continue };
+        let Some(pct) = w.get("used_percent").and_then(Value::as_f64) else { continue };
+        let minutes = w.get("limit_window_seconds").and_then(Value::as_u64).unwrap_or(0) / 60;
+        let resets_at = w
+            .get("reset_at")
+            .and_then(Value::as_i64)
+            .and_then(|s| DateTime::from_timestamp(s, 0));
+        meters.push((
+            minutes,
+            PlanMeter {
+                label: window_label(minutes),
+                used_pct: pct.round().clamp(0.0, 100.0) as u8,
+                resets_at,
+                resets_computed: false,
+            },
+        ));
+    }
+    if meters.is_empty() {
+        return None;
+    }
+    // 창이 짧은 것부터 — 첫 미터가 "지금 당장 걸리는 한도" (rollout 파서와 같은 규칙)
+    meters.sort_by_key(|(m, _)| *m);
+    let detail = v
+        .get("plan_type")
+        .and_then(Value::as_str)
+        .filter(|s| !s.is_empty())
+        .map(plan_label)
+        .unwrap_or_default();
+    Some(PlanUsage {
+        source: Source::Codex,
+        meters: meters.into_iter().map(|(_, m)| m).collect(),
+        detail,
+        fetched_at,
+    })
 }
 
 #[cfg(test)]
@@ -372,6 +598,208 @@ mod tests {
         let p = read_utilization(home.path()).unwrap();
         assert_eq!(p.meters[0].label, "5시간");
         assert_eq!(p.meters[1].label, "Monthly Burst");
+    }
+
+    /// 이 머신에서 실제로 받은 API 응답 (2026-08-13, 무관한 필드 축약).
+    /// 캐시의 `utilization` 과 같은 모양임을 실측으로 확인했다 — 이 픽스처가 그 증거다.
+    const REAL_API: &str = r#"{
+      "five_hour": {"utilization": 22.0, "resets_at": "2026-08-13T09:29:59.890032+00:00"},
+      "seven_day": {"utilization": 43.0, "resets_at": "2026-08-15T05:59:59.890067+00:00"},
+      "seven_day_opus": null,
+      "tangelo": null,
+      "nimbus_quill": {"utilization": 0.0, "resets_at": null},
+      "extra_usage": {"is_enabled": false},
+      "limits": [
+        {"kind": "session", "group": "session", "percent": 22, "severity": "normal",
+         "resets_at": "2026-08-13T09:29:59.890032+00:00", "scope": null, "is_active": false},
+        {"kind": "weekly_all", "group": "weekly", "percent": 43, "severity": "normal",
+         "resets_at": "2026-08-15T05:59:59.890067+00:00", "scope": null, "is_active": false},
+        {"kind": "weekly_scoped", "group": "weekly", "percent": 45, "severity": "normal",
+         "resets_at": "2026-08-15T05:59:59.890248+00:00",
+         "scope": {"model": {"id": null, "display_name": "Fable"}, "surface": null},
+         "is_active": true}
+      ],
+      "spend": {"used": {"amount_minor": 0}, "percent": 0, "enabled": false}
+    }"#;
+
+    /// API 응답이 캐시와 같은 세 미터로 나와야 한다 — 파서를 공유하는 근거.
+    #[test]
+    fn api_body_parses_like_the_cache() {
+        let now = DateTime::parse_from_rfc3339("2026-08-13T07:45:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let p = parse_claude_api_usage(REAL_API, "default_claude_max_5x", now).unwrap();
+        let seen: Vec<(&str, u8)> =
+            p.meters.iter().map(|m| (m.label.as_str(), m.used_pct)).collect();
+        assert_eq!(seen, vec![("5시간", 22), ("주간", 43), ("주간 (Fable)", 45)]);
+        // 플랜 이름은 자격증명의 `rateLimitTier` 에서 — 캐시 경로와 같은 규칙으로
+        assert_eq!(p.detail, "Max 5x");
+        // 수신 시각이 곧 fetched_at — 캐시처럼 낡음을 따질 별도 시각이 없다
+        assert_eq!(p.fetched_at, now);
+        // API 가 준 리셋은 계산값이 아니다
+        assert!(p.meters.iter().all(|m| !m.resets_computed));
+    }
+
+    /// 미터가 하나도 없는 응답(형태 변경·에러 본문)은 None — 빈 미터를 올리지 않는다.
+    #[test]
+    fn api_body_without_meters_is_rejected() {
+        assert!(parse_claude_api_usage("{}", "x", Utc::now()).is_none());
+        assert!(parse_claude_api_usage("not json", "x", Utc::now()).is_none());
+    }
+
+    /// `.claude/.credentials.json` 하나를 만들고 홈을 돌려준다
+    fn home_with_creds(json: &str) -> tempfile::TempDir {
+        let d = tempfile::tempdir().unwrap();
+        let dir = d.path().join(".claude");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join(".credentials.json"), json).unwrap();
+        d
+    }
+
+    /// 이 머신 실측 구조 (토큰 값만 가짜) — 필드 위치가 바뀌면 여기서 걸린다.
+    #[test]
+    fn reads_the_credentials_file() {
+        let home = home_with_creds(
+            r#"{"claudeAiOauth": {"accessToken": "tok-x", "refreshToken": "tok-y",
+                 "expiresAt": 1786635103494, "refreshTokenExpiresAt": 1788000914494,
+                 "scopes": ["user:profile"], "subscriptionType": "max",
+                 "rateLimitTier": "default_claude_max_5x"}}"#,
+        );
+        let c = read_credentials(home.path()).unwrap();
+        assert_eq!(c.access_token, "tok-x");
+        assert_eq!(c.expires_at.unwrap().timestamp_millis(), 1_786_635_103_494);
+        assert_eq!(c.rate_limit_tier, "default_claude_max_5x");
+    }
+
+    /// 파일이 없거나(미로그인·macOS 키체인) 토큰이 비면 None — API 없이 폴백으로 간다.
+    #[test]
+    fn missing_or_empty_credentials_disable_the_api() {
+        assert!(read_credentials(std::path::Path::new("/이런/홈은/없다")).is_none());
+        let home = home_with_creds(r#"{"claudeAiOauth": {"accessToken": ""}}"#);
+        assert!(read_credentials(home.path()).is_none());
+    }
+
+    /// 만료된 토큰으로는 **호출 자체를 안 한다** — 갱신은 CLI 몫이다 (경합하면 로그아웃).
+    /// 네트워크를 건드리기 전에 물러나므로 이 테스트는 오프라인에서도 성립한다.
+    #[test]
+    fn expired_token_skips_the_call() {
+        let home = home_with_creds(
+            r#"{"claudeAiOauth": {"accessToken": "tok-x", "expiresAt": 1000}}"#,
+        );
+        assert!(fetch_claude_usage(home.path(), Utc::now()).is_none());
+    }
+
+    /// 이 머신에서 실제로 받은 Codex API 응답 (2026-08-13, 무관한 필드 축약).
+    /// rollout 의 `rate_limits` 와 내용은 같고 필드 이름만 다르다는 실측 증거다.
+    const REAL_CODEX_API: &str = r#"{
+      "account_id": "a2340ea8-b835-4dc8-a4ff-e20e8982f492",
+      "plan_type": "plus",
+      "rate_limit": {
+        "allowed": true, "limit_reached": false,
+        "primary_window": {
+          "used_percent": 7, "limit_window_seconds": 604800,
+          "reset_after_seconds": 588701, "reset_at": 1787196790
+        },
+        "secondary_window": null
+      },
+      "credits": {"has_credits": false},
+      "spend_control": {"reached": false}
+    }"#;
+
+    /// Codex API 응답이 rollout 경로와 같은 화면 어휘로 나와야 한다.
+    #[test]
+    fn codex_api_body_parses_like_the_rollout() {
+        let now = Utc::now();
+        let p = parse_codex_api_usage(REAL_CODEX_API, now).unwrap();
+        assert_eq!(p.source, Source::Codex);
+        // 604,800초 = 10,080분 → rollout 의 `window_minutes` 와 같은 이름 규칙
+        assert_eq!(
+            p.meters.iter().map(|m| (m.label.as_str(), m.used_pct)).collect::<Vec<_>>(),
+            vec![("주간", 7)]
+        );
+        // 리셋은 unix 초 → UTC (rollout 의 `resets_at` 과 같은 변환)
+        assert_eq!(p.meters[0].resets_at.unwrap().timestamp(), 1_787_196_790);
+        assert_eq!(p.detail, "Plus");
+        assert_eq!(p.fetched_at, now);
+    }
+
+    /// 두 창이 오면 짧은 창이 먼저다 — 첫 미터가 "지금 당장 걸리는 한도" (rollout 과 동일).
+    #[test]
+    fn codex_api_windows_sort_shortest_first() {
+        let body = r#"{"rate_limit": {
+          "primary_window": {"used_percent": 40, "limit_window_seconds": 604800},
+          "secondary_window": {"used_percent": 12, "limit_window_seconds": 18000}}}"#;
+        let p = parse_codex_api_usage(body, Utc::now()).unwrap();
+        assert_eq!(
+            p.meters.iter().map(|m| (m.label.as_str(), m.used_pct)).collect::<Vec<_>>(),
+            vec![("5시간", 12), ("주간", 40)]
+        );
+        // plan_type 이 없으면 detail 은 조용히 빈다
+        assert_eq!(p.detail, "");
+    }
+
+    /// 창이 하나도 없는 응답(형태 변경·에러 본문)은 None.
+    #[test]
+    fn codex_api_body_without_windows_is_rejected() {
+        assert!(parse_codex_api_usage("{}", Utc::now()).is_none());
+        assert!(parse_codex_api_usage(r#"{"rate_limit": {}}"#, Utc::now()).is_none());
+    }
+
+    /// 테스트용 JWT — 페이로드만 진짜 모양이면 된다 (서명은 애초에 검증하지 않는다)
+    fn fake_jwt(payload: &str) -> String {
+        fn enc(data: &[u8]) -> String {
+            const A: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+            let mut out = String::new();
+            for chunk in data.chunks(3) {
+                let b = [chunk[0], *chunk.get(1).unwrap_or(&0), *chunk.get(2).unwrap_or(&0)];
+                let n = u32::from_be_bytes([0, b[0], b[1], b[2]]);
+                for i in 0..(1 + chunk.len()) {
+                    out.push(A[(n >> (18 - 6 * i) & 63) as usize] as char);
+                }
+            }
+            out
+        }
+        format!("{}.{}.sig", enc(br#"{"alg":"RS256"}"#), enc(payload.as_bytes()))
+    }
+
+    /// `auth.json` 하나를 만들고 홈을 돌려준다 (Codex 는 홈 바로 아래다)
+    fn codex_home_with(json: &str) -> tempfile::TempDir {
+        let d = tempfile::tempdir().unwrap();
+        std::fs::write(d.path().join("auth.json"), json).unwrap();
+        d
+    }
+
+    /// 이 머신 실측 구조 (토큰만 가짜) — 만료는 JWT `exp` 클레임에서 읽는다.
+    #[test]
+    fn reads_the_codex_auth_file() {
+        let tok = fake_jwt(r#"{"exp": 1787196790}"#);
+        let home = codex_home_with(&format!(
+            r#"{{"auth_mode": "chatgpt", "OPENAI_API_KEY": null,
+                 "tokens": {{"access_token": "{tok}", "account_id": "acc-1"}}}}"#
+        ));
+        let a = read_codex_auth(home.path()).unwrap();
+        assert_eq!(a.access_token, tok);
+        assert_eq!(a.account_id, "acc-1");
+        assert_eq!(a.expires_at.unwrap().timestamp(), 1_787_196_790);
+    }
+
+    /// Codex 도 만료 토큰이면 호출 자체를 건너뛴다 — 오프라인에서도 성립.
+    #[test]
+    fn expired_codex_token_skips_the_call() {
+        let tok = fake_jwt(r#"{"exp": 1000}"#);
+        let home = codex_home_with(&format!(r#"{{"tokens": {{"access_token": "{tok}"}}}}"#));
+        assert!(fetch_codex_usage(home.path(), Utc::now()).is_none());
+    }
+
+    /// 파일이 없거나 토큰이 비면 None — rollout 폴백으로 간다.
+    #[test]
+    fn missing_codex_auth_disables_the_api() {
+        assert!(read_codex_auth(std::path::Path::new("/이런/홈은/없다")).is_none());
+        let home = codex_home_with(r#"{"tokens": {"access_token": ""}}"#);
+        assert!(read_codex_auth(home.path()).is_none());
+        // `exp` 를 못 읽는 불투명 토큰은 만료를 모르는 채로 쓴다 (서버가 401 로 거르면 폴백)
+        let home = codex_home_with(r#"{"tokens": {"access_token": "opaque"}}"#);
+        assert!(read_codex_auth(home.path()).unwrap().expires_at.is_none());
     }
 
     /// 캐시가 아직 없거나 파일 자체가 없으면 조용히 비활성.
