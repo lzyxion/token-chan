@@ -727,7 +727,7 @@ export default function Pet() {
                 pinVendor(src);
               }}
             >
-              <VendorIcon source={src} size={10} className="gauge-dot sub busy" />
+              <VendorIcon source={src} className="gauge-dot sub busy" />
             </button>
           ))}
           {/* 게이지만 짧은 표기 — 캐릭터 옆 좁은 열이라 이름이 길면 넘친다 */}
