@@ -97,16 +97,23 @@ pub fn window_label(minutes: u64) -> String {
 ///
 /// | 소스 | 원문 | 결과 |
 /// |---|---|---|
-/// | Claude `.claude.json` `organizationRateLimitTier` | `default_claude_max_5x` | `Claude Max 5x` |
-/// | Claude `organizationType` (티어가 없을 때) | `claude_max` | `Claude Max` |
+/// | Claude `.claude.json` `organizationRateLimitTier` | `default_claude_max_5x` | `Max 5x` |
+/// | Claude `organizationType` (티어가 없을 때) | `claude_max` | `Max` |
 /// | Codex rollout `plan_type` | `plus` | `Plus` |
 ///
 /// 표를 두지 않고 규칙으로 처리한다 — 값 목록이 공개 API 가 아니라서 새 플랜(`max_20x`
-/// 등)이 나와도 표를 고칠 때까지 원문이 그대로 새어 나가면 안 된다. `default_` 접두사만
+/// 등)이 나와도 표를 고칠 때까지 원문이 그대로 새어 나가면 안 된다. 붙어 오는 접두사를
 /// 떼고, 나머지는 단어별로 첫 글자를 올린다. **`5x`·`20x` 처럼 숫자로 시작하는 조각은
 /// 그대로 둔다** (`5X` 로 올리면 어색하다).
+///
+/// 떼는 접두사는 둘이다. `default_` 는 값에 붙어 오는 잡음이고, **`claude_` 는 벤더
+/// 이름**이다 — 이 이름이 놓이는 자리(계정 카드의 칩)는 이미 어느 벤더인지 아이콘과
+/// 계정으로 밝히고 있어서, 붙여 두면 `Claude · Claude Max 5x` 처럼 같은 말이 두 번 나온다.
+/// Codex 는 `plan_type` 에 벤더 이름을 안 넣어 뗄 것이 없다.
 pub fn plan_label(raw: &str) -> String {
-    let raw = raw.trim().strip_prefix("default_").unwrap_or(raw.trim());
+    let raw = raw.trim();
+    let raw = raw.strip_prefix("default_").unwrap_or(raw);
+    let raw = raw.strip_prefix("claude_").unwrap_or(raw);
     raw.split('_')
         .filter(|w| !w.is_empty())
         .map(|w| {
@@ -244,9 +251,10 @@ mod tests {
     /// 실측 원문 두 개가 같은 화면에서 같은 모양으로 읽혀야 한다.
     #[test]
     fn plan_label_reads_like_a_plan_name() {
-        // Claude `.claude.json` (이 머신 실측)
-        assert_eq!(plan_label("default_claude_max_5x"), "Claude Max 5x");
-        assert_eq!(plan_label("claude_max"), "Claude Max");
+        // Claude `.claude.json` (이 머신 실측). 벤더 이름은 뗀다 — 칩이 놓이는
+        // 계정 카드가 이미 어느 벤더인지 밝히고 있다
+        assert_eq!(plan_label("default_claude_max_5x"), "Max 5x");
+        assert_eq!(plan_label("claude_max"), "Max");
         // Codex rollout `plan_type` (실측 free/plus)
         assert_eq!(plan_label("plus"), "Plus");
         assert_eq!(plan_label("free"), "Free");
@@ -255,8 +263,10 @@ mod tests {
     /// 값 목록이 공개 API 가 아니라, 처음 보는 플랜도 원문이 그대로 새면 안 된다.
     #[test]
     fn plan_label_handles_unseen_values() {
-        assert_eq!(plan_label("default_claude_max_20x"), "Claude Max 20x");
-        assert_eq!(plan_label("claude_enterprise"), "Claude Enterprise");
+        assert_eq!(plan_label("default_claude_max_20x"), "Max 20x");
+        assert_eq!(plan_label("claude_enterprise"), "Enterprise");
+        // 벤더 이름만 남는 값이면 뗄 수 없다 — 빈 칩이 되면 안 된다
+        assert_eq!(plan_label("claude"), "Claude");
         assert_eq!(plan_label("business"), "Business");
         // 빈 값·구분자만 있는 값에도 패닉하지 않는다
         assert_eq!(plan_label(""), "");
@@ -322,7 +332,7 @@ mod tests {
             "2026-08-13T04:30:00.940401+00:00"
         );
         // 플랜 이름은 Codex 의 `plan_type` 과 같은 자리(detail)에, 같은 규칙으로
-        assert_eq!(p.detail, "Claude Max 5x");
+        assert_eq!(p.detail, "Max 5x");
         // 읽은 시각이 아니라 서버에서 받은 시각
         assert_eq!(p.fetched_at.timestamp_millis(), 1_786_580_825_099);
     }

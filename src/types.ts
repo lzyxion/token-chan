@@ -140,7 +140,7 @@ export interface PlanMeter {
 export interface PlanUsage {
   source: Source;
   meters: PlanMeter[];
-  /** 플랜 이름 (예: "Claude Max 5x", "Plus") */
+  /** 플랜 이름 (예: "Max 5x", "Plus") */
   detail: string;
   /** 서버에서 받아온 시각 — 읽은 시각이 아니라 낡음 판단에 쓸 수 있다 */
   fetched_at: string;
@@ -162,7 +162,7 @@ export interface Account {
   label: string;
   /** 로그인 방식 — 세 소스 모두 `{서비스} 로그인` 꼴 (예: "Claude 로그인", "ChatGPT 로그인") */
   detail: string;
-  /** 플랜 이름 (예: "Claude Max 5x"). 계정 파일에서 알 수 있는 소스만 —
+  /** 플랜 이름 (예: "Max 5x"). 계정 파일에서 알 수 있는 소스만 —
    *  Codex 는 비어 있고 `PlanUsage.detail` 로 온다 */
   plan: string;
   installs: Install[];

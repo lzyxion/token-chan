@@ -7,10 +7,10 @@ import type {
   AppSettings,
   CharacterRule,
   GaugeSide,
-  PlanUsage,
   Source,
   Summary,
 } from "../types";
+import { usePlans } from "../hooks/useUsage";
 import ResizeGrips from "../components/ResizeGrips";
 import VendorIcon from "../components/VendorIcon";
 import "./settings.css";
@@ -29,7 +29,7 @@ const TABS: [Tab, string][] = [
 const HOME_SOURCES: [Source, string][] = [
   ["claude", "Claude"],
   ["codex", "Codex"],
-  ["antigravity", "AGY"],
+  ["antigravity", "Antigravity"],
 ];
 
 export default function SettingsPanel() {
@@ -38,7 +38,10 @@ export default function SettingsPanel() {
   const [observedModels, setObservedModels] = useState<string[]>([]);
   const [tab, setTab] = useState<Tab>("general");
   const [accounts, setAccounts] = useState<Account[] | null>(null);
-  const [plans, setPlans] = useState<PlanUsage[]>([]);
+  // 플랜은 `usePlans` 로 **구독**한다. 손으로 한 번만 읽으면 Codex 칩이 빈 채로 굳는다 —
+  // Codex 플랜은 rollout 스캔이 끝나야 나오는데(부팅 후 10초 남짓), 이 창은 그보다
+  // 먼저 뜬다. Claude 는 계정 파일에서 바로 와서(`Account.plan`) 티가 안 났다.
+  const plans = usePlans();
   // 다시 검색은 별도 스레드에서 돌고 끝나면 accounts-changed 로 알려 온다
   const [rescanning, setRescanning] = useState(false);
 
@@ -63,9 +66,6 @@ export default function SettingsPanel() {
     invoke<Account[]>("get_accounts")
       .then(setAccounts)
       .catch(() => setAccounts([]));
-    invoke<PlanUsage[]>("get_plan")
-      .then(setPlans)
-      .catch(() => setPlans([]));
   };
 
   useEffect(() => {
@@ -104,10 +104,19 @@ export default function SettingsPanel() {
     };
   }, []);
 
-  // 사용자가 조절한 창 크기 기억 (연속 이벤트 debounce — 패널과 동일)
+  // 사용자가 옮긴 위치·조절한 크기 기억 (연속 이벤트 debounce — 패널과 동일).
+  // 이 창은 최상단이 아니라 뒤로 갔다가 다시 불려 오는 일이 잦다 — 그때마다 자리가
+  // 튀지 않으려면 위치도 기억해야 한다.
   useEffect(() => {
     const win = getCurrentWindow();
+    let moveTimer: ReturnType<typeof setTimeout> | undefined;
     let sizeTimer: ReturnType<typeof setTimeout> | undefined;
+    const unMoved = win.onMoved(({ payload }) => {
+      clearTimeout(moveTimer);
+      moveTimer = setTimeout(() => {
+        void invoke("save_window_position", { label: "settings", x: payload.x, y: payload.y });
+      }, 500);
+    });
     const unResized = win.onResized(({ payload }) => {
       clearTimeout(sizeTimer);
       sizeTimer = setTimeout(() => {
@@ -119,7 +128,9 @@ export default function SettingsPanel() {
       }, 500);
     });
     return () => {
+      clearTimeout(moveTimer);
       clearTimeout(sizeTimer);
+      unMoved.then((f) => f());
       unResized.then((f) => f());
     };
   }, []);
@@ -566,7 +577,7 @@ export default function SettingsPanel() {
                     <option value="auto">자동 (작업 중인 쪽)</option>
                     <option value="claude">Claude 고정</option>
                     <option value="codex">Codex 고정</option>
-                    <option value="antigravity">AGY 고정</option>
+                    <option value="antigravity">Antigravity 고정</option>
                   </select>
                 </div>
               )}
@@ -644,9 +655,23 @@ export default function SettingsPanel() {
                   // 확실하지만, 소스 단위로 온 것(Codex 의 rollout)은 CLI 가 지금 로그인된
                   // 계정 기준이라 같은 소스에 계정이 여럿이면 누구 것인지 못 가린다.
                   const fromSource = plans.find((p) => p.source === a.source)?.detail;
-                  const planText = a.plan || fromSource || "";
+                  // 플랜이 안 온다는 게 뜻하는 바가 **소스마다 다르다.** 한 규칙으로
+                  // 묶어 Free 를 박으면 셋 중 둘에서 거짓말이 된다:
+                  //
+                  // - Codex 는 무료면 `plan_type: "free"` 를 **직접 보낸다**(실측 90건 중
+                  //   65건). 값이 없다 = 무료가 아니라, 스캔 범위에 `rate_limits` 가 든
+                  //   rollout 이 아직 없다는 뜻이다 (한동안 안 쓴 계정).
+                  // - Claude 는 무료 티어로 Claude Code 를 못 쓴다. 카드가 있다 = 유료라,
+                  //   값이 없으면 티어를 못 읽은 것이다.
+                  // - agy 만 플랜 **개념 자체가 없다**. 여기서만 Free 가 사실이다.
+                  const noPlanConcept = a.source === "antigravity";
+                  const planText = a.plan || fromSource || (noPlanConcept ? "Free" : "");
+                  // "?" 는 **소스 단위로 온 플랜**이 이 계정 것인지 모른다는 뜻이다.
+                  // 추론한 Free 에는 붙이지 않는다 — 거긴 가릴 플랜 자체가 없다.
                   const ambiguous =
-                    !a.plan && accounts.filter((x) => x.source === a.source).length > 1;
+                    !a.plan &&
+                    !!fromSource &&
+                    accounts.filter((x) => x.source === a.source).length > 1;
                   return (
                     <div className="account-card" key={a.setting_key}>
                       <label className="account-head">
@@ -671,7 +696,9 @@ export default function SettingsPanel() {
                                 ? "이 소스에 계정이 여럿이라 어느 계정의 플랜인지 구분할 수 없습니다 — CLI 가 지금 로그인된 계정 기준입니다."
                                 : a.plan
                                   ? "이 계정의 설정 파일에 적힌 플랜입니다."
-                                  : "CLI 가 지금 로그인된 계정 기준입니다."
+                                  : fromSource
+                                    ? "CLI 가 지금 로그인된 계정 기준입니다."
+                                    : "Antigravity 는 플랜 구분이 없습니다."
                             }
                           >
                             {planText}
@@ -713,7 +740,7 @@ export default function SettingsPanel() {
               <div className="settings-hint">
                 자동 탐지는 앱을 어떻게 띄웠는지에 좌우됩니다. 위 목록에 빠진 설치본이
                 있으면 홈을 직접 지정하세요 — Claude 는 <code>.claude</code> 를 담고 있는
-                폴더, Codex·AGY 는 홈 폴더 자체입니다.
+                폴더, Codex·Antigravity 는 홈 폴더 자체입니다.
               </div>
 
               {HOME_SOURCES.map(([src, disp]) => {

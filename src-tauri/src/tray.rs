@@ -35,7 +35,7 @@ fn accounts_submenu(app: &AppHandle, prefix: &str) -> tauri::Result<Submenu<taur
         let src = match a.source {
             Source::Claude => "Claude",
             Source::Codex => "Codex",
-            Source::Antigravity => "AGY",
+            Source::Antigravity => "Antigravity",
         };
         // 어떤 계정인지만 알면 되므로 계정명만 표시한다
         items.push(Box::new(CheckMenuItem::with_id(

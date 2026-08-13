@@ -135,10 +135,17 @@ export default function CharacterStudio() {
     };
   }, [selected]);
 
-  // 창 크기 기억 (설정 창과 동일 패턴)
+  // 창 위치·크기 기억 (설정 창과 동일 패턴)
   useEffect(() => {
     const win = getCurrentWindow();
+    let moveTimer: ReturnType<typeof setTimeout> | undefined;
     let timer: ReturnType<typeof setTimeout> | undefined;
+    const unMoved = win.onMoved(({ payload }) => {
+      clearTimeout(moveTimer);
+      moveTimer = setTimeout(() => {
+        void invoke("save_window_position", { label: "studio", x: payload.x, y: payload.y });
+      }, 500);
+    });
     const unResized = win.onResized(({ payload }) => {
       clearTimeout(timer);
       timer = setTimeout(() => {
@@ -150,7 +157,9 @@ export default function CharacterStudio() {
       }, 500);
     });
     return () => {
+      clearTimeout(moveTimer);
       clearTimeout(timer);
+      unMoved.then((f) => f());
       unResized.then((f) => f());
     };
   }, []);

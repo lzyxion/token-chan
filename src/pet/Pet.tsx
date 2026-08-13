@@ -11,6 +11,7 @@ import {
   fmtTokens,
   shortModel,
   SOURCE_LABEL,
+  SOURCE_SHORT,
   totalOf,
 } from "../format";
 import type {
@@ -538,7 +539,7 @@ export default function Pet() {
     );
   };
 
-  // 로고 클릭 = 벤더 순환 (자동 → Claude → Codex → AGY → 자동).
+  // 로고 클릭 = 벤더 순환 (자동 → Claude → Codex → Antigravity → 자동).
   // 설정 창을 열지 않고 게이지가 보는 벤더를 바꾼다.
   const VENDOR_CYCLE: ("auto" | Source)[] = ["auto", "claude", "codex", "antigravity"];
   const cycleVendor = () => {
@@ -573,8 +574,9 @@ export default function Pet() {
               className={`gauge-dot ${active.busy ? "busy" : ""} ${active.stale ? "stale" : ""}`}
             />
           </button>
+          {/* 게이지만 짧은 표기 — 캐릭터 옆 좁은 열이라 이름이 길면 넘친다 */}
           <span className="gauge-label">
-            {SOURCE_LABEL[active.source]}
+            {SOURCE_SHORT[active.source]}
             {ctx?.model ? ` · ${shortModel(ctx.model)}` : ""}
             {active.busy ? " · 작업 중" : ""}
             {/* 고정 중 표시 — 글자 대신 핀 아이콘 (이모지는 색을 못 입혀 SVG) */}
