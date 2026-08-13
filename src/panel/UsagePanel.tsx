@@ -120,11 +120,10 @@ function VendorCard({
           title={m.resets_at ? new Date(m.resets_at).toLocaleString() : ""}
         />
       ))}
-      {/* 빈칸으로 두면 "로딩 중"으로 읽힌다 — 값을 안 주는 소스라는 걸 밝힌다
-          (게이지에서 점선 링으로 구분한 것과 같은 이유) */}
-      {meters.length === 0 && s.status.kind === "ok" && (
-        <div className="vendor-nolimit">공식 한도 없음</div>
-      )}
+      {/* 한도 미터가 없어도 아무 말도 안 한다. 예전엔 "공식 한도 없음" 을 적었는데,
+          카드에 이미 벤더·모델·컨텍스트·오늘 사용량이 차 있어 빈 줄이 "로딩 중"으로
+          읽히지 않는다. Antigravity 는 한도를 **영영** 안 주므로 그 줄이 상시 노이즈였고,
+          Claude·Codex 는 값이 늦게 오는 것뿐이라 그 사이 "없음"은 오히려 거짓말이었다. */}
     </div>
   );
 }
@@ -197,8 +196,8 @@ export default function UsagePanel() {
   // 구간이면 "84일에 42.3M" 으로 읽혀 일평균을 잘못 계산하게 된다 (잔디 범례와 같은 값).
   const recorded = recordedDays(summary.daily, summary.first_event_ts);
 
-  // 지금 돌고 있는 세션들 (busy 는 세션 레지스트리, active 는 파일 신선도로 유도한 값)
-  const running = live.sessions.filter((s) => s.status === "busy" || s.status === "active");
+  // 지금 돌고 있는 세션들 — 세 소스 다 파일에 적힌 턴 경계에서 온 값이다
+  const running = live.sessions.filter((s) => s.status === "busy");
   const busySources = new Set(running.map((s) => s.source));
   // 최근 세션 목록에서 **그 줄**만 짚기 위한 키. id 를 못 알아낸 세션은 넣지 않는다 —
   // 빈 문자열을 넣으면 id 가 빈 다른 줄과 잘못 맞물린다.

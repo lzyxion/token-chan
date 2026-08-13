@@ -7,6 +7,7 @@ import { useActiveVendor } from "../hooks/useActiveVendor";
 import VendorIcon from "../components/VendorIcon";
 import {
   fmtCost,
+  fmtDuration,
   fmtMinutes,
   fmtTokens,
   shortModel,
@@ -19,6 +20,7 @@ import type {
   CharacterImages,
   CharacterRule,
   GaugeSide,
+  LiveSessionView,
   PackConfig,
   PetState,
   Source,
@@ -27,8 +29,8 @@ import { interpolate, linesFor, mergeLines, pick, speechFor } from "./speech";
 import { DEFAULT_PACK_IMAGES } from "./defaultPack";
 import "./pet.css";
 
-/** 머리 위로 소품(`!`·`zzz`·`✨`)이 뜨는 상태 — 그때만 위쪽 여백을 잡는다 */
-const ABOVE_HEAD_STATES = new Set<PetState>(["alert", "sleep", "refreshed", "poke"]);
+/** 머리 위로 소품(`!`·`zzz`·`✨`·`🎉`)이 뜨는 상태 — 그때만 위쪽 여백을 잡는다 */
+const ABOVE_HEAD_STATES = new Set<PetState>(["alert", "sleep", "refreshed", "done", "poke"]);
 /** 소품이 캐릭터 박스 위로 솟는 최대치 (기본 배율 px) */
 const PROP_OVERHANG = 22;
 /** 소품이 없을 때 남기는 최소 여백 */
@@ -36,6 +38,12 @@ const IDLE_OVERHANG = 4;
 
 /** 클릭 반응 모션이 유지되는 시간 (ms) */
 const POKE_MS = 1800;
+/** 작업 완료 모션이 유지되는 시간 (ms).
+ *  `poke` 처럼 **사건의 잔상**이라 길이를 코드가 정한다. 말풍선 표시 시간(설정 1~15초)에
+ *  맞추지 않는 것은 대사를 꺼도 포즈는 나와야 하기 때문 — 둘은 서로 독립이다.
+ *  클릭 반응보다는 길게 둔다: 클릭은 내가 방금 한 짓이라 짧아도 알아채지만,
+ *  완료는 자리를 비운 사이에 지나갈 수 있어 돌아왔을 때도 남아 있어야 한다. */
+const DONE_MS = 8000;
 /** 이 거리(px)를 넘게 움직여야 드래그로 본다 — 그 전이면 클릭 */
 const DRAG_THRESHOLD_PX = 4;
 /** 이 간격 안에 다시 클릭되면 더블클릭으로 보고 두 번째 대사를 생략 */
@@ -87,6 +95,7 @@ export default function Pet() {
   const [ctxThreshold, setCtxThreshold] = useState(0.9);
   const [packImages, setPackImages] = useState<CharacterImages | null>(null);
   const [sleepAfterMin, setSleepAfterMin] = useState(30);
+  const [doneNoticeSec, setDoneNoticeSec] = useState(60);
   const [rules, setRules] = useState<CharacterRule[]>([]);
   const [defaultPack, setDefaultPack] = useState<string | null>(null);
   const [disabledStates, setDisabledStates] = useState<string[]>([]);
@@ -112,6 +121,8 @@ export default function Pet() {
       if (s.weeklyAlertThreshold) setWeeklyThreshold(s.weeklyAlertThreshold);
       if (s.contextAlertThreshold) setCtxThreshold(s.contextAlertThreshold);
       if (s.sleepAfterMinutes) setSleepAfterMin(s.sleepAfterMinutes);
+      // 0 은 "끔" 이라 의미 있는 값 — 다른 항목처럼 truthy 로 거르면 끌 수가 없다
+      setDoneNoticeSec(s.doneNoticeSeconds ?? 60);
       setRules(s.characterRules ?? []);
       setDefaultPack(s.characterPack ?? null);
       setDisabledStates(s.disabledStates ?? []);
@@ -239,6 +250,15 @@ export default function Pet() {
     return () => clearTimeout(t);
   }, [pokeUntil]);
 
+  // 작업 완료 반응이 유지되는 시각 (0 = 반응 아님). 완료는 `live` 폴링이 물어다 주는
+  // **사건**이라 스스로 꺼지지 않는다 — poke 와 같이 타이머로 되돌린다.
+  const [doneUntil, setDoneUntil] = useState(0);
+  useEffect(() => {
+    if (doneUntil <= Date.now()) return;
+    const t = setTimeout(() => setDoneUntil(0), doneUntil - Date.now());
+    return () => clearTimeout(t);
+  }, [doneUntil]);
+
   // 공식 미터 (링/컨디션/라벨/상태 판정 공용).
   // 백엔드가 **짧은 창부터** 담아 주므로 [0]=지금 걸리는 한도, [1]=그 다음 긴 창이다.
   // (라벨로 찾지 않는다 — 두 소스가 서로 다른 창 이름을 쓴다)
@@ -256,6 +276,10 @@ export default function Pet() {
     if (Date.now() < pokeUntil && !off.has("poke")) return "poke";
     // 한도 완전 소진 — 작업 중이어도 최우선 표시
     if (sessionPct != null && sessionPct >= 100 && !off.has("exhausted")) return "exhausted";
+    // 방금 뭔가 끝났다 — **작업 중보다 위**다. 다른 세션이 아직 돌고 있어도(그래서
+    // live.busy 가 여전히 참이어도) 끝난 건 끝난 것이고, 말풍선도 그렇게 말하는 중이라
+    // 포즈만 계속 타자를 치고 있으면 둘이 어긋난다. 잔상이 짧아 곧 working 으로 돌아온다.
+    if (Date.now() < doneUntil && !off.has("done")) return "done";
     if (live.busy && !off.has("working")) return "working";
     // 경고: 공식 세션 % ≥ 세션 한도, 공식 주간 % ≥ 주간 한도, 또는
     // 활성 벤더 컨텍스트 ≥ 컨텍스트 한도 (compact 임박 — agy 처럼 공식
@@ -284,6 +308,7 @@ export default function Pet() {
     active,
     refreshedUntil,
     pokeUntil,
+    doneUntil,
     sleepAfterMin,
     effectiveDisabled,
   ]);
@@ -376,11 +401,16 @@ export default function Pet() {
 
   // 스튜디오 ▶ 테스트 — 문구를 실제 경로(변수 치환 → 말풍선) 그대로 말해본다.
   // 리스너는 한 번만 걸고 최신 값은 ref 로 본다 (speechVars 가 렌더마다 새 클로저라서).
-  const speechVarsRef = useRef<() => Record<string, string | null>>(() => ({}));
+  const speechVarsRef = useRef<
+    (extra?: Record<string, string | null>) => Record<string, string | null>
+  >(() => ({}));
   useEffect(() => {
     const un = listen<string>("test-speech", (e) => {
+      // 완료 대사의 변수는 사건이 있어야 값이 생기므로 테스트에선 표본값을 넣는다 —
+      // `{제목}` 이 중괄호째 나오면 문구가 맞게 짜였는지 확인할 수가 없다
+      const vars = speechVarsRef.current({ 제목: "token-chan", 걸린시간: "3분 12초" });
       // 값을 모르는 변수 때문에 전부 생략되면 원문이라도 보여준다 — 테스트니까
-      const text = interpolate(e.payload, speechVarsRef.current()) ?? e.payload.split("|").join("\n");
+      const text = interpolate(e.payload, vars) ?? e.payload.split("|").join("\n");
       void invoke("show_speech", { text });
     });
     return () => {
@@ -388,8 +418,11 @@ export default function Pet() {
     };
   }, []);
 
-  // 문구 템플릿의 `{변수}` 에 넣을 표시 시점 값 (null = 아직 모르는 값 → 그 줄 생략)
-  const speechVars = (): Record<string, string | null> => {
+  // 문구 템플릿의 `{변수}` 에 넣을 표시 시점 값 (null = 아직 모르는 값 → 그 줄 생략).
+  // `extra` 는 그 사건에만 있는 값 — 작업 완료 대사의 `{제목}`·`{걸린시간}` 처럼
+  // 전역 상태로는 못 구하는 것들이고, 겹치는 이름은 사건 쪽이 이긴다
+  // (`{벤더}` 는 평소엔 게이지가 보는 벤더지만 완료 대사에선 **끝난 세션의** 벤더다).
+  const speechVars = (extra?: Record<string, string | null>): Record<string, string | null> => {
     const resetAt = resets ? new Date(resets) : null;
     return {
       오늘토큰: summary ? fmtTokens(totalOf(summary.today)) : null,
@@ -403,6 +436,7 @@ export default function Pet() {
         ? `${String(resetAt.getHours()).padStart(2, "0")}:${String(resetAt.getMinutes()).padStart(2, "0")}`
         : null,
       모델: summary?.last_model ? shortModel(summary.last_model) : null,
+      ...extra,
     };
   };
   speechVarsRef.current = speechVars;
@@ -415,13 +449,93 @@ export default function Pet() {
     const prev = prevStateRef.current;
     prevStateRef.current = state;
     if (prev === null || prev === state) return;
-    // 클릭 반응은 전용 대사가 따로 나가므로 전이 대사에서는 제외
+    // 클릭·완료는 전용 대사가 따로 나가므로 전이 대사에서는 제외.
+    // 완료를 안 빼면 잔상이 걷히는 `done → working` 이 **"작업 시작했어!"** 를 부른다 —
+    // 다른 세션이 계속 도는 동안 완료할 때마다 시작 대사가 따라붙는다.
     if (prev === "poke" || state === "poke") return;
+    if (prev === "done" || state === "done") return;
     const tpl = speechFor(prev, state, effectiveSpeechLines);
     const line = tpl ? interpolate(tpl, speechVars()) : null;
     if (line) void invoke("show_speech", { text: line });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [state, summary]);
+
+  /** 세션별 작업 시작 시각. `at === 0` = **언제 시작했는지 모름** (아래 참고) */
+  const busySinceRef = useRef<Map<string, { at: number; view: LiveSessionView }> | null>(null);
+
+  // 작업 완료 알림 — 상태 전이가 아니라 **세션 단위 사건**이다.
+  //
+  // 펫의 `working` 은 세 벤더를 통틀어 하나라도 돌면 켜지는 값이라, Codex 가 계속
+  // 도는 동안 Claude 가 끝나면 상태가 아예 안 바뀐다. 여러 CLI 를 같이 굴리는 게
+  // 이 앱의 전제인데 정작 그때 완료를 못 알리는 셈이었다. 그래서 `live.sessions` 를
+  // 세션 단위로 diff 해 걸린 시간을 재고, **끝났는지는 백엔드가 준 `live.completed`
+  // 로만 판단한다.**
+  //
+  // 사라진 것을 완료로 읽으면 안 된다 — 크래시·강제 종료·안전망 타임아웃이 전부 목록에서
+  // 빠지는 모양이 같아서, 죽은 세션을 두고 "5분 걸렸어" 라고 확신 있게 말하게 된다.
+  // 소스별 판정(Claude 는 status 허용목록, Codex 는 `task_complete`, agy 는 최종 응답)은
+  // 전부 백엔드에 있고 여기엔 그 결과만 온다.
+  //
+  // 턴 경계 자체는 세 소스 다 정확하지만 **모든 턴을 알리면 소음**이다. 몇 초짜리
+  // 턴은 화면을 보고 있었으니 알릴 이유가 없다 — `doneNoticeSec` 보다 오래 걸린
+  // 턴만 말한다 (0 = 끔, `resetNotifyMinutes` 와 같은 규칙).
+  useEffect(() => {
+    const now = Date.now();
+    const busy = new Map<string, LiveSessionView>();
+    for (const s of live.sessions) {
+      if (s.status !== "busy") continue;
+      // id 를 못 짚은 세션은 추적하지 않는다. 같은 벤더의 익명 세션 둘이 한 칸에
+      // 겹쳐 엉뚱한 세션의 완료를 알리게 된다 — 잘못 말하느니 안 말하는 게 낫다.
+      if (!s.id) continue;
+      busy.set(`${s.source}:${s.id}`, s);
+    }
+
+    const prev = busySinceRef.current;
+    // 첫 관측은 기준점만 잡는다. 그때 이미 돌고 있던 세션은 시작 시각을 알 수 없어
+    // `at = 0` 으로 두고 끝나도 알리지 않는다 — 앱을 켜자마자 한참 전에 시작된 턴을
+    // 두고 "3시간 걸렸어" 라고 말하는 걸 막는다.
+    const next = new Map<string, { at: number; view: LiveSessionView }>();
+    for (const [key, view] of busy) {
+      const was = prev?.get(key);
+      next.set(key, { at: was ? was.at : prev === null ? 0 : now, view });
+    }
+    busySinceRef.current = next;
+    // 꺼져 있어도 추적은 계속한다 — 켜는 순간부터 바로 맞는 값이 나오게.
+    // 상태를 끄면 포즈뿐 아니라 대사도 안 나온다 (다른 상태와 같은 규칙).
+    if (prev === null || !doneNoticeSec || effectiveDisabled.includes("done")) return;
+
+    // **완료의 근거는 이 집합뿐이다.** 목록에서 빠졌다는 사실은 근거가 아니다.
+    const completedKeys = new Set(live.completed.map((c) => `${c.source}:${c.id}`));
+    const finished = [...prev.entries()]
+      .filter(([key, b]) => !busy.has(key) && b.at > 0 && completedKeys.has(key))
+      .map(([, b]) => ({ view: b.view, ms: now - b.at }))
+      .filter((f) => f.ms >= doneNoticeSec * 1000)
+      .sort((a, b) => b.ms - a.ms);
+    // 말풍선은 창이 하나뿐이라 연달아 부르면 뒤엣것이 앞엣것을 덮는다. 같은 폴링에서
+    // 둘이 끝났으면 **가장 오래 걸린 쪽** — 기다리고 있었을 확률이 높은 쪽을 말한다.
+    const done = finished[0];
+    if (!done) return;
+    setDoneUntil(Date.now() + DONE_MS);
+
+    // 제목은 최근 세션 목록에서 같은 id 로 집어 온다. `LiveSessionView.name` 은
+    // 소스마다 뜻이 달라(유도 경로는 소스 이름을 넣는다) 제목으로 쓸 수 없다.
+    const title =
+      summary?.sessions.find((r) => r.source === done.view.source && r.id === done.view.id)
+        ?.label ?? null;
+    const tpl = pick(linesFor("done", effectiveSpeechLines), "done");
+    const line = tpl
+      ? interpolate(
+          tpl,
+          speechVars({
+            제목: title,
+            벤더: SOURCE_LABEL[done.view.source],
+            걸린시간: fmtDuration(done.ms / 1000),
+          }),
+        )
+      : null;
+    if (line) void invoke("show_speech", { text: line });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [live]);
 
   // 우클릭 = 트레이와 동일한 메뉴 (펫 숨기기 / 사용량 패널 / 설정 / 종료)
   const onContextMenu = (e: React.MouseEvent) => {
@@ -647,6 +761,7 @@ export default function Pet() {
           <div className="alert-mark">!</div>
           <div className="ko-mark">🪫</div>
           <div className="sparkle">✨</div>
+          <div className="done-mark">🎉</div>
           <div className="sweat">💦</div>
         </div>
         <div className="ground-shadow" />

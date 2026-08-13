@@ -34,6 +34,12 @@ pub struct Settings {
     pub context_alert_threshold: f64,
     /// 블록 리셋 임박 대사 (분 전, 0 = 끔) — OS 알림이 아니라 말풍선으로 나간다
     pub reset_notify_minutes: u32,
+    /// 작업 완료 대사를 낼 최소 소요 시간 (초, 0 = 끔).
+    ///
+    /// 턴 경계는 세 소스 모두 정확하지만 **모든 턴을 알리면 소음**이다 — 몇 초짜리 턴은
+    /// 화면을 보고 있었으니 알릴 이유가 없다. 이 값은 "자리를 비웠을 법한 길이" 를
+    /// 가르는 선이고, 이보다 짧게 끝난 턴은 조용히 지나간다.
+    pub done_notice_seconds: u32,
     /// 클릭 통과 모드 — 펫이 마우스에 전혀 반응하지 않음 (트레이에서만 해제)
     pub click_through: bool,
     /// 사용량 패널 창 위치 (물리 픽셀) — 사용자가 옮긴 자리를 기억
@@ -61,7 +67,7 @@ pub struct Settings {
     pub sleep_after_minutes: u32,
     /// 모델별 캐릭터 규칙 (최장 접두사 매칭, 미매칭 시 character_pack 폴백)
     pub character_rules: Vec<CharacterRule>,
-    /// 비활성화한 펫 상태 목록 (working/alert/sleep/exhausted/refreshed)
+    /// 비활성화한 펫 상태 목록 (working/alert/sleep/exhausted/refreshed/done/poke)
     pub disabled_states: Vec<String>,
     /// 게이지 라벨(벤더·수치·리셋) 상시 표시 — 끄면 호버할 때만 펼쳐진다.
     /// 예전 "발밑 미니 라벨" 설정을 전환한 것이라 옛 키를 alias 로 읽는다.
@@ -122,6 +128,7 @@ impl Default for Settings {
             weekly_alert_threshold: 0.9,
             context_alert_threshold: 0.9,
             reset_notify_minutes: 15,
+            done_notice_seconds: 60,
             click_through: false,
             panel_pos: None,
             panel_size: None,

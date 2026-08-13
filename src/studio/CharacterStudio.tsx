@@ -24,11 +24,11 @@ const STATES: {
     key: "working",
     label: "작업",
     toggleable: true,
-    speech: [
-      ["enter.working", "작업 시작"],
-      ["leave.working", "작업 종료"],
-    ],
+    speech: [["enter.working", "작업 시작"]],
   },
+  // 완료는 `working` 에서 갈라져 나온 **자기 상태**다 — 작업 중이 벤더를 통틀어 하나인
+  // 것과 달리 완료는 세션마다 따로 일어나므로, 작업 카드에 얹으면 둘의 단위가 어긋난다
+  { key: "done", label: "작업 완료", toggleable: true, speech: [["done", "작업 완료 (세션마다)"]] },
   { key: "alert", label: "경고", toggleable: true, speech: [["enter.alert", "한도 경고"]] },
   {
     key: "sleep",

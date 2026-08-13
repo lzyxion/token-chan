@@ -324,18 +324,6 @@ fn spawn_usage_thread(app: AppHandle) {
             if let Some(p) = codex.plan() {
                 set_plan(&app, p);
             }
-            // 세션 레지스트리가 없는 소스의 감시 파일을 라이브 스레드에 넘긴다
-            {
-                let mut watch = vec![];
-                if let Some(p) = codex.watch_path() {
-                    watch.push((Source::Codex, p, "codex".to_string()));
-                }
-                if let Some(p) = agy.watch_path() {
-                    watch.push((Source::Antigravity, p, "agy".to_string()));
-                }
-                *app.state::<AppState>().watch.lock().unwrap() = watch;
-            }
-
             let pricing = PriceTable::with_overrides(
                 price_override.as_deref().map(std::path::Path::new),
             );
@@ -376,10 +364,15 @@ fn spawn_usage_thread(app: AppHandle) {
 fn spawn_live_thread(app: AppHandle) {
     std::thread::spawn(move || {
         let mut prev = String::new();
-        // 감시 파일의 직전 관측값 — 회차 사이에 들고 있어야 크기 변화를 알 수 있다
-        let mut tracker = usage_core::live::WatchTracker::default();
-        // Codex 턴 추적 — 홈별 history.jsonl 오프셋과 세션별 진행 상태를 들고 있는다
+        // 턴 추적 — 파일에 적힌 턴 경계를 직접 읽는다. 소스마다 파일이 달라
+        // 추적기도 따로지만 결과(`TurnPoll`)는 같은 모양이다.
         let mut turns = usage_core::codex::TurnWatcher::default();
+        let mut agy_turns = usage_core::antigravity::TurnWatcher::default();
+        // Claude 세션의 직전 회차 status. 저쪽은 턴 감시기가 아니라 레지스트리를 읽으므로
+        // 완료를 여기서 가려낸다 — 세 소스를 프론트에 **같은 모양**으로 내보내기 위한 변환이고,
+        // 소스별 지식은 프론트가 아니라 여기 남는다.
+        let mut claude_prev: std::collections::HashMap<String, String> =
+            std::collections::HashMap::new();
         loop {
             // 라이브 세션도 활성 계정의 설치본만 본다 (계정을 끄면 그쪽 세션은 무시)
             let roots = enabled_roots(&app);
@@ -387,33 +380,55 @@ fn spawn_live_thread(app: AppHandle) {
             let now = Utc::now();
             let mut live = read_live_state(&roots.sessions, now.timestamp_millis());
 
-            // Codex 는 턴 경계를 파일에서 **직접 읽는다**. 유도가 아니라 사실이라
-            // 상태 이름도 Claude 와 같은 `busy` 를 쓴다.
+            // Claude 완료 판정 — **레지스트리에 남아 있으면서** status 가 허용목록으로
+            // 바뀐 세션만 완료다. 목록에서 사라진 것은 완료가 아니다: 레지스트리가
+            // `<pid>.json` 이라 프로세스가 끝나면 파일째 사라지고, 크래시도 (신선도로
+            // 밀려나) 같은 모양이 된다. 둘 다 "턴이 끝났다"는 뜻이 아니다.
+            let mut claude_now = std::collections::HashMap::new();
+            for s in live.sessions.iter().filter(|s| s.source == Source::Claude && !s.id.is_empty())
+            {
+                claude_now.insert(s.id.clone(), s.status.clone());
+            }
+            for (id, status) in &claude_now {
+                let Some(before) = claude_prev.get(id) else { continue };
+                if usage_core::live::claude_turn_finished(before, status) {
+                    live.completed.push(usage_core::live::CompletedSession {
+                        source: Source::Claude,
+                        id: id.clone(),
+                    });
+                }
+            }
+            claude_prev = claude_now;
+
+            // Codex·Antigravity 는 턴 경계를 파일에서 **직접 읽는다**. 유도가 아니라
+            // 사실이라 상태 이름도 Claude 와 같은 `busy` 를 쓴다.
             let poll = turns.poll(&roots.codex, now);
-            for id in &poll.running {
-                live.busy = true;
-                live.busy_count += 1;
-                live.sessions.push(usage_core::live::LiveSessionView {
-                    source: Source::Codex,
-                    id: id.clone(),
-                    name: id.chars().take(8).collect(),
-                    status: "busy".into(),
-                    cwd: String::new(),
-                });
+            let agy_poll = agy_turns.poll(&roots.antigravity, now);
+            let turn_sessions = [
+                (Source::Codex, &poll.running, &poll.completed),
+                (Source::Antigravity, &agy_poll.running, &agy_poll.completed),
+            ];
+            for (source, running, completed) in turn_sessions {
+                for id in running {
+                    live.busy = true;
+                    live.busy_count += 1;
+                    live.sessions.push(usage_core::live::LiveSessionView {
+                        source,
+                        id: id.clone(),
+                        name: id.chars().take(8).collect(),
+                        status: "busy".into(),
+                        cwd: String::new(),
+                    });
+                }
+                for id in completed {
+                    live.completed
+                        .push(usage_core::live::CompletedSession { source, id: id.clone() });
+                }
             }
 
-            // 레지스트리도 턴 이벤트도 없는 소스는 감시 파일 크기 변화로 유도한다.
-            // 사용량 스캔(10초)이 아니라 여기(2초)서 stat 해야 작업 시작이 늦게 안 보인다.
-            {
-                let watch = { app.state::<AppState>().watch.lock().unwrap().clone() };
-                // 턴 추적이 Codex 를 덮고 있으면 감시 목록에서 뺀다 — 그대로 두면 크기
-                // 변화 판정이 45초 꼬리를 되살려 방금 없앤 종료 지연이 돌아온다.
-                let watch: Vec<_> = watch
-                    .into_iter()
-                    .filter(|(s, _, _)| !(poll.covered && *s == Source::Codex))
-                    .collect();
-                usage_core::live::add_inferred(&mut live, &watch, now, &mut tracker);
-            }
+            // 값이 안 바뀌면 안 보낸다. `completed` 는 회차 단위 신호라 이 비교에 걸릴까
+            // 싶지만 안 걸린다 — 완료 회차의 직전 회차엔 그 세션이 `sessions` 에 들어 있어
+            // 두 JSON 이 반드시 다르다. (비교 방식을 바꾸면 여기를 다시 봐야 한다.)
             let json = serde_json::to_string(&live).unwrap_or_default();
             if json != prev {
                 prev = json;

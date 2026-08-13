@@ -9,7 +9,8 @@
 //! ## 저장 위치와 포맷
 //!
 //! `~/.gemini/antigravity-cli/conversations/<uuid>.db` — 대화 하나가 **SQLite 파일 하나**다.
-//! JSONL 이 아니고, 같은 폴더의 `transcript.jsonl` 에는 토큰이 아예 없다(의미 단위 로그).
+//! JSONL 이 아니고, `brain/<uuid>/.system_generated/logs/transcript.jsonl` 에는 토큰이
+//! 아예 없다(의미 단위 로그). **대신 거기에 턴 경계가 있다** — [`TurnWatcher`] 참고.
 //!
 //! 쓰는 테이블은 `gen_metadata` 하나뿐 — **요청 1건 = 1행**이고 `data` 가 protobuf blob 이다.
 //! 3턴 대화에 14행이 남았다: 에이전트가 한 턴에 툴 호출로 여러 번 요청하기 때문이다.
@@ -189,20 +190,6 @@ impl AntigravityAdapter {
         self.cache.values().map(|fc| fc.written_at).max()
     }
 
-    /// 작업 중 판정에 mtime 을 볼 파일. 응답 중에는 본체가 아니라 **WAL 이 자란다**.
-    /// 그래서 둘 중 실제로 더 최근에 쓰인 쪽을 넘긴다 (라이브 스레드가 stat 한 번만 하면 되게).
-    pub fn watch_path(&self) -> Option<PathBuf> {
-        let db = self
-            .cache
-            .iter()
-            .max_by_key(|(_, fc)| fc.written_at)
-            .map(|(p, _)| p.clone())?;
-        let wal = db.with_extension("db-wal");
-        let newer = |p: &PathBuf| {
-            std::fs::metadata(p).and_then(|m| m.modified()).unwrap_or(SystemTime::UNIX_EPOCH)
-        };
-        Some(if newer(&wal) > newer(&db) { wal } else { db })
-    }
 }
 
 /// 대화의 제목과 작업 위치 — **첫 스텝(첫 사용자 입력)** 에서 뽑는다.
@@ -370,6 +357,141 @@ fn parse_conversation(path: &Path) -> Option<(Vec<ParsedEvent>, RawContext, Opti
 mod tests {
     use super::*;
     use crate::protobuf::build::{field_bytes, field_varint};
+
+    // ── 턴 추적 ──
+
+    /// 실측 줄 모양 그대로 (필요 필드만)
+    fn step(kind: &str, tools: bool) -> String {
+        let tc = if tools { r#","tool_calls":[{"name":"view_file"}]"# } else { "" };
+        format!(r#"{{"step_index":"0","source":"MODEL","type":"{kind}","status":"DONE"{tc}}}"#)
+    }
+
+    fn conv_home(id: &str, lines: &[String]) -> tempfile::TempDir {
+        let d = tempfile::tempdir().unwrap();
+        let logs = d.path().join("brain").join(id).join(".system_generated").join("logs");
+        std::fs::create_dir_all(&logs).unwrap();
+        let mut body = lines.join("\n");
+        if !body.is_empty() {
+            body.push('\n');
+        }
+        std::fs::write(logs.join("transcript.jsonl"), body).unwrap();
+        d
+    }
+
+    fn append(home: &Path, id: &str, lines: &[String]) {
+        let p = home
+            .join("brain").join(id).join(".system_generated").join("logs").join("transcript.jsonl");
+        let mut s = std::fs::read_to_string(&p).unwrap_or_default();
+        for l in lines {
+            s.push_str(l);
+            s.push('\n');
+        }
+        std::fs::write(p, s).unwrap();
+    }
+
+    const CONV: &str = "0f232cbb-b515-46e8-a6ca-f60532dca6d7";
+
+    /// 실측 흐름 그대로: 입력 → 도구 왕복 → 최종 답변
+    #[test]
+    fn turn_starts_on_input_and_ends_on_the_final_answer() {
+        let now = Utc::now();
+        let home = conv_home(CONV, &[step("USER_INPUT", false)]);
+        let homes = vec![home.path().to_path_buf()];
+        let mut w = TurnWatcher::default();
+
+        // 첫 관측은 과거를 되짚지 않는다 — 이미 있던 줄로 시작했다고 보면 안 된다
+        let first = w.poll(&homes, now);
+        assert!(first.covered);
+        assert!(first.running.is_empty(), "첫 회차는 기준점만 잡는다");
+
+        append(home.path(), CONV, &[step("USER_INPUT", false)]);
+        assert_eq!(w.poll(&homes, now).running, vec![CONV.to_string()]);
+
+        // 도구를 부르는 동안은 계속 작업 중
+        append(home.path(), CONV, &[step("PLANNER_RESPONSE", true), step("VIEW_FILE", false)]);
+        assert_eq!(w.poll(&homes, now).running, vec![CONV.to_string()], "도구 왕복 중");
+
+        // tool_calls 없는 PLANNER_RESPONSE = 최종 답변
+        append(home.path(), CONV, &[step("PLANNER_RESPONSE", false)]);
+        assert!(w.poll(&homes, now).running.is_empty(), "최종 답변에 풀려야 한다");
+    }
+
+    /// 종료 줄이 영영 안 와도(크래시) 언젠가 풀린다
+    #[test]
+    fn a_turn_that_never_ends_is_released() {
+        let now = Utc::now();
+        let home = conv_home(CONV, &[]);
+        let homes = vec![home.path().to_path_buf()];
+        let mut w = TurnWatcher::default();
+        w.poll(&homes, now);
+        append(home.path(), CONV, &[step("USER_INPUT", false)]);
+        assert!(!w.poll(&homes, now).running.is_empty());
+
+        // **크래시를 완료로 보고하면 안 된다.** running 에서 빠지는 건 정상 완료와
+        // 같지만, 그건 종료 신호를 못 받았다는 뜻이지 끝났다는 뜻이 아니다.
+        let later = now + chrono::Duration::milliseconds(TURN_STALE_MS + 1);
+        let p = w.poll(&homes, later);
+        assert!(p.running.is_empty(), "안전망이 풀어 준다");
+        assert!(p.completed.is_empty(), "그러나 완료는 아니다");
+    }
+
+    /// `tool_calls` 없는 최종 답변만 완료다 — 도구를 부르는 중간 응답은 아니다.
+    #[test]
+    fn only_the_final_response_completes_the_turn() {
+        let now = Utc::now();
+        let home = conv_home(CONV, &[]);
+        let homes = vec![home.path().to_path_buf()];
+        let mut w = TurnWatcher::default();
+        w.poll(&homes, now);
+
+        append(home.path(), CONV, &[step("USER_INPUT", false)]);
+        assert!(w.poll(&homes, now).completed.is_empty(), "이제 막 시작했다");
+
+        // 도구를 부르는 응답 — 턴은 계속된다
+        append(home.path(), CONV, &[step("PLANNER_RESPONSE", true)]);
+        let mid = w.poll(&homes, now);
+        assert!(!mid.running.is_empty(), "도구 호출 중이면 아직 돈다");
+        assert!(mid.completed.is_empty());
+
+        append(home.path(), CONV, &[step("PLANNER_RESPONSE", false)]);
+        let p = w.poll(&homes, now);
+        assert!(p.running.is_empty());
+        assert_eq!(p.completed, vec![CONV.to_string()]);
+    }
+
+    /// 대화마다 파일이 따로라 **동시 대화가 각각** 추적된다 (크기 변화 방식이 못 하던 것)
+    #[test]
+    fn concurrent_conversations_are_tracked_separately() {
+        let now = Utc::now();
+        let other = "8bdd6789-2bd0-4b51-801c-8791b3064b41";
+        let home = conv_home(CONV, &[]);
+        let logs = home.path().join("brain").join(other).join(".system_generated").join("logs");
+        std::fs::create_dir_all(&logs).unwrap();
+        std::fs::write(logs.join("transcript.jsonl"), "").unwrap();
+        let homes = vec![home.path().to_path_buf()];
+        let mut w = TurnWatcher::default();
+        w.poll(&homes, now);
+
+        append(home.path(), CONV, &[step("USER_INPUT", false)]);
+        append(home.path(), other, &[step("USER_INPUT", false)]);
+        let mut running = w.poll(&homes, now).running;
+        running.sort();
+        assert_eq!(running.len(), 2, "둘 다 돌고 있어야 한다");
+
+        // 하나만 끝나면 다른 하나는 그대로
+        append(home.path(), CONV, &[step("PLANNER_RESPONSE", false)]);
+        assert_eq!(w.poll(&homes, now).running, vec![other.to_string()]);
+    }
+
+    /// transcript 가 없는 옛 버전이면 폴백하라고 알려야 한다
+    #[test]
+    fn no_transcript_means_not_covered() {
+        let d = tempfile::tempdir().unwrap();
+        let mut w = TurnWatcher::default();
+        let poll = w.poll(&[d.path().to_path_buf()], Utc::now());
+        assert!(!poll.covered);
+        assert!(poll.running.is_empty());
+    }
 
     /// 실데이터와 같은 배치로 gen_metadata 행 하나를 만든다.
     struct Row {
@@ -591,5 +713,174 @@ mod tests {
 
         let mut a = AntigravityAdapter::new(vec![home]);
         assert_eq!(a.scan(DateTime::UNIX_EPOCH.into()).events.len(), 3);
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 턴 추적 — 크기 변화 유도 대신 **파일에 적힌 턴 경계**를 읽는다
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// 턴이 영영 안 끝날 때 풀어 주는 안전망 (크래시·강제 종료).
+/// 스텝 줄이 몇 초 간격으로 흐르므로(실측: 9초 턴에 10줄) 5분이면 넉넉하다.
+pub const TURN_STALE_MS: i64 = 5 * 60 * 1000;
+
+/// `transcript.jsonl` 한 줄. 쓰는 필드만 받는다.
+#[derive(serde::Deserialize)]
+struct TranscriptLine {
+    #[serde(rename = "type")]
+    kind: Option<String>,
+    /// **있으면 도구를 호출한 것** = 턴이 계속된다. 최종 답변에는 이 키가 아예 없다.
+    tool_calls: Option<serde_json::Value>,
+}
+
+struct ConvTurn {
+    /// transcript 에서 읽은 지점 — 매 회차 새로 늘어난 부분만 본다
+    offset: u64,
+    running: bool,
+    /// 마지막으로 줄을 본 시각 (안전망 기준)
+    last_activity: DateTime<Utc>,
+}
+
+/// [`TurnWatcher::poll`] 결과
+pub struct TurnPoll {
+    /// transcript 를 하나라도 읽을 수 있었는지 — **진단용**이다. `false` 면 이 방식이
+    /// 성립하지 않으므로(옛 버전이라 파일이 없음) 그 홈의 대화는 작업 중으로 잡히지 않는다.
+    /// 예전엔 여기서 크기 변화로 폴백했지만 그 신호로는 완료·크래시가 구분되지 않아
+    /// 제거했다 (live.rs 모듈 주석).
+    pub covered: bool,
+    /// 지금 턴이 돌고 있는 대화 uuid 들
+    pub running: Vec<String>,
+    /// 이번 회차에 **최종 답변으로** 끝난 대화 uuid 들.
+    ///
+    /// 안전망 타임아웃(`TURN_STALE_MS`)으로 풀린 것은 여기 없다 — 크래시와 완료를 가르는
+    /// 유일한 신호다. 셋 중 agy 가 가장 약한 고리다: Claude 는 status, Codex 는
+    /// `task_complete`/`turn_aborted` 로 사유까지 갈리지만 여기는 그 구분이 없다.
+    pub completed: Vec<String>,
+}
+
+/// agy 턴 추적.
+///
+/// **왜 이렇게 하는가** — 예전의 크기 변화 방식(이후 제거됨)은 세 가지를 잃고 있었다.
+/// 종료를 45초 창으로 때려 맞춰야 했고, 감시 파일이 **가장 최근 대화 하나**뿐이라 동시
+/// 대화를 못 봤으며, DB 크기는 턴과 무관하게도 출렁였다. 실측(2026-08-13, 감시 30분):
+///
+/// ```text
+/// 12:25:19  DB  +28672B     ← 아무도 입력하지 않음
+/// 12:25:27  DB  -840512B    ← 크기가 **줄어듦** (WAL 체크포인트)
+/// 12:25:41  STEP idx=34 USER_INPUT        ← 진짜 턴 시작은 여기
+/// ```
+///
+/// `<홈>/brain/<대화 uuid>/.system_generated/logs/transcript.jsonl` 이 답이었다.
+/// **대화마다 파일이 따로**이고 uuid 가 `conversations/<uuid>.db` 와 정확히 같으며,
+/// 줄이 **턴 도중에 흘러나온다**(같은 실측, 9초 턴에 10줄):
+///
+/// ```text
+/// 12:26:03  idx=40 USER_INPUT                  ← 제출한 그 초에 붙는다
+/// 12:26:04  idx=41 PLANNER_RESPONSE  tool_calls 있음
+/// 12:26:04  idx=42 LIST_DIRECTORY
+/// …
+/// 12:26:12  idx=49 PLANNER_RESPONSE  tool_calls 없음  ← 최종 답변 = 턴 종료
+/// ```
+///
+/// 그래서 `USER_INPUT` 으로 시작을, **`tool_calls` 없는 `PLANNER_RESPONSE`** 로 종료를
+/// 읽는다. 실측 61건이 깔끔하게 갈렸다 — 도구 호출 45건은 전부 `content` 가 없고,
+/// 최종 답변 16건은 `tool_calls` 키가 아예 없다.
+#[derive(Default)]
+pub struct TurnWatcher {
+    /// transcript 경로별 상태
+    convs: HashMap<PathBuf, ConvTurn>,
+}
+
+/// `<홈>/brain/*/.system_generated/logs/transcript.jsonl` 을 훑는다.
+/// 대화 폴더만 한 겹 읽으므로 재귀 탐색이 아니다.
+fn transcripts(home: &Path) -> Vec<(String, PathBuf)> {
+    let Ok(entries) = std::fs::read_dir(home.join("brain")) else { return vec![] };
+    let mut out = vec![];
+    for e in entries.filter_map(|e| e.ok()) {
+        if !e.file_type().map(|t| t.is_dir()).unwrap_or(false) {
+            continue;
+        }
+        let Some(id) = e.file_name().to_str().map(str::to_string) else { continue };
+        let p = e.path().join(".system_generated").join("logs").join("transcript.jsonl");
+        if p.is_file() {
+            out.push((id, p));
+        }
+    }
+    out
+}
+
+impl TurnWatcher {
+    pub fn poll(&mut self, homes: &[PathBuf], now: DateTime<Utc>) -> TurnPoll {
+        let mut covered = false;
+        let mut seen: HashSet<PathBuf> = HashSet::new();
+        let mut running = vec![];
+        let mut completed = vec![];
+
+        for home in homes {
+            for (id, path) in transcripts(home) {
+                covered = true;
+                seen.insert(path.clone());
+                let size = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+
+                let start = match self.convs.get(&path) {
+                    // **첫 관측은 과거 이력을 되짚지 않는다.** 그러면 지난 대화가 전부
+                    // 방금 시작한 것처럼 보인다 (Codex 와 같은 규칙).
+                    None => size,
+                    Some(c) if c.offset > size => 0,
+                    Some(c) => c.offset,
+                };
+                let (lines, consumed) = crate::live::read_from(&path, start);
+                let turn = self.convs.entry(path.clone()).or_insert(ConvTurn {
+                    offset: start,
+                    running: false,
+                    last_activity: now,
+                });
+                turn.offset = start + consumed;
+
+                let mut finished_cleanly = false;
+                for line in &lines {
+                    let Ok(v) = serde_json::from_str::<TranscriptLine>(line) else { continue };
+                    turn.last_activity = now;
+                    match v.kind.as_deref() {
+                        Some("USER_INPUT") => {
+                            turn.running = true;
+                            finished_cleanly = false;
+                        }
+                        // 도구를 부르는 중이면 아직 끝이 아니다.
+                        // 돌고 있던 턴에 온 최종 답변만 완료로 센다.
+                        Some("PLANNER_RESPONSE") if !has_tools(&v) => {
+                            finished_cleanly = turn.running;
+                            turn.running = false;
+                        }
+                        _ => {}
+                    }
+                }
+                if finished_cleanly {
+                    completed.push(id.clone());
+                }
+
+                // 종료 이벤트가 영영 안 오는 경우(크래시) 풀어 준다.
+                // **완료 판정 뒤에 와야 한다** — 앞에 두면 타임아웃이 완료로 샌다.
+                if turn.running && (now - turn.last_activity).num_milliseconds() > TURN_STALE_MS {
+                    turn.running = false;
+                }
+                if turn.running {
+                    running.push(id);
+                }
+            }
+        }
+        // 지워진 대화는 들고 있을 이유가 없다
+        self.convs.retain(|p, _| seen.contains(p));
+        TurnPoll { covered, running, completed }
+    }
+}
+
+fn has_tools(v: &TranscriptLine) -> bool {
+    match &v.tool_calls {
+        Some(serde_json::Value::Array(a)) => !a.is_empty(),
+        Some(serde_json::Value::Null) | None => false,
+        // 배열이 아닌 모양으로 오면 뜻을 모르니 "도구 있음"으로 본다 —
+        // 턴을 일찍 끝내는 것보다 안전망(TURN_STALE_MS)에 맡기는 쪽이 낫다
+        Some(_) => true,
     }
 }

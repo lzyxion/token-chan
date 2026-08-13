@@ -33,5 +33,4 @@ fn main() {
         None => println!("\n공식 한도: 없음 (rate_limits 미기록)"),
     }
     println!("마지막 쓰기: {:?}", adapter.last_activity());
-    println!("감시 파일: {:?}", adapter.watch_path());
 }

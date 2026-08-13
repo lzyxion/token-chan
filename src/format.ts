@@ -74,6 +74,27 @@ export function fmtMinutes(min: number): string {
 }
 
 /**
+ * 초 → "45초" · "3분 12초" · "1시간 5분".
+ *
+ * `fmtMinutes` 와 따로 두는 이유는 **다루는 눈금이 다르기 때문**이다. 저쪽은 5시간~30일
+ * 창의 잔여라 분 아래가 노이즈지만, 여기는 한 턴이 걸린 시간이라 값의 대부분이 분 아래에서
+ * 끝난다 — 초를 버리면 거의 모든 턴이 "0분"이 된다.
+ * 말풍선에 들어가는 값이라 폭보다 읽기 쉬움을 택해 단위를 한글로 쓴다.
+ */
+export function fmtDuration(sec: number): string {
+  const total = Math.max(0, Math.round(sec));
+  if (total < 60) return `${total}초`;
+  const min = Math.floor(total / 60);
+  if (min < 60) {
+    const s = total % 60;
+    return s ? `${min}분 ${s}초` : `${min}분`;
+  }
+  const h = Math.floor(min / 60);
+  const m = min % 60;
+  return m ? `${h}시간 ${m}분` : `${h}시간`;
+}
+
+/**
  * 리셋까지 남은 시간 — 절대 시각(`9/10 10:46`)보다 행동에 가깝고 폭도 절반이라
  * 좁은 카드에 들어간다. 창 길이가 5시간부터 30일까지라 단위를 눈금에 맞춰 바꾼다.
  */

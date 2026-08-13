@@ -4,6 +4,9 @@ import { DEFAULT_LINES } from "../pet/speech";
 /** 문구에서 쓸 수 있는 변수 — 리셋 임박은 백엔드가 채우는 {분}·{시각}만 지원한다 */
 const VARS_DEFAULT = ["오늘토큰", "오늘비용", "세션", "주간", "컨텍스트", "리셋", "리셋시각", "모델", "벤더"];
 const VARS_RESET = ["분", "시각"];
+/** 작업 완료는 **끝난 세션**에서만 아는 값이 앞에 더 붙는다 (그 자리의 `{벤더}` 도
+ *  게이지가 보는 벤더가 아니라 끝난 세션의 벤더다) */
+const VARS_DONE = ["제목", "걸린시간", ...VARS_DEFAULT];
 
 interface FieldProps {
   /** 상황 키 (speech.ts DEFAULT_LINES · speech.json 과 동일) */
@@ -58,7 +61,7 @@ export function SpeechField({
     }
   };
 
-  const vars = key === "resetNotify" ? VARS_RESET : VARS_DEFAULT;
+  const vars = key === "resetNotify" ? VARS_RESET : key === "done" ? VARS_DONE : VARS_DEFAULT;
 
   return (
     <div className="settings-speech-item">

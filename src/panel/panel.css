@@ -414,11 +414,6 @@
   white-space: nowrap;
 }
 /* 공식 한도를 안 주는 소스 — 빈칸으로 두면 로딩 중으로 읽힌다 */
-.vendor-nolimit {
-  color: #6c7488;
-  font-size: 9px;
-  padding-left: 50px;
-}
 /* 오늘 사용량 — 머리줄 오른쪽 끝. 카드에서 별도 줄을 없애 벤더 3개가 스크롤 없이 들어간다 */
 .vendor-today {
   margin-left: auto;

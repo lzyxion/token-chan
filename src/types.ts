@@ -114,15 +114,32 @@ export interface LiveSessionView {
   /** 세션 id — `SessionRow.id` 와 같은 값. 못 알아냈으면 빈 문자열 */
   id: string;
   name: string;
-  /** `busy`/`idle` 은 세션 레지스트리의 정확한 값, `active` 는 파일 신선도로 유도한 값 */
+  /**
+   * Claude 는 레지스트리 값 그대로(`busy`/`shell`/`idle`/`waiting`),
+   * Codex·agy 는 턴 감시기가 도는 세션에만 `busy`.
+   * 셋 다 파일에서 직접 읽은 값이라 **유도값(`active`)은 없다.**
+   */
   status: string;
   cwd: string;
+}
+
+/** 이번 회차에 **완료 이벤트로** 끝난 세션. 타임아웃·취소로 끝난 것은 실리지 않는다 */
+export interface CompletedSession {
+  source: Source;
+  id: string;
 }
 
 export interface LiveState {
   busy: boolean;
   busy_count: number;
   sessions: LiveSessionView[];
+  /**
+   * 방금 끝난 세션들. `sessions` 에서 빠지는 것과 같은 회차에 실린다.
+   *
+   * **사라졌다고 끝난 게 아니다** — 크래시·강제 종료·안전망 타임아웃이 전부 목록에서
+   * 빠지는 모양은 같다. 완료 알림은 반드시 이 배열을 근거로 삼아야 한다.
+   */
+  completed: CompletedSession[];
 }
 
 export interface PlanMeter {
@@ -181,6 +198,9 @@ export type PetState =
   | "sleep"
   | "exhausted"
   | "refreshed"
+  /** 세션 하나가 작업을 마친 직후의 짧은 반응. 상태를 **유도하는 값이 아니라 사건**이라
+   *  다른 상태와 다르게 지속시간이 정해져 있다 (`poke` 와 같은 꼴) */
+  | "done"
   /** 클릭했을 때의 짧은 반응 (사용량을 말풍선으로 알려줌) */
   | "poke";
 
@@ -196,6 +216,8 @@ export interface AppSettings {
   /** 컨텍스트 경고 임계값 (0..1) — 활성 벤더 컨텍스트 사용률 기준 (compact 임박) */
   contextAlertThreshold: number;
   resetNotifyMinutes: number;
+  /** 작업 완료 대사를 낼 최소 소요 시간 (초, 0 = 끔) — 짧은 턴은 알리지 않는다 */
+  doneNoticeSeconds: number;
   clickThrough: boolean;
   panelPos: [number, number] | null;
   panelSize: [number, number] | null;
