@@ -71,7 +71,7 @@
 //! — 프론트의 `resetIsStale`. 여기서 버리지 않는 이유는 "리셋 정보 없음"(agy)과
 //! "리셋 정보가 낡음"(굳은 캐시)이 서로 다른 사실이기 때문이다.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use chrono::{DateTime, Utc};
 use serde::Serialize;
@@ -470,6 +470,107 @@ pub fn parse_codex_api_usage(body: &str, fetched_at: DateTime<Utc>) -> Option<Pl
     })
 }
 
+/// 사용량 API 호출 간격 (초). CLI 자신이 5분마다 받아오므로 그보다 촘촘히 부를
+/// 이유가 없다 — 호출 사이에는 마지막 성공값이 후보로 남는다.
+pub const FETCH_INTERVAL_SECS: i64 = 300;
+
+/// 플랜 사슬 전체 — 후보 수집(① API / ② 파일)과 "서버에서 가장 최근에 받은 값" 선택,
+/// ③ 굳은 리셋 갈아 끼우기까지 여기서 끝낸다. 오케스트레이터(모니터의 플랜 스레드)는
+/// 홈 목록과 계산 리셋값을 넘기고 결과를 슬롯에 올릴 뿐, 사슬의 단을 모른다.
+#[derive(Default)]
+pub struct PlanChain {
+    /// 홈별 API 최근 성공값 — 호출 사이(간격)와 일시 실패(오프라인) 동안 유지한다.
+    /// 실패한 홈만 낡은 값으로 남고, 선택(max fetched_at)이 알아서 가려낸다.
+    claude_api: std::collections::HashMap<PathBuf, PlanUsage>,
+    codex_api: std::collections::HashMap<PathBuf, PlanUsage>,
+    last_fetch: Option<DateTime<Utc>>,
+}
+
+impl PlanChain {
+    /// 한 회차. 실제 API 호출은 간격([`FETCH_INTERVAL_SECS`])이 찼을 때만 나가고,
+    /// 파일 후보는 매번 모은다 — 루프를 촘촘히 돌려도 호출이 늘지 않는다.
+    ///
+    /// 반환은 소스별 최선 후보다 (Claude 하나, Codex 하나 — 없으면 빠진다).
+    ///
+    /// - **Claude**: ① API + ② `.claude.json` 캐시를 후보로 모아 가장 최근 수신값.
+    ///   API 성공값은 `fetched_at` 이 방금이라 자연히 이기고, API 가 죽어 있으면
+    ///   (오프라인·토큰 만료·macOS 키체인) CLI 가 갱신하는 캐시가 이긴다. 둘 다
+    ///   굳었으면 ③ — 지난 리셋을 `computed_claude_reset` 으로 갈아 끼운다.
+    /// - **Codex**: ① API 후보만 낸다. ② rollout 값은 사용량 스레드가 어댑터에서
+    ///   직접 올리므로 여기 없다 — 누가 이기는지는 슬롯 쪽 중재(최신 수신값 규칙,
+    ///   모니터의 `set_plan`)가 정한다.
+    pub fn poll(
+        &mut self,
+        claude_homes: &[PathBuf],
+        codex_homes: &[PathBuf],
+        computed_claude_reset: Option<DateTime<Utc>>,
+        now: DateTime<Utc>,
+    ) -> Vec<PlanUsage> {
+        let due = self
+            .last_fetch
+            .map(|t| now - t >= chrono::Duration::seconds(FETCH_INTERVAL_SECS))
+            .unwrap_or(true);
+        // 홈이 하나도 없으면 간격을 소모하지 않는다 — 계정 발견이 끝나기 전의
+        // 첫 회차들이 5분짜리 공회전이 되면 안 된다.
+        if due && !(claude_homes.is_empty() && codex_homes.is_empty()) {
+            self.last_fetch = Some(now);
+            for h in claude_homes {
+                if let Some(p) = fetch_claude_usage(h, now) {
+                    self.claude_api.insert(h.clone(), p);
+                }
+            }
+            for h in codex_homes {
+                if let Some(p) = fetch_codex_usage(h, now) {
+                    self.codex_api.insert(h.clone(), p);
+                }
+            }
+        }
+
+        let mut out = vec![];
+        let claude = claude_homes
+            .iter()
+            .filter_map(|h| self.claude_api.get(h).cloned())
+            .chain(claude_homes.iter().filter_map(|h| read_utilization(h)))
+            .max_by_key(|p| p.fetched_at);
+        if let Some(mut p) = claude {
+            swap_stale_reset(&mut p, computed_claude_reset, now);
+            out.push(p);
+        }
+        if let Some(p) = codex_homes
+            .iter()
+            .filter_map(|h| self.codex_api.get(h).cloned())
+            .max_by_key(|p| p.fetched_at)
+        {
+            out.push(p);
+        }
+        out
+    }
+}
+
+/// ③ — 굳은 캐시의 지난 리셋 시각을 우리 계산([`crate::blocks`])으로 갈아 끼운다.
+///
+/// API 가 살아 있으면 리셋이 과거일 일이 없어 여기 안 걸린다. 걸리는 건 API 가 물러난
+/// 채(오프라인·토큰 만료·macOS 키체인) 캐시마저 굳었을 때다 (실측: 세션이 도는데도
+/// 6시간 정지, 리셋은 2시간 전). 그때 "0분 남음" 을 보여주면 지금 막 리셋된다는
+/// 거짓말이고, 창 길이가 `limits[]` 에 없어 다음 리셋을 유도할 수도 없다.
+///
+/// **첫 미터만** 손댄다. 5시간 창은 자주 갈리지만 주간 창은 며칠이 남아 있어 같은
+/// 캐시라도 아직 사실이고, 무엇보다 주간은 우리가 계산할 수 없다.
+fn swap_stale_reset(
+    plan: &mut PlanUsage,
+    computed: Option<DateTime<Utc>>,
+    now: DateTime<Utc>,
+) {
+    let Some(m) = plan.meters.first_mut() else { return };
+    let expired = m.resets_at.map(|r| r <= now).unwrap_or(true);
+    if expired {
+        if let Some(end) = computed {
+            m.resets_at = Some(end);
+            m.resets_computed = true;
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -800,6 +901,77 @@ mod tests {
         // `exp` 를 못 읽는 불투명 토큰은 만료를 모르는 채로 쓴다 (서버가 401 로 거르면 폴백)
         let home = codex_home_with(r#"{"tokens": {"access_token": "opaque"}}"#);
         assert!(read_codex_auth(home.path()).unwrap().expires_at.is_none());
+    }
+
+    // ── PlanChain ──
+    //
+    // 아래 테스트의 홈들엔 자격증명 파일이 없어 ① API 가 조용히 빠진다 — 네트워크 없이
+    // ② 파일 후보와 선택·스왑 규칙만 검증하는 것이고, 그게 사슬의 판단 로직 전부다.
+
+    fn ts(s: &str) -> DateTime<Utc> {
+        DateTime::parse_from_rfc3339(s).unwrap().with_timezone(&Utc)
+    }
+
+    /// 이름 있는 창 두 개짜리 최소 캐시 (5시간 + 주간, 주간 리셋은 항상 과거)
+    fn cache_json(fetched_ms: i64, five_hour_reset: &str) -> String {
+        format!(
+            r#"{{"cachedUsageUtilization": {{"fetchedAtMs": {fetched_ms}, "utilization": {{
+                 "five_hour": {{"utilization": 7, "resets_at": "{five_hour_reset}"}},
+                 "seven_day": {{"utilization": 50, "resets_at": "2026-08-10T00:00:00Z"}}}}}}}}"#
+        )
+    }
+
+    /// 후보가 여럿이면(홈 여러 개) 서버에서 **가장 최근에 받은** 값이 이긴다.
+    #[test]
+    fn the_chain_picks_the_most_recently_received_candidate() {
+        let now = ts("2026-08-13T10:00:00Z");
+        let old = home_with(&cache_json(1_000, "2026-08-13T12:00:00Z"));
+        let new = home_with(&cache_json(2_000, "2026-08-13T12:30:00Z"));
+        let homes = vec![old.path().to_path_buf(), new.path().to_path_buf()];
+
+        let plans = PlanChain::default().poll(&homes, &[], None, now);
+        assert_eq!(plans.len(), 1);
+        assert_eq!(plans[0].source, Source::Claude);
+        assert_eq!(plans[0].fetched_at.timestamp_millis(), 2_000);
+        // 리셋이 미래(살아 있는 값)라 계산값으로 갈리지 않는다
+        assert!(!plans[0].meters[0].resets_computed);
+    }
+
+    /// ③ — 리셋이 과거로 굳은 첫 미터만 계산값으로 갈고, 출처 표시를 남긴다.
+    #[test]
+    fn a_dead_reset_is_replaced_by_the_computed_end() {
+        let now = ts("2026-08-13T10:00:00Z");
+        let computed = ts("2026-08-13T11:30:00Z");
+        // 리셋이 3시간 전 — 죽은 창의 잔해
+        let home = home_with(&cache_json(1_000, "2026-08-13T07:00:00Z"));
+        let homes = vec![home.path().to_path_buf()];
+
+        let plans = PlanChain::default().poll(&homes, &[], Some(computed), now);
+        let m = &plans[0].meters[0];
+        assert_eq!(m.resets_at, Some(computed));
+        assert!(m.resets_computed, "계산값임을 표시해야 화면이 출처를 가른다");
+        // 주간 창은 리셋이 지났어도 손대지 않는다 — 우리가 계산할 수 없는 창이다
+        assert!(!plans[0].meters[1].resets_computed);
+
+        // 계산값마저 없으면(창 닫힘) 잔해를 그대로 둔다 — "낡음" 판정은 프론트
+        // `resetIsStale` 의 몫이고, 여기서 지우면 "리셋 정보 없음"(agy)과 구분이 안 된다
+        let plans = PlanChain::default().poll(&homes, &[], None, now);
+        assert_eq!(plans[0].meters[0].resets_at, Some(ts("2026-08-13T07:00:00Z")));
+        assert!(!plans[0].meters[0].resets_computed);
+    }
+
+    /// Codex 의 ② rollout 은 사슬 후보가 아니다 — 그 값은 사용량 스레드가 어댑터에서
+    /// 직접 올리고 슬롯 중재가 정리한다. 여기서도 내면 같은 값이 두 경로로 흐른다.
+    #[test]
+    fn codex_files_never_enter_the_chain() {
+        let (_guard, roots) = crate::codex::conformance_roots();
+        assert!(PlanChain::default().poll(&[], &roots, None, Utc::now()).is_empty());
+    }
+
+    /// 아무 데이터도 없으면 빈 손으로 돌아온다 — 슬롯의 마지막 성공값이 유지된다.
+    #[test]
+    fn an_empty_world_yields_no_candidates() {
+        assert!(PlanChain::default().poll(&[], &[], None, Utc::now()).is_empty());
     }
 
     /// 캐시가 아직 없거나 파일 자체가 없으면 조용히 비활성.
