@@ -3,21 +3,33 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import type {
+  Account,
   AppSettings,
   CharacterRule,
   GaugeSide,
+  PlanUsage,
+  Source,
   Summary,
 } from "../types";
 import ResizeGrips from "../components/ResizeGrips";
+import VendorIcon from "../components/VendorIcon";
 import "./settings.css";
 
-/** 설정 탭 — 일반(창·한도·말풍선·시스템) / 캐릭터(팩·규칙·크기).
+/** 설정 탭 — 일반(창·한도·말풍선·시스템) / 캐릭터(팩·규칙·크기) / 계정(계정·홈·플랜).
  *  상태 사용·이미지·대사 편집은 캐릭터 스튜디오(전용 창)가 맡는다. */
 
-type Tab = "general" | "character";
+type Tab = "general" | "character" | "account";
 const TABS: [Tab, string][] = [
   ["general", "일반"],
   ["character", "캐릭터"],
+  ["account", "계정"],
+];
+
+/** 홈 추가/제거 커맨드가 받는 소스 키 — `Source` 와 같은 문자열을 쓴다 */
+const HOME_SOURCES: [Source, string][] = [
+  ["claude", "Claude"],
+  ["codex", "Codex"],
+  ["antigravity", "AGY"],
 ];
 
 export default function SettingsPanel() {
@@ -25,6 +37,10 @@ export default function SettingsPanel() {
   const [packs, setPacks] = useState<string[]>([]);
   const [observedModels, setObservedModels] = useState<string[]>([]);
   const [tab, setTab] = useState<Tab>("general");
+  const [accounts, setAccounts] = useState<Account[] | null>(null);
+  const [plans, setPlans] = useState<PlanUsage[]>([]);
+  // 다시 검색은 별도 스레드에서 돌고 끝나면 accounts-changed 로 알려 온다
+  const [rescanning, setRescanning] = useState(false);
 
   const refreshPacks = () => {
     invoke<string[]>("list_character_packs")
@@ -35,6 +51,23 @@ export default function SettingsPanel() {
       .catch(() => {});
   };
 
+  // 검색이 끝났다는 신호는 `accounts-changed` 하나뿐이라, 그게 안 오면 버튼이 영영
+  // 잠긴다. 실측 최악(마커 스캔 + WSL 재조회)이 수 초라 넉넉히 잡고 풀어 준다.
+  useEffect(() => {
+    if (!rescanning) return;
+    const t = setTimeout(() => setRescanning(false), 20000);
+    return () => clearTimeout(t);
+  }, [rescanning]);
+
+  const refreshAccounts = () => {
+    invoke<Account[]>("get_accounts")
+      .then(setAccounts)
+      .catch(() => setAccounts([]));
+    invoke<PlanUsage[]>("get_plan")
+      .then(setPlans)
+      .catch(() => setPlans([]));
+  };
+
   useEffect(() => {
     let alive = true;
     invoke<AppSettings>("get_settings")
@@ -43,6 +76,7 @@ export default function SettingsPanel() {
       })
       .catch(() => {});
     refreshPacks();
+    refreshAccounts();
     // 트레이 토글 등 외부 변경과 동기화 (내용 동일하면 스킵 — 입력 커서 보존)
     const un = listen<AppSettings>("settings-changed", (e) => {
       if (alive) {
@@ -51,9 +85,22 @@ export default function SettingsPanel() {
         );
       }
     });
+    // 계정 목록은 다시 검색·홈 추가/제거 뒤에 백엔드가 알려 준다 (오래 걸려 응답으로 못 준다)
+    const unAcct = listen("accounts-changed", () => {
+      if (alive) {
+        setRescanning(false);
+        refreshAccounts();
+      }
+    });
+    // 트레이의 "계정 설정…" 으로 열면 그 탭으로 바로 간다
+    const unTab = listen<string>("settings-tab", (e) => {
+      if (alive && TABS.some(([k]) => k === e.payload)) setTab(e.payload as Tab);
+    });
     return () => {
       alive = false;
       un.then((f) => f());
+      unAcct.then((f) => f());
+      unTab.then((f) => f());
     };
   }, []);
 
@@ -524,9 +571,158 @@ export default function SettingsPanel() {
             </label>
 
             <div className="settings-hint">
-              데이터 소스(계정 켜고 끄기·홈 경로 추가/제거)는{" "}
-              <b>펫 우클릭 → 연결된 계정</b>에서 관리합니다
+              데이터 소스(계정 켜고 끄기·홈 경로)는 <b>계정</b> 탭에서 관리합니다
             </div>
+          </>
+        )}
+
+        {tab === "account" && (
+          <>
+            <div className="settings-group">
+              <div className="settings-label row">
+                연결된 계정
+                <button
+                  className="settings-btn"
+                  disabled={rescanning}
+                  onClick={() => {
+                    setRescanning(true);
+                    void invoke("rescan_accounts");
+                  }}
+                  title="표준 위치 + 마커 스캔 + WSL 배포판을 다시 훑습니다"
+                >
+                  {rescanning ? "검색 중…" : "다시 검색"}
+                </button>
+              </div>
+
+              {accounts == null ? (
+                <div className="settings-hint">불러오는 중…</div>
+              ) : accounts.length === 0 ? (
+                <div className="settings-hint">
+                  발견된 계정이 없습니다. CLI 를 한 번도 실행하지 않았거나, 홈이 표준
+                  위치 밖에 있을 수 있습니다 — 아래에서 홈을 직접 추가해 보세요.
+                </div>
+              ) : (
+                accounts.map((a) => {
+                  // 플랜이 오는 길이 둘이다. 계정 파일에서 온 것(Claude)은 그 계정 것이
+                  // 확실하지만, 소스 단위로 온 것(Codex 의 rollout)은 CLI 가 지금 로그인된
+                  // 계정 기준이라 같은 소스에 계정이 여럿이면 누구 것인지 못 가린다.
+                  const fromSource = plans.find((p) => p.source === a.source)?.detail;
+                  const planText = a.plan || fromSource || "";
+                  const ambiguous =
+                    !a.plan && accounts.filter((x) => x.source === a.source).length > 1;
+                  return (
+                    <div className="account-card" key={a.setting_key}>
+                      <label className="account-head">
+                        {/* 체크가 곧 집계 포함 여부 — 트레이 체크와 같은 커맨드를 쓴다 */}
+                        <input
+                          type="checkbox"
+                          checked={a.enabled}
+                          onChange={(e) =>
+                            void invoke("set_account_enabled", {
+                              settingKey: a.setting_key,
+                              enabled: e.currentTarget.checked,
+                            })
+                          }
+                        />
+                        <VendorIcon source={a.source} size={14} />
+                        <span className="account-name">{a.label}</span>
+                        {planText && (
+                          <span
+                            className={`account-badge plan${ambiguous ? " dim" : ""}`}
+                            title={
+                              ambiguous
+                                ? "이 소스에 계정이 여럿이라 어느 계정의 플랜인지 구분할 수 없습니다 — CLI 가 지금 로그인된 계정 기준입니다."
+                                : a.plan
+                                  ? "이 계정의 설정 파일에 적힌 플랜입니다."
+                                  : "CLI 가 지금 로그인된 계정 기준입니다."
+                            }
+                          >
+                            {planText}
+                            {ambiguous ? " ?" : ""}
+                          </span>
+                        )}
+                        {/* 표준 위치에서 안 나온 계정은 오래된 백업일 수 있어 조용히
+                            합산되면 안 된다 — 왜 기본이 꺼짐인지 여기서 알려 준다 */}
+                        {!a.standard && (
+                          <span
+                            className="account-badge warn"
+                            title="표준 위치가 아니라 마커 스캔으로만 발견됐습니다. 오래된 백업일 수 있어 기본적으로 집계에서 빠집니다."
+                          >
+                            스캔으로 발견
+                          </span>
+                        )}
+                      </label>
+
+                      {a.detail && <div className="account-detail">{a.detail}</div>}
+
+                      <div className="account-homes">
+                        {a.installs.map((i) => (
+                          <div className="account-home" key={i.home} title={i.home}>
+                            <span className="account-home-path">{i.home}</span>
+                            <span className="account-badge">
+                              {i.discovered ? "스캔" : "표준"}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  );
+                })
+              )}
+            </div>
+
+            <div className="settings-group">
+              <div className="settings-label">직접 추가한 홈</div>
+              <div className="settings-hint">
+                자동 탐지는 앱을 어떻게 띄웠는지에 좌우됩니다. 위 목록에 빠진 설치본이
+                있으면 홈을 직접 지정하세요 — Claude 는 <code>.claude</code> 를 담고 있는
+                폴더, Codex·AGY 는 홈 폴더 자체입니다.
+              </div>
+
+              {HOME_SOURCES.map(([src, disp]) => {
+                const list =
+                  src === "codex"
+                    ? s.extraCodexHomes
+                    : src === "antigravity"
+                      ? s.extraAntigravityHomes
+                      : s.extraClaudeHomes;
+                return (
+                  <div className="home-block" key={src}>
+                    <div className="home-head">
+                      <VendorIcon source={src} size={12} />
+                      <span>{disp}</span>
+                      <button
+                        className="settings-btn"
+                        onClick={() => void invoke("add_home", { source: src })}
+                      >
+                        홈 추가…
+                      </button>
+                    </div>
+                    {list.filter((p) => p.trim()).length === 0 ? (
+                      <div className="home-empty">없음 (자동 탐지만 사용)</div>
+                    ) : (
+                      list
+                        .filter((p) => p.trim())
+                        .map((p) => (
+                          <div className="home-row" key={p} title={p}>
+                            <span className="home-path">{p}</span>
+                            <button
+                              className="settings-btn danger"
+                              onClick={() =>
+                                void invoke("remove_home", { source: src, path: p })
+                              }
+                              title="이 경로를 스캔 대상에서 제거"
+                            >
+                              ✕
+                            </button>
+                          </div>
+                        ))
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+
           </>
         )}
       </div>

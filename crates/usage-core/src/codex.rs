@@ -458,7 +458,6 @@ fn parse_rate_limits(v: &Value, at: DateTime<Utc>) -> Option<PlanUsage> {
             PlanMeter {
                 label: window_label(minutes),
                 used_pct: pct.round().clamp(0.0, 100.0) as u8,
-                resets: String::new(),
                 resets_at,
             },
         ));
@@ -468,11 +467,12 @@ fn parse_rate_limits(v: &Value, at: DateTime<Utc>) -> Option<PlanUsage> {
     }
     meters.sort_by_key(|(m, _)| *m);
 
+    // Claude 계정 카드의 플랜 이름과 같은 규칙으로 다듬는다 — 두 소스가 같은 화면에 뜬다
     let detail = v
         .get("plan_type")
         .and_then(Value::as_str)
         .filter(|s| !s.is_empty())
-        .map(|s| format!("{s} 플랜"))
+        .map(crate::plan::plan_label)
         .unwrap_or_default();
 
     Some(PlanUsage {
@@ -1001,7 +1001,7 @@ mod tests {
         let p = adapter.plan().unwrap();
 
         assert_eq!(p.source, Source::Codex);
-        assert_eq!(p.detail, "free 플랜");
+        assert_eq!(p.detail, "Free", "Claude 계정 카드와 같은 표기 규칙");
         assert_eq!(p.meters.len(), 1, "free 플랜은 secondary 가 null");
         assert_eq!(p.meters[0].label, "월간");
         assert_eq!(p.meters[0].used_pct, 4, "마지막 이벤트 값이어야 함");

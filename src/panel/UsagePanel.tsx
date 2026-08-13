@@ -10,7 +10,6 @@ import {
   fmtCost,
   fmtRemaining,
   fmtTokens,
-  parseResetTime,
   shortModel,
   SOURCE_LABEL,
   totalOf,
@@ -58,10 +57,9 @@ function MeterRow({
   );
 }
 
-/** 미터의 리셋 시각 — Codex 는 정확한 타임스탬프, Claude 는 문자열 파싱 */
+/** 미터의 리셋 시각 — 두 소스 모두 파일에서 기계가 읽는 형식으로 준다 */
 function meterReset(m: PlanMeter): Date | null {
-  if (m.resets_at) return new Date(m.resets_at);
-  return m.resets ? parseResetTime(m.resets) : null;
+  return m.resets_at ? new Date(m.resets_at) : null;
 }
 
 /**
@@ -109,13 +107,14 @@ function VendorCard({
           }`}
         />
       )}
+      {/* 라벨은 백엔드가 두 소스 공통 어휘로 준다 ("5시간"·"주간") — 여기서 손보지 않는다 */}
       {meters.map((m) => (
         <MeterRow
           key={m.label}
-          label={m.label.replace("Current session", "세션 5h").replace("Current week", "주간")}
+          label={m.label}
           pct={m.used_pct}
           resetAt={meterReset(m)}
-          title={m.resets_at ? new Date(m.resets_at).toLocaleString() : m.resets}
+          title={m.resets_at ? new Date(m.resets_at).toLocaleString() : ""}
         />
       ))}
       {/* 빈칸으로 두면 "로딩 중"으로 읽힌다 — 값을 안 주는 소스라는 걸 밝힌다

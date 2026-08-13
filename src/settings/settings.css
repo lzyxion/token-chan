@@ -269,3 +269,149 @@
   color: #8a93a5;
   font-size: 10px;
 }
+
+/* ─────────────── 계정 탭 ───────────────
+   경로가 길어(WSL UNC 는 60자를 넘는다) 줄바꿈보다 가로 스크롤이 읽기 낫다.
+   대신 카드 자체는 절대 넘치지 않게 min-width:0 으로 눌러 둔다. */
+
+/* 라벨 줄에 버튼을 같이 놓는 변형. `.settings-label` 자체를 flex 로 만들면
+   다른 탭의 `텍스트 + <b>` 라벨이 전부 flex 아이템으로 쪼개지므로 별도 클래스로 둔다. */
+.settings-label.row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.settings-label.row > .settings-btn {
+  margin-left: auto;
+}
+.settings-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.settings-btn.danger:hover {
+  background: rgba(255, 141, 117, 0.18);
+  color: #ff8d75;
+}
+
+.account-card {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  border-radius: 9px;
+  padding: 8px 9px;
+  min-width: 0;
+}
+
+.account-head {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: #e8eaf0;
+  font-size: 11.5px;
+  cursor: pointer;
+  user-select: none;
+  min-width: 0;
+}
+.account-head input[type="checkbox"] {
+  width: 14px;
+  height: 14px;
+  accent-color: #ffd479;
+  cursor: pointer;
+  flex: none;
+}
+/* 이메일이 길어도 오른쪽 배지(플랜·경고)를 밀어내지 않게 이쪽이 먼저 줄어든다 */
+.account-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.account-detail {
+  color: #8a93a5;
+  font-size: 10px;
+  padding-left: 21px;
+}
+
+.account-homes {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding-left: 21px;
+}
+.account-home,
+.home-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.account-home-path,
+.home-path {
+  flex: 1;
+  min-width: 0;
+  color: #a7b0c0;
+  font-size: 10px;
+  font-family: ui-monospace, "Cascadia Mono", Consolas, monospace;
+  overflow-x: auto;
+  white-space: nowrap;
+  scrollbar-width: none;
+}
+.account-home-path::-webkit-scrollbar,
+.home-path::-webkit-scrollbar {
+  display: none;
+}
+
+.account-badge {
+  flex: none;
+  color: #8a93a5;
+  font-size: 9px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 5px;
+  padding: 0 4px;
+  line-height: 14px;
+}
+.account-badge.warn {
+  color: #ff8d75;
+  border-color: rgba(255, 141, 117, 0.4);
+}
+/* CLI 가 알려준 현재 플랜 */
+.account-badge.plan {
+  color: #ffd479;
+  border-color: rgba(255, 212, 121, 0.35);
+  background: rgba(255, 212, 121, 0.1);
+}
+/* 같은 소스에 계정이 여럿 — 어느 계정 플랜인지 못 가린다 */
+.account-badge.plan.dim {
+  color: #a7b0c0;
+  border-color: rgba(255, 255, 255, 0.14);
+  background: none;
+}
+
+.home-block {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding-bottom: 2px;
+}
+.home-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: #c6ccd8;
+  font-size: 11px;
+}
+.home-head > .settings-btn {
+  margin-left: auto;
+}
+.home-empty {
+  color: #6d7686;
+  font-size: 10px;
+  padding-left: 18px;
+}
+.home-row {
+  padding-left: 18px;
+}

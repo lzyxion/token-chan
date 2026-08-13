@@ -63,8 +63,11 @@ pub struct Account {
     pub key: String,
     /// 사람이 읽는 이름 — 이메일이 있으면 이메일, 없으면 계정 id 앞자리
     pub label: String,
-    /// 플랜·인증 방식 등 부가 정보
+    /// **로그인 방식** (예: "Claude 계정 로그인", "ChatGPT 로그인", "Google 로그인")
     pub detail: String,
+    /// **플랜 이름** (예: "Claude Max 5x"). 계정 파일에서 알 수 있는 소스만 채운다 —
+    /// Codex 는 비고, 화면은 rollout 에서 온 [`crate::plan::PlanUsage::detail`] 로 채운다.
+    pub plan: String,
     pub installs: Vec<Install>,
     /// 표준 위치에서 한 번이라도 발견된 계정인지.
     /// 마커 스캔으로만 나온 처음 보는 계정은 조용히 합산되면 안 된다(오래된 백업 등).
@@ -150,8 +153,25 @@ fn read_json(path: &Path) -> Option<serde_json::Value> {
     serde_json::from_str(&std::fs::read_to_string(path).ok()?).ok()
 }
 
+/// 계정 파일에서 뽑아낸 신원. 소스마다 파일이 다르므로 어댑터별로 채운다.
+///
+/// `detail` 과 `plan` 을 나눠 두는 이유: 세 소스가 **같은 자리에 다른 것을** 준다.
+/// Claude 는 계정 파일에 플랜이 있고 인증 방식은 없으며, Codex·agy 는 반대다. 한 필드에
+/// 섞으면 카드마다 다른 의미가 같은 자리에 놓인다.
+struct Ident {
+    /// 계정 식별 키 (같은 계정의 설치본을 묶는 기준)
+    key: String,
+    /// 사람이 읽는 이름 — 보통 이메일
+    label: String,
+    /// **로그인 방식** — 세 소스 공통 의미
+    detail: String,
+    /// **플랜 이름** — 계정 파일에서 알 수 있는 소스만 채운다 (지금은 Claude 뿐).
+    /// Codex 는 계정 파일에 없고 rollout 의 `rate_limits` 로 따로 온다.
+    plan: String,
+}
+
 /// `<홈>/.claude.json` 에서 계정 식별. 자격증명 파일이 아니라 일반 설정 파일이다.
-fn claude_account(home: &Path) -> Option<(String, String, String)> {
+fn claude_account(home: &Path) -> Option<Ident> {
     let v = read_json(&home.join(".claude.json"))?;
     let oa = v.get("oauthAccount")?;
     let get = |k: &str| oa.get(k).and_then(|x| x.as_str()).unwrap_or("").to_string();
@@ -162,19 +182,23 @@ fn claude_account(home: &Path) -> Option<(String, String, String)> {
     }
     let key = if uuid.is_empty() { email.clone() } else { uuid };
     let label = if email.is_empty() { short(&key) } else { email };
-    let plan = get("organizationType");
+    // 티어가 플랜을 포함한다 (`claude_max` + `default_claude_max_5x`) — 둘을 이어 붙이면
+    // 같은 말이 두 번 나오므로 더 자세한 쪽만 쓰고, 없을 때만 플랜으로 떨어진다.
     let tier = get("organizationRateLimitTier");
-    let detail = match (plan.as_str(), tier.as_str()) {
+    let org = get("organizationType");
+    let plan = match (tier.as_str(), org.as_str()) {
         ("", "") => String::new(),
-        ("", t) => t.to_string(),
-        (p, "") => p.to_string(),
-        (p, t) => format!("{p} · {t}"),
+        ("", o) => crate::plan::plan_label(o),
+        (t, _) => crate::plan::plan_label(t),
     };
-    Some((key, label, detail))
+    // Codex 의 `auth_mode`, agy 의 `authMethod` 에 해당하는 필드가 **없다.** 대신 이
+    // 객체의 이름이 `oauthAccount` 이고, API 키·Bedrock·Vertex 로 쓰면 이 객체 자체가
+    // 없어 여기까지 오지도 않는다. 그래서 "여기 도달 = OAuth 로그인"으로 읽는다.
+    Some(Ident { key, label, detail: "Claude 계정 로그인".into(), plan })
 }
 
 /// `<홈>/auth.json` 에서 계정 식별.
-fn codex_account(home: &Path) -> Option<(String, String, String)> {
+fn codex_account(home: &Path) -> Option<Ident> {
     let v = read_json(&home.join("auth.json"))?;
     let tokens = v.get("tokens");
     let id = tokens
@@ -201,7 +225,8 @@ fn codex_account(home: &Path) -> Option<(String, String, String)> {
         "" => String::new(),
         m => m.to_string(),
     };
-    Some((key, label, detail))
+    // 플랜은 계정 파일에 없다 — rollout 의 `rate_limits.plan_type` 으로 따로 온다
+    Some(Ident { key, label, detail, plan: String::new() })
 }
 
 /// agy 는 **자격증명 파일을 안 쓴다** — 토큰은 OS 키링에 넣는다
@@ -209,20 +234,27 @@ fn codex_account(home: &Path) -> Option<(String, String, String)> {
 /// 대신 로그인한 계정을 로그에 평문으로 남긴다:
 ///
 /// ```text
-/// server_oauth.go:189] applyAuthResult: email=you@example.com, authMethod=consumer
+/// server_oauth.go:189] applyAuthResult: email=you@example.com, authMethod=consumer, quotaProject=
 /// ```
+///
+/// `authMethod` 뒤에 다른 필드가 더 붙으므로 값을 쉼표에서 한 번 더 잘라야 한다
+/// (안 자르면 `consumer,` 가 되어 아래 매칭이 통째로 빗나간다).
+/// 참고로 agy 는 셋 중 **유일하게 OAuth 를 로그에 명시**한다 —
+/// `OAuth: authenticated successfully as …` · `Starting OAuth authentication flow`.
+/// `authMethod=consumer` 는 프로토콜이 아니라 **계정 종류**(개인 vs 조직)를 뜻한다.
 ///
 /// 실측에서 로그 6개 중 0바이트짜리 1개를 뺀 5개 전부에 있었다. 그래서 Claude·Codex 와
 /// 마찬가지로 **이메일로 계정을 묶는다**. 로그를 하나도 못 읽으면 그때만
 /// `installation_id` 로 떨어져 설치본 단위가 된다.
-fn antigravity_account(home: &Path) -> Option<(String, String, String)> {
+fn antigravity_account(home: &Path) -> Option<Ident> {
     if let Some((email, method)) = log_auth(home) {
         let detail = match method.as_str() {
             "consumer" => "Google 로그인".to_string(),
             "" => String::new(),
             m => m.to_string(),
         };
-        return Some((email.clone(), email, detail));
+        // agy 는 플랜을 어디에도 안 남긴다 (한도 자체를 제공하지 않는다)
+        return Some(Ident { key: email.clone(), label: email, detail, plan: String::new() });
     }
     // 로그가 없거나 로그인 기록이 아직 없는 설치본 — 다른 계정과 섞이지 않게 설치 id 로 분리
     let id = std::fs::read_to_string(home.join("installation_id")).ok()?;
@@ -230,11 +262,12 @@ fn antigravity_account(home: &Path) -> Option<(String, String, String)> {
     if id.is_empty() {
         return None;
     }
-    Some((
-        id.to_string(),
-        format!("계정 미상 (설치 {})", short(id)),
-        "로그에 로그인 기록 없음".into(),
-    ))
+    Some(Ident {
+        key: id.to_string(),
+        label: format!("계정 미상 (설치 {})", short(id)),
+        detail: "로그에 로그인 기록 없음".into(),
+        plan: String::new(),
+    })
 }
 
 /// agy 로그에서 가장 최근 로그인 기록 (email, authMethod).
@@ -383,16 +416,22 @@ pub fn group(mut installs: Vec<Install>) -> Vec<Account> {
             Source::Antigravity => antigravity_account(&inst.home),
         };
         // 계정을 못 읽으면 홈 경로를 키로 — 다른 계정과 합쳐지는 것보다 낫다
-        let (key, label, detail) = ident.unwrap_or_else(|| {
+        let id = ident.unwrap_or_else(|| {
             let h = inst.home.display().to_string();
-            (h.clone(), h, "계정 정보 없음".into())
+            Ident {
+                key: h.clone(),
+                label: h,
+                detail: "계정 정보 없음".into(),
+                plan: String::new(),
+            }
         });
 
-        let entry = groups.entry((inst.source, key.clone())).or_insert_with(|| Account {
+        let entry = groups.entry((inst.source, id.key.clone())).or_insert_with(|| Account {
             source: inst.source,
-            key,
-            label,
-            detail,
+            key: id.key,
+            label: id.label,
+            detail: id.detail,
+            plan: id.plan,
             installs: vec![],
             standard: false,
         });
@@ -459,7 +498,11 @@ mod tests {
 
         assert_eq!(accounts.len(), 1, "같은 계정의 설치본 둘은 하나로 묶여야 함");
         assert_eq!(accounts[0].label, "me@x.com");
-        assert_eq!(accounts[0].detail, "claude_max · default_claude_max_5x");
+        // `detail` 은 세 소스 공통으로 **로그인 방식** 자리다
+        assert_eq!(accounts[0].detail, "Claude 계정 로그인");
+        // 플랜은 별도 필드. 원문(`claude_max` + `default_claude_max_5x`)이 아니라 읽을 수
+        // 있는 이름이고, 티어가 플랜을 이미 포함하므로 둘을 잇지 않는다 (plan::plan_label)
+        assert_eq!(accounts[0].plan, "Claude Max 5x");
         assert_eq!(accounts[0].installs.len(), 2);
         assert!(accounts[0].standard);
     }
@@ -493,10 +536,11 @@ mod tests {
         )
         .unwrap();
 
-        let (key, label, detail) = codex_account(&home).unwrap();
-        assert_eq!(key, "a2340ea8-b83c");
-        assert_eq!(label, "me@x.com");
-        assert_eq!(detail, "ChatGPT 로그인");
+        let id = codex_account(&home).unwrap();
+        assert_eq!(id.key, "a2340ea8-b83c");
+        assert_eq!(id.label, "me@x.com");
+        assert_eq!(id.detail, "ChatGPT 로그인");
+        assert_eq!(id.plan, "", "Codex 는 계정 파일에 플랜이 없다 — rollout 에서 온다");
     }
 
     /// 실제 agy 로그 한 줄과 같은 모양 (앞뒤로 무관한 로그가 섞여 있어야 진짜 테스트다)
