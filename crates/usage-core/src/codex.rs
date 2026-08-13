@@ -213,6 +213,26 @@ impl CodexAdapter {
 
 }
 
+/// 계약 가입 ([`crate::adapter`]) — 인헌트 메서드에 위임만 한다.
+/// Codex 는 스캔한 파일(rollout)에 공식 한도가 실려 오는 유일한 소스라 `plan` 을 구현한다.
+impl crate::adapter::SourceAdapter for CodexAdapter {
+    fn source(&self) -> Source {
+        Source::Codex
+    }
+    fn scan(&mut self, since: DateTime<Utc>) -> ScanOutcome {
+        CodexAdapter::scan(self, since)
+    }
+    fn context(&self, pricing: &PriceTable) -> Option<ContextState> {
+        CodexAdapter::context(self, pricing)
+    }
+    fn sessions(&self) -> Vec<SessionRow> {
+        CodexAdapter::sessions(self)
+    }
+    fn plan(&self) -> Option<PlanUsage> {
+        CodexAdapter::plan(self)
+    }
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // 턴 추적 — 크기 변화 유도 대신 **파일에 적힌 턴 경계**를 읽는다
 // ─────────────────────────────────────────────────────────────────────────────
@@ -245,21 +265,10 @@ struct SessionTurn {
     last_activity: DateTime<Utc>,
 }
 
-/// [`TurnWatcher::poll`] 결과
-pub struct TurnPoll {
-    /// `history.jsonl` 을 하나라도 읽을 수 있었는지 — **진단용**이다.
-    /// `false` 면 이 방식이 성립하지 않으므로(설정으로 이력을 껐거나 아직 없음) 그 홈의
-    /// 세션은 작업 중으로 잡히지 않는다. 예전엔 여기서 크기 변화로 폴백했지만 그 신호로는
-    /// 완료·크래시가 구분되지 않아 제거했다 (live.rs 모듈 주석).
-    pub covered: bool,
-    /// 지금 턴이 돌고 있는 세션 id 들
-    pub running: Vec<String>,
-    /// 이번 회차에 **`task_complete` 로** 끝난 세션 id 들.
-    ///
-    /// 안전망 타임아웃(`TURN_STALE_MS`)으로 풀린 것도, 사용자가 끊은 것(`turn_aborted`)도
-    /// 여기 없다 — 크래시·취소와 완료를 가르는 유일한 신호다.
-    pub completed: Vec<String>,
-}
+/// [`TurnWatcher::poll`] 결과 — agy 와 같은 모양이라 계약 모듈이 정의를 갖는다.
+/// 여기서 `covered` 는 "`history.jsonl` 을 읽을 수 있었는가", `completed` 는
+/// "`task_complete` 로 끝났는가"다 (`turn_aborted` 와 안전망 해제는 포함되지 않는다).
+pub use crate::adapter::TurnPoll;
 
 /// Codex 턴 추적.
 ///
@@ -279,6 +288,13 @@ pub struct TurnWatcher {
     /// 홈별 `history.jsonl` 읽은 지점
     history: HashMap<PathBuf, u64>,
     sessions: HashMap<String, SessionTurn>,
+}
+
+/// 계약 가입 ([`crate::adapter::TurnWatch`]) — 인헌트 `poll` 에 위임만 한다.
+impl crate::adapter::TurnWatch for TurnWatcher {
+    fn poll(&mut self, homes: &[PathBuf], now: DateTime<Utc>) -> TurnPoll {
+        TurnWatcher::poll(self, homes, now)
+    }
 }
 
 impl TurnWatcher {
@@ -905,6 +921,32 @@ mod turn_tests {
         fs::write(&roll, s).unwrap();
         assert!(w.poll(&homes, now).running.is_empty());
     }
+}
+
+/// 계약 테스트([`crate::adapter`] tests)용 표준 픽스처 — 내용 명세는 그쪽 주석 참고.
+/// "같은 요청이 두 번 기록되는" 이 소스의 실제 형태는 **두 홈에 복사된 같은 rollout**
+/// 이다 (재배치된 홈 + `~/.codex` 미러 — 실측 사례).
+#[cfg(test)]
+pub(crate) fn conformance_roots() -> (Vec<tempfile::TempDir>, Vec<PathBuf>) {
+    let lines = [
+        r#"{"timestamp":"2026-08-13T00:59:58.000Z","type":"session_meta","payload":{"id":"conf-rollout"}}"#,
+        r#"{"timestamp":"2026-08-13T00:59:59.000Z","type":"event_msg","payload":{"type":"user_message","message":"계약 테스트 첫 질문"}}"#,
+        r#"{"timestamp":"2026-08-13T00:59:59.500Z","type":"turn_context","payload":{"model":"gpt-5-codex"}}"#,
+        r#"{"timestamp":"2026-08-13T01:00:00.000Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":100,"cached_input_tokens":0,"output_tokens":10,"total_tokens":110},"last_token_usage":{"input_tokens":100,"cached_input_tokens":0,"output_tokens":10,"total_tokens":110}}}}"#,
+        r#"{"timestamp":"2026-08-13T01:05:00.000Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":300,"cached_input_tokens":0,"output_tokens":30,"total_tokens":330},"last_token_usage":{"input_tokens":200,"cached_input_tokens":0,"output_tokens":20,"total_tokens":220}}}}"#,
+    ]
+    .join("\n");
+    let mut dirs = vec![];
+    let mut roots = vec![];
+    for _ in 0..2 {
+        let d = tempfile::tempdir().unwrap();
+        let day = d.path().join("sessions/2026/08/13");
+        std::fs::create_dir_all(&day).unwrap();
+        std::fs::write(day.join("rollout-conf.jsonl"), &lines).unwrap();
+        roots.push(d.path().to_path_buf());
+        dirs.push(d);
+    }
+    (dirs, roots)
 }
 
 #[cfg(test)]

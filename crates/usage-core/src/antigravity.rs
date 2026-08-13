@@ -192,6 +192,23 @@ impl AntigravityAdapter {
 
 }
 
+/// 계약 가입 ([`crate::adapter`]) — 인헌트 메서드에 위임만 한다.
+/// agy 는 공식 한도도, 리셋 계산도 없다 — 기본 `None` 이 곧 사실이다 (plan.rs 표 참고).
+impl crate::adapter::SourceAdapter for AntigravityAdapter {
+    fn source(&self) -> Source {
+        Source::Antigravity
+    }
+    fn scan(&mut self, since: DateTime<Utc>) -> ScanOutcome {
+        AntigravityAdapter::scan(self, since)
+    }
+    fn context(&self, pricing: &PriceTable) -> Option<ContextState> {
+        AntigravityAdapter::context(self, pricing)
+    }
+    fn sessions(&self) -> Vec<SessionRow> {
+        AntigravityAdapter::sessions(self)
+    }
+}
+
 /// 대화의 제목과 작업 위치 — **첫 스텝(첫 사용자 입력)** 에서 뽑는다.
 ///
 /// `conversation_summaries.db` 에도 `preview` 가 있지만 실측에서 대화 5건 중 1건만
@@ -351,6 +368,67 @@ fn parse_conversation(path: &Path) -> Option<(Vec<ParsedEvent>, RawContext, Opti
         tokens,
     });
     Some((out, ctx, row))
+}
+
+/// 계약 테스트([`crate::adapter`] tests)용 표준 픽스처 — 내용 명세는 그쪽 주석 참고.
+/// "같은 요청이 두 번 기록되는" 이 소스의 실제 형태는 **두 홈에 복사된 같은 대화 DB**
+/// 다 (요청 id `1.4.11` 이 dedup 키 — 모듈 주석).
+#[cfg(test)]
+pub(crate) fn conformance_roots() -> (Vec<tempfile::TempDir>, Vec<PathBuf>) {
+    use crate::protobuf::build::{field_bytes, field_varint};
+    fn blob(input: u64, output: u64, req: &str, secs: u64) -> Vec<u8> {
+        let usage =
+            [field_varint(2, input), field_varint(3, output), field_bytes(11, req.as_bytes())]
+                .concat();
+        let gen9 = [
+            field_bytes(4, &field_varint(1, secs)),
+            field_bytes(10, &[field_varint(1, 100), field_varint(4, 256_000)].concat()),
+        ]
+        .concat();
+        let rec =
+            [field_bytes(4, &usage), field_bytes(9, &gen9), field_bytes(19, b"gemini-3.6-flash")]
+                .concat();
+        field_bytes(1, &rec)
+    }
+    let t0 = chrono::DateTime::parse_from_rfc3339("2026-08-13T01:00:00Z").unwrap().timestamp()
+        as u64;
+    // 제목은 steps 첫 행의 19.2 (첫 사용자 메시지)
+    let step = field_bytes(19, &field_bytes(2, "계약 테스트 첫 질문".as_bytes()));
+    let mut dirs = vec![];
+    let mut roots = vec![];
+    for _ in 0..2 {
+        let d = tempfile::tempdir().unwrap();
+        let home = d.path().join("antigravity-cli");
+        std::fs::create_dir_all(home.join("conversations")).unwrap();
+        let conn =
+            Connection::open(home.join("conversations/0f232cbb-b515-46e8-a6ca-f60532dca6d7.db"))
+                .unwrap();
+        conn.execute(
+            "create table gen_metadata (idx integer primary key, data blob, size integer default 0)",
+            [],
+        )
+        .unwrap();
+        conn.execute("create table steps (idx integer primary key, step_payload blob)", [])
+            .unwrap();
+        conn.execute(
+            "insert into steps (idx, step_payload) values (0, ?1)",
+            rusqlite::params![step.clone()],
+        )
+        .unwrap();
+        for (i, (input, output, req, secs)) in
+            [(100u64, 10u64, "req-A", t0), (200, 20, "req-B", t0 + 300)].iter().enumerate()
+        {
+            conn.execute(
+                "insert into gen_metadata (idx, data) values (?1, ?2)",
+                rusqlite::params![i as i64, blob(*input, *output, req, *secs)],
+            )
+            .unwrap();
+        }
+        drop(conn);
+        roots.push(home);
+        dirs.push(d);
+    }
+    (dirs, roots)
 }
 
 #[cfg(test)]
@@ -741,22 +819,10 @@ struct ConvTurn {
     last_activity: DateTime<Utc>,
 }
 
-/// [`TurnWatcher::poll`] 결과
-pub struct TurnPoll {
-    /// transcript 를 하나라도 읽을 수 있었는지 — **진단용**이다. `false` 면 이 방식이
-    /// 성립하지 않으므로(옛 버전이라 파일이 없음) 그 홈의 대화는 작업 중으로 잡히지 않는다.
-    /// 예전엔 여기서 크기 변화로 폴백했지만 그 신호로는 완료·크래시가 구분되지 않아
-    /// 제거했다 (live.rs 모듈 주석).
-    pub covered: bool,
-    /// 지금 턴이 돌고 있는 대화 uuid 들
-    pub running: Vec<String>,
-    /// 이번 회차에 **최종 답변으로** 끝난 대화 uuid 들.
-    ///
-    /// 안전망 타임아웃(`TURN_STALE_MS`)으로 풀린 것은 여기 없다 — 크래시와 완료를 가르는
-    /// 유일한 신호다. 셋 중 agy 가 가장 약한 고리다: Claude 는 status, Codex 는
-    /// `task_complete`/`turn_aborted` 로 사유까지 갈리지만 여기는 그 구분이 없다.
-    pub completed: Vec<String>,
-}
+/// [`TurnWatcher::poll`] 결과 — Codex 와 같은 모양이라 계약 모듈이 정의를 갖는다.
+/// 여기서 `covered` 는 "transcript 를 읽을 수 있었는가"(옛 버전엔 파일이 없다),
+/// `completed` 는 "최종 답변(`tool_calls` 없는 `PLANNER_RESPONSE`)으로 끝났는가"다.
+pub use crate::adapter::TurnPoll;
 
 /// agy 턴 추적.
 ///
@@ -807,6 +873,13 @@ fn transcripts(home: &Path) -> Vec<(String, PathBuf)> {
         }
     }
     out
+}
+
+/// 계약 가입 ([`crate::adapter::TurnWatch`]) — 인헌트 `poll` 에 위임만 한다.
+impl crate::adapter::TurnWatch for TurnWatcher {
+    fn poll(&mut self, homes: &[PathBuf], now: DateTime<Utc>) -> TurnPoll {
+        TurnWatcher::poll(self, homes, now)
+    }
 }
 
 impl TurnWatcher {

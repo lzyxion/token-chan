@@ -216,6 +216,26 @@ impl ClaudeAdapter {
     }
 }
 
+/// 계약 가입 ([`crate::adapter`]) — 인헌트 메서드에 위임만 한다.
+/// Claude 는 5시간 창 리셋 계산이 있는 유일한 소스라 `session_reset` 을 구현한다.
+impl crate::adapter::SourceAdapter for ClaudeAdapter {
+    fn source(&self) -> Source {
+        Source::Claude
+    }
+    fn scan(&mut self, since: DateTime<Utc>) -> ScanOutcome {
+        ClaudeAdapter::scan(self, since)
+    }
+    fn context(&self, pricing: &PriceTable) -> Option<ContextState> {
+        ClaudeAdapter::context(self, pricing)
+    }
+    fn sessions(&self) -> Vec<SessionRow> {
+        ClaudeAdapter::sessions(self)
+    }
+    fn session_reset(&self, now: DateTime<Utc>) -> Option<DateTime<Utc>> {
+        ClaudeAdapter::session_reset(self, now)
+    }
+}
+
 /// `message.content` 에서 사람이 읽는 텍스트만 뽑는다.
 /// 문자열로 오기도 하고 블록 배열(`{type:"text"|"tool_result"|…}`)로 오기도 한다.
 fn user_text(content: &serde_json::Value) -> String {
@@ -402,6 +422,31 @@ fn parse_transcript(
         tokens,
     });
     (out, ctx, session, stamps)
+}
+
+/// 계약 테스트([`crate::adapter`] tests)용 표준 픽스처 — 내용 명세는 그쪽 주석 참고.
+/// "같은 요청이 두 번 기록되는" 이 소스의 실제 형태는 **같은 파일의 반복 줄**이다
+/// (응답 1건이 콘텐츠 블록 수만큼 줄로 반복 — 모듈 주석).
+#[cfg(test)]
+pub(crate) fn conformance_roots() -> (Vec<tempfile::TempDir>, Vec<PathBuf>) {
+    fn line(id: &str, ts: &str, input: u64, output: u64) -> String {
+        format!(
+            r#"{{"type":"assistant","requestId":"{id}","timestamp":"{ts}","message":{{"id":"{id}","model":"claude-opus-5","usage":{{"input_tokens":{input},"output_tokens":{output},"cache_creation_input_tokens":0,"cache_read_input_tokens":0}}}}}}"#
+        )
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let proj = dir.path().join("-home-u-proj");
+    std::fs::create_dir_all(&proj).unwrap();
+    let dup = line("A", "2026-08-13T01:00:00.000Z", 100, 10);
+    let lines = [
+        r#"{"type":"user","message":{"role":"user","content":"계약 테스트 첫 질문"}}"#.to_string(),
+        dup.clone(),
+        dup,
+        line("B", "2026-08-13T01:05:00.000Z", 200, 20),
+    ];
+    std::fs::write(proj.join("s.jsonl"), lines.join("\n")).unwrap();
+    let roots = vec![dir.path().to_path_buf()];
+    (vec![dir], roots)
 }
 
 #[cfg(test)]
