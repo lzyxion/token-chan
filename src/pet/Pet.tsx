@@ -672,6 +672,22 @@ export default function Pet() {
     void invoke("set_gauge_vendor", { vendor: next });
   };
 
+  // 활성 벤더 말고도 **지금 돌고 있는** 벤더들 — 자동 선택은 마지막으로 쓴 쪽 하나만
+  // 태우므로, 동시에 여럿이 돌 때 나머지가 안 보이면 "그 CLI 는 안 돌고 있다"로 읽힌다.
+  // 작은 로고로 나란히 밝히고, 클릭하면 게이지를 그 벤더로 고정한다 (핀과 같은 상태).
+  const busyOthers = useMemo(() => {
+    const set = new Set<Source>();
+    for (const s of live.sessions) {
+      if (s.status === "busy") set.add(s.source);
+    }
+    if (active) set.delete(active.source);
+    return [...set];
+  }, [live, active?.source]);
+  const pinVendor = (src: Source) => {
+    setGaugeVendor(src);
+    void invoke("set_gauge_vendor", { vendor: src });
+  };
+
   // 열 높이는 벤더의 미터 수에 따라 달라진다 — 한도 없는 벤더에 빈 링을 채워
   // 3줄을 고정하는 것보다 짧은 열이 낫다는 판단. 창 크기는 meters.length 가
   // 바뀔 때 다시 맞춘다 (fit effect 의존성).
@@ -697,6 +713,23 @@ export default function Pet() {
               className={`gauge-dot ${active.busy ? "busy" : ""} ${active.stale ? "stale" : ""}`}
             />
           </button>
+          {/* 함께 돌고 있는 다른 벤더 — 클릭하면 게이지를 그쪽으로 고정 */}
+          {busyOthers.map((src) => (
+            <button
+              key={src}
+              className="gauge-dot-btn"
+              title={`${SOURCE_LABEL[src]} 작업 중 — 클릭하면 게이지 고정`}
+              onPointerDown={(e) => e.stopPropagation()}
+              onPointerUp={(e) => e.stopPropagation()}
+              onDoubleClick={(e) => e.stopPropagation()}
+              onClick={(e) => {
+                e.stopPropagation();
+                pinVendor(src);
+              }}
+            >
+              <VendorIcon source={src} size={10} className="gauge-dot sub busy" />
+            </button>
+          ))}
           {/* 게이지만 짧은 표기 — 캐릭터 옆 좁은 열이라 이름이 길면 넘친다 */}
           <span className="gauge-label">
             {SOURCE_SHORT[active.source]}
