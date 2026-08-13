@@ -35,6 +35,9 @@ jobs:
   bundle:
     needs: test
     if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+    # 릴리스 생성(태그 빌드)에 쓰기 권한이 필요하다 — 기본 토큰은 저장소 설정에 따라 읽기 전용
+    permissions:
+      contents: write
     strategy:
       fail-fast: false
       matrix:
@@ -54,10 +57,22 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: swatinem/rust-cache@v2
       - run: pnpm install
+      # 태그 빌드면 GitHub Release(초안)까지 만들어 번들을 첨부한다. 초안인 이유:
+      # 두 OS 잡이 따로 도는데 완성 전에 공개되면 자산이 반쪽인 릴리스가 노출된다 —
+      # 둘 다 끝난 걸 확인하고 사람이 publish 버튼을 누른다.
+      # workflow_dispatch(태그 없음)면 tagName 이 빈 문자열이라 릴리스 없이 빌드만 한다.
       - name: Build Tauri bundle (msi/dmg)
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tagName: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || '' }}
+          releaseName: "TokenChan __VERSION__"
+          releaseDraft: true
+          releaseBody: |
+            ⚠️ 바이너리는 코드 서명이 없습니다 — 개인 프로젝트라 서명 인증서를 쓰지 않습니다.
+            - **Windows**: SmartScreen 경고가 뜨면 "추가 정보" → "실행"
+            - **macOS**: 첫 실행 시 우클릭 → "열기" (또는 `xattr -cr /Applications/TokenChan.app`)
       - uses: actions/upload-artifact@v4
         with:
           name: bundle-${{ matrix.platform }}

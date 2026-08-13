@@ -241,6 +241,19 @@ AGY 는 `conversation_summaries.db` 의 `preview` 에도 같은 값이 있지만
 
 제목은 **첫 줄만** 쓰고 80자에서 자릅니다. 붙여넣은 코드블록·JSON 이 그대로 들어오는 게 실측된 사실이라, 안 자르면 목록 한 줄이 무너지고 덩어리가 통째로 요약 payload 에 실립니다.
 
+## 설치
+
+[Releases](https://github.com/lzyxion/token-chan/releases)에서 설치 파일을 받습니다 — Windows 는 `.msi`, macOS 는 `.dmg`.
+
+> ⚠️ **바이너리에 코드 서명이 없습니다** — 개인 프로젝트라 서명 인증서를 쓰지 않습니다.
+> 처음 실행할 때 OS 경고가 뜨는 것이 정상입니다:
+>
+> - **Windows**: SmartScreen 경고에서 **추가 정보 → 실행**
+> - **macOS**: 앱을 **우클릭 → 열기** (또는 터미널에서 `xattr -cr /Applications/TokenChan.app`)
+>
+> 믿기지 않으면 아래 개발 안내대로 소스에서 직접 빌드해도 됩니다 — 이 앱의 네트워크
+> 호출은 두 사용량 API 뿐이고, 그마저 코드로 확인할 수 있습니다.
+
 ## 개발
 
 요구사항: Rust(stable), pnpm, Linux는 Tauri 시스템 의존성:
