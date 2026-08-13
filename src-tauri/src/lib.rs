@@ -232,7 +232,7 @@ pub fn run() {
             commands::show_speech,
             commands::set_anchor,
             commands::toggle_panel,
-            commands::save_panel_position,
+            commands::save_window_position,
             commands::save_window_size,
             commands::start_window_resize,
             commands::resize_window,

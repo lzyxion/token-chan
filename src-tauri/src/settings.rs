@@ -42,8 +42,13 @@ pub struct Settings {
     pub panel_size: Option<(u32, u32)>,
     /// 설정 창 크기 (물리 픽셀) — 사용자가 조절한 크기를 기억
     pub settings_size: Option<(u32, u32)>,
+    /// 설정 창 위치 (물리 픽셀). **최상단이 아니라서** 자리를 기억해야 한다 —
+    /// 창이 뒤로 갔다가 다시 불렀을 때 매번 우하단으로 튀면 옮겨 둔 의미가 없다.
+    pub settings_pos: Option<(i32, i32)>,
     /// 캐릭터 스튜디오 창 크기 (물리 픽셀)
     pub studio_size: Option<(u32, u32)>,
+    /// 캐릭터 스튜디오 창 위치 (물리 픽셀)
+    pub studio_pos: Option<(i32, i32)>,
     /// 상황별 대사 말풍선 사용
     pub speech_enabled: bool,
     /// 대사 말풍선 표시 시간 (ms)
@@ -121,7 +126,9 @@ impl Default for Settings {
             panel_pos: None,
             panel_size: None,
             settings_size: None,
+            settings_pos: None,
             studio_size: None,
+            studio_pos: None,
             speech_enabled: true,
             speech_duration_ms: 4000,
             start_hidden: false,

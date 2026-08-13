@@ -65,7 +65,7 @@ pub struct Account {
     pub label: String,
     /// **로그인 방식** — 세 소스 모두 `{서비스} 로그인` 꼴 (예: "Claude 로그인", "ChatGPT 로그인")
     pub detail: String,
-    /// **플랜 이름** (예: "Claude Max 5x"). 계정 파일에서 알 수 있는 소스만 채운다 —
+    /// **플랜 이름** (예: "Max 5x"). 계정 파일에서 알 수 있는 소스만 채운다 —
     /// Codex 는 비고, 화면은 rollout 에서 온 [`crate::plan::PlanUsage::detail`] 로 채운다.
     pub plan: String,
     pub installs: Vec<Install>,
@@ -502,7 +502,7 @@ mod tests {
         assert_eq!(accounts[0].detail, "Claude 로그인");
         // 플랜은 별도 필드. 원문(`claude_max` + `default_claude_max_5x`)이 아니라 읽을 수
         // 있는 이름이고, 티어가 플랜을 이미 포함하므로 둘을 잇지 않는다 (plan::plan_label)
-        assert_eq!(accounts[0].plan, "Claude Max 5x");
+        assert_eq!(accounts[0].plan, "Max 5x");
         assert_eq!(accounts[0].installs.len(), 2);
         assert!(accounts[0].standard);
     }

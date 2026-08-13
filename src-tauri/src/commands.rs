@@ -43,7 +43,9 @@ pub fn set_settings(app: AppHandle, state: State<'_, AppState>, mut new_settings
     new_settings.panel_pos = old.panel_pos;
     new_settings.panel_size = old.panel_size;
     new_settings.settings_size = old.settings_size;
+    new_settings.settings_pos = old.settings_pos;
     new_settings.studio_size = old.studio_size;
+    new_settings.studio_pos = old.studio_pos;
     new_settings.reset_notify_minutes = new_settings.reset_notify_minutes.min(120);
     // 통화는 아는 값만 받는다 — 설정 파일은 사람이 고치는 JSON 이라 오타가 들어올 수 있고,
     // 모르는 값이면 곱하지 않은 달러로 떨어지는 게 안전하다.
@@ -333,10 +335,17 @@ fn place_panel(app: &AppHandle, panel: &tauri::WebviewWindow) {
     }
 }
 
+/// 사용자가 옮긴 자리를 기억한다. `save_window_size` 와 같은 라벨 규칙을 쓴다 —
+/// 창마다 커맨드를 따로 두면 새 창이 생길 때마다 둘씩 늘어난다.
 #[tauri::command]
-pub fn save_panel_position(state: State<'_, AppState>, x: i32, y: i32) {
+pub fn save_window_position(state: State<'_, AppState>, label: String, x: i32, y: i32) {
     let mut s = state.settings.lock().unwrap();
-    s.panel_pos = Some((x, y));
+    match label.as_str() {
+        "panel" => s.panel_pos = Some((x, y)),
+        "settings" => s.settings_pos = Some((x, y)),
+        "studio" => s.studio_pos = Some((x, y)),
+        _ => return,
+    }
     settings::save(&s);
 }
 
@@ -835,15 +844,22 @@ pub fn remove_state_image(app: AppHandle, pack: String, state: String) {
 pub fn open_studio(app: AppHandle) {
     let Some(w) = app.get_webview_window("studio") else { return };
     clear_window_resize(&app, "studio");
-    let saved = {
+    let (saved, saved_pos) = {
         let state = app.state::<AppState>();
         let s = state.settings.lock().unwrap();
-        s.studio_size
+        (s.studio_size, s.studio_pos)
     };
     if let Some((ww, wh)) = saved {
         let _ = w.set_size(tauri::PhysicalSize::new(ww, wh));
     }
-    let _ = w.center();
+    match saved_pos {
+        Some((x, y)) => {
+            let _ = w.set_position(tauri::PhysicalPosition::new(x, y));
+        }
+        None => {
+            let _ = w.center();
+        }
+    }
     let _ = w.show();
     let _ = w.set_focus();
 }
@@ -859,15 +875,19 @@ pub fn open_settings(app: AppHandle, tab: Option<String>) {
     clear_window_resize(&app, "settings");
     // 사용자가 조절한 크기 복원 — 우하단 정렬 계산보다 먼저 적용해야
     // 아래 위치 계산이 실제 크기를 쓴다
-    let saved_size = {
+    let (saved_size, saved_pos) = {
         let state = app.state::<AppState>();
         let s = state.settings.lock().unwrap();
-        s.settings_size
+        (s.settings_size, s.settings_pos)
     };
     if let Some((ww, wh)) = saved_size {
         let _ = w.set_size(tauri::PhysicalSize::new(ww, wh));
     }
-    if let (Ok(Some(mon)), Ok(size)) = (w.primary_monitor(), w.outer_size()) {
+    // 옮겨 둔 자리가 있으면 그대로 — 최상단이 아니라 뒤로 갔다가 다시 부르는 일이
+    // 잦은데, 그때마다 우하단으로 튀면 옮겨 둔 의미가 없다 (패널과 같은 규칙)
+    if let Some((x, y)) = saved_pos {
+        let _ = w.set_position(tauri::PhysicalPosition::new(x, y));
+    } else if let (Ok(Some(mon)), Ok(size)) = (w.primary_monitor(), w.outer_size()) {
         let mp = mon.position();
         let ms = mon.size();
         let x = mp.x + ms.width as i32 - size.width as i32 - 16;

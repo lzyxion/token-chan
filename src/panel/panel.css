@@ -356,6 +356,15 @@
 .vendor-model {
   color: #8a93a5;
   font-size: 9.5px;
+  /* 벤더 이름이 길어지면(Antigravity) 머리줄이 밀린다 — 가장 덜 중요한 모델명이
+     먼저 줄어들게 해서 오늘 사용량이 잘려 나가지 않게 한다 */
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.source-label {
+  flex: 0 0 auto;
 }
 .busy-chip {
   margin-left: 0;

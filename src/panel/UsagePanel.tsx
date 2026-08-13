@@ -150,7 +150,7 @@ export default function UsagePanel() {
     const unMoved = win.onMoved(({ payload }) => {
       clearTimeout(moveTimer);
       moveTimer = setTimeout(() => {
-        void invoke("save_panel_position", { x: payload.x, y: payload.y });
+        void invoke("save_window_position", { label: "panel", x: payload.x, y: payload.y });
       }, 500);
     });
     const unResized = win.onResized(({ payload }) => {

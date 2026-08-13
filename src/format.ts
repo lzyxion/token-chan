@@ -1,9 +1,18 @@
 import type { Source, Totals } from "./types";
 
-/** 소스 id → 화면 표기. 게이지·패널·설정이 같은 이름을 써야 벤더를 헷갈리지 않는다. */
+/** 소스 id → 화면 표기. 패널·설정·대사가 같은 이름을 써야 벤더를 헷갈리지 않는다. */
 export const SOURCE_LABEL: Record<Source, string> = {
   claude: "Claude",
   codex: "Codex",
+  antigravity: "Antigravity",
+};
+
+/** 캐릭터 옆 게이지 라벨 전용 짧은 표기.
+ *
+ * 게이지는 캐릭터 옆에 붙는 좁은 열이라 이름이 길면 라벨이 캐릭터 폭을 넘어간다.
+ * 여기서만 줄이고 나머지(패널·설정·말풍선)는 정식 이름을 쓴다. */
+export const SOURCE_SHORT: Record<Source, string> = {
+  ...SOURCE_LABEL,
   antigravity: "AGY",
 };
 
