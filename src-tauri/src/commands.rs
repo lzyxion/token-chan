@@ -612,8 +612,8 @@ pub fn fit_pet_window(app: AppHandle, width: f64, height: f64) {
 /// svg 는 `<img>` 로 그려지므로 바깥 CSS 가 내부에 닿지 않는다 —
 /// 애니메이션이 필요하면 SVG 파일 안에 직접 넣어야 한다.
 const CHAR_EXTS: [&str; 5] = ["gif", "webp", "apng", "png", "svg"];
-const CHAR_STATES: [&str; 7] =
-    ["idle", "working", "alert", "sleep", "exhausted", "refreshed", "poke"];
+const CHAR_STATES: [&str; 8] =
+    ["idle", "working", "alert", "sleep", "exhausted", "refreshed", "done", "poke"];
 
 fn find_state_file(pack_dir: &std::path::Path, state: &str) -> Option<std::path::PathBuf> {
     CHAR_EXTS

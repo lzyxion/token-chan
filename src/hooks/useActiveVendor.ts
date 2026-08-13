@@ -70,7 +70,7 @@ export function useActiveVendor(
   // 지금 작업 중인 벤더들. live.sessions 에는 idle 세션도 실려 오므로 상태로 거른다.
   const busySet = new Set<Source>();
   for (const s of live.sessions) {
-    if (s.status === "busy" || s.status === "active") busySet.add(s.source);
+    if (s.status === "busy") busySet.add(s.source);
   }
   const contextAt = new Map<Source, number>();
   for (const c of summary?.contexts ?? []) contextAt.set(c.source, ts(c.at));

@@ -79,7 +79,12 @@ export function usePlanOf(source: Source): PlanUsage | null {
 
 /** 라이브 세션 상태 구독: 초기 invoke + live-state 이벤트 */
 export function useLive(): LiveState {
-  const [live, setLive] = useState<LiveState>({ busy: false, busy_count: 0, sessions: [] });
+  const [live, setLive] = useState<LiveState>({
+    busy: false,
+    busy_count: 0,
+    sessions: [],
+    completed: [],
+  });
   useEffect(() => {
     let alive = true;
     invoke<LiveState>("get_live").then((l) => {

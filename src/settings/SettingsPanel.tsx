@@ -10,6 +10,7 @@ import type {
   Source,
   Summary,
 } from "../types";
+import { fmtDuration } from "../format";
 import { usePlans } from "../hooks/useUsage";
 import ResizeGrips from "../components/ResizeGrips";
 import VendorIcon from "../components/VendorIcon";
@@ -503,6 +504,36 @@ export default function SettingsPanel() {
               <div className="settings-hint">
                 캐릭터가 말풍선으로 알려줍니다 · 5분 주기로 확인하므로 5분 이상
                 권장
+              </div>
+            </div>
+
+            <div className="settings-group">
+              <div className="settings-label">
+                작업 완료 대사{" "}
+                <b>
+                  {s.doneNoticeSeconds === 0
+                    ? "끔"
+                    : `${fmtDuration(s.doneNoticeSeconds)} 이상`}
+                </b>
+              </div>
+              <div className="settings-row">
+                <span className="settings-min">끔</span>
+                <input
+                  type="range"
+                  min={0}
+                  max={600}
+                  step={10}
+                  value={s.doneNoticeSeconds}
+                  onChange={(e) =>
+                    update({
+                      doneNoticeSeconds: parseInt(e.currentTarget.value, 10),
+                    })
+                  }
+                />
+                <span className="settings-max">10분</span>
+              </div>
+              <div className="settings-hint">
+                이보다 오래 걸린 작업이 끝나면 세션마다 알려줍니다
               </div>
             </div>
 

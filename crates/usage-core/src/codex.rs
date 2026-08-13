@@ -211,15 +211,6 @@ impl CodexAdapter {
         self.cache.values().map(|fc| fc.written_at).max()
     }
 
-    /// 작업 중 여부를 판정할 때 mtime 을 볼 파일 (가장 최근에 쓰인 rollout).
-    /// 사용량 스캔은 10초 주기라 그 값으로 판정하면 작업 시작이 최대 10초 늦게 보인다.
-    /// 이 경로 하나만 넘겨 두면 라이브 스레드(2초)가 직접 stat 해서 바로 알아챈다.
-    pub fn watch_path(&self) -> Option<PathBuf> {
-        self.cache
-            .iter()
-            .max_by_key(|(_, fc)| fc.written_at)
-            .map(|(p, _)| p.clone())
-    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -256,12 +247,18 @@ struct SessionTurn {
 
 /// [`TurnWatcher::poll`] 결과
 pub struct TurnPoll {
-    /// `history.jsonl` 을 하나라도 읽을 수 있었는지.
-    /// `false` 면 이 방식이 성립하지 않으므로(설정으로 이력을 껐거나 아직 없음)
-    /// 호출자가 예전 방식(감시 파일 크기 변화)으로 폴백해야 한다.
+    /// `history.jsonl` 을 하나라도 읽을 수 있었는지 — **진단용**이다.
+    /// `false` 면 이 방식이 성립하지 않으므로(설정으로 이력을 껐거나 아직 없음) 그 홈의
+    /// 세션은 작업 중으로 잡히지 않는다. 예전엔 여기서 크기 변화로 폴백했지만 그 신호로는
+    /// 완료·크래시가 구분되지 않아 제거했다 (live.rs 모듈 주석).
     pub covered: bool,
     /// 지금 턴이 돌고 있는 세션 id 들
     pub running: Vec<String>,
+    /// 이번 회차에 **`task_complete` 로** 끝난 세션 id 들.
+    ///
+    /// 안전망 타임아웃(`TURN_STALE_MS`)으로 풀린 것도, 사용자가 끊은 것(`turn_aborted`)도
+    /// 여기 없다 — 크래시·취소와 완료를 가르는 유일한 신호다.
+    pub completed: Vec<String>,
 }
 
 /// Codex 턴 추적.
@@ -302,7 +299,7 @@ impl TurnWatcher {
                 Some(o) if o > size => 0,
                 Some(o) => o,
             };
-            let (lines, consumed) = read_from(&path, start);
+            let (lines, consumed) = crate::live::read_from(&path, start);
             self.history.insert(home.clone(), start + consumed);
 
             for line in lines {
@@ -332,10 +329,12 @@ impl TurnWatcher {
         }
 
         // 돌고 있는 세션의 rollout 꼬리에서 종료 이벤트를 찾는다
+        let mut completed = vec![];
         for (id, turn) in self.sessions.iter_mut() {
             if !turn.running {
                 continue;
             }
+            let mut finished_cleanly = false;
             if turn.rollout.is_none() {
                 // 프롬프트 직후엔 파일이 아직 없을 수 있다. 이번에 찾았다면 갓 생긴
                 // 파일이므로 처음부터 읽는다 (건너뛸 과거 턴이 없다).
@@ -347,20 +346,36 @@ impl TurnWatcher {
                 if size < turn.offset {
                     turn.offset = 0;
                 }
-                let (lines, consumed) = read_from(&path, turn.offset);
+                let (lines, consumed) = crate::live::read_from(&path, turn.offset);
                 turn.offset += consumed;
                 if consumed > 0 {
                     turn.last_activity = now;
                 }
                 for line in lines {
                     match turn_boundary(&line) {
-                        Some(true) => turn.running = true,
-                        Some(false) => turn.running = false,
+                        Some(Boundary::Started) => {
+                            turn.running = true;
+                            finished_cleanly = false;
+                        }
+                        // 돌고 있던 턴에 온 완료만 센다 — 중복·유실로 들어온 완료가
+                        // 이미 끝난 턴을 한 번 더 알리면 안 된다
+                        Some(Boundary::Completed) => {
+                            finished_cleanly = turn.running;
+                            turn.running = false;
+                        }
+                        Some(Boundary::Aborted) => {
+                            turn.running = false;
+                            finished_cleanly = false;
+                        }
                         None => {}
                     }
                 }
             }
-            // 완료 이벤트가 영영 안 오는 경우(크래시)의 안전망
+            if finished_cleanly {
+                completed.push(id.clone());
+            }
+            // 완료 이벤트가 영영 안 오는 경우(크래시)의 안전망.
+            // **완료 판정 뒤에 와야 한다** — 앞에 두면 타임아웃이 완료로 샌다.
             if turn.running && (now - turn.last_activity).num_milliseconds() > TURN_STALE_MS {
                 turn.running = false;
             }
@@ -378,12 +393,24 @@ impl TurnWatcher {
                 .filter(|(_, t)| t.running)
                 .map(|(id, _)| id.clone())
                 .collect(),
+            completed,
         }
     }
 }
 
-/// 한 줄이 턴 경계면 `Some(시작인가)`. 아니면 `None`.
-fn turn_boundary(line: &str) -> Option<bool> {
+/// 턴 경계 이벤트의 종류. 종료가 두 갈래인 게 핵심이다 — 예전엔 둘을 `false` 하나로
+/// 뭉쳤는데, 그러면 **내가 Ctrl-C 로 끊은 턴을 두고 "다 끝났어" 라고** 말하게 된다.
+#[derive(Debug, PartialEq)]
+enum Boundary {
+    Started,
+    /// 정상 완료 — 이것만 완료로 친다
+    Completed,
+    /// 사용자가 끊었다. 실측 109파일에서 `reason` 은 `interrupted` 한 종류뿐이었다
+    Aborted,
+}
+
+/// 한 줄이 턴 경계면 그 종류. 아니면 `None`.
+fn turn_boundary(line: &str) -> Option<Boundary> {
     // 전체 파싱은 낭비다 — 경계 이벤트는 드물고 줄은 크다(도구 출력 포함)
     if !line.contains("task_started") && !line.contains("task_complete") && !line.contains("turn_aborted")
     {
@@ -394,31 +421,11 @@ fn turn_boundary(line: &str) -> Option<bool> {
         return None;
     }
     match v.get("payload")?.get("type")?.as_str()? {
-        "task_started" => Some(true),
-        "task_complete" | "turn_aborted" => Some(false),
+        "task_started" => Some(Boundary::Started),
+        "task_complete" => Some(Boundary::Completed),
+        "turn_aborted" => Some(Boundary::Aborted),
         _ => None,
     }
-}
-
-/// `offset` 부터 읽어 **완결된 줄만** 돌려준다. 두 번째 값은 소비한 바이트 수 —
-/// 마지막 줄이 아직 쓰이는 중일 수 있으므로 개행까지만 전진한다.
-fn read_from(path: &Path, offset: u64) -> (Vec<String>, u64) {
-    use std::io::{Read, Seek, SeekFrom};
-    let Ok(mut f) = std::fs::File::open(path) else { return (vec![], 0) };
-    if f.seek(SeekFrom::Start(offset)).is_err() {
-        return (vec![], 0);
-    }
-    let mut buf = String::new();
-    // 유효하지 않은 UTF-8 이 섞이면 통째로 실패하므로 바이트로 읽고 손실 변환한다
-    let mut raw = vec![];
-    if f.read_to_end(&mut raw).is_err() {
-        return (vec![], 0);
-    }
-    let Some(last_nl) = raw.iter().rposition(|b| *b == b'\n') else { return (vec![], 0) };
-    let complete = &raw[..=last_nl];
-    buf.push_str(&String::from_utf8_lossy(complete));
-    let lines = buf.lines().filter(|l| !l.trim().is_empty()).map(str::to_string).collect();
-    (lines, complete.len() as u64)
 }
 
 /// `session_id` 로 rollout 을 찾는다 — 파일명이 `rollout-<시각>-<session_id>.jsonl` 이다.
@@ -755,7 +762,46 @@ mod turn_tests {
 
         // 새 턴이 끝났다 — 45초 창을 기다리지 않고 바로 풀린다
         append(&rollout_of(home.path()), &ev("task_complete"));
-        assert!(w.poll(&homes, now).running.is_empty());
+        let p = w.poll(&homes, now);
+        assert!(p.running.is_empty());
+        assert_eq!(p.completed, vec![SID.to_string()], "정상 완료는 completed 로 보고된다");
+    }
+
+    /// **크래시를 완료로 보고하면 안 된다.** 안전망 타임아웃도 `running` 에서 빠지는 건
+    /// 같지만, 그건 완료 신호를 못 받았다는 뜻이지 끝났다는 뜻이 아니다.
+    #[test]
+    fn stale_timeout_is_not_reported_as_completed() {
+        let home = home_with_session(&[ev("task_started")]);
+        let mut w = TurnWatcher::default();
+        let now = Utc::now();
+        let homes = vec![home.path().to_path_buf()];
+        w.poll(&homes, now);
+        submit_prompt(home.path(), SID);
+        assert!(!w.poll(&homes, now).running.is_empty());
+
+        // 완료 이벤트가 영영 안 온다 (크래시)
+        let later = now + chrono::Duration::milliseconds(TURN_STALE_MS + 1);
+        let p = w.poll(&homes, later);
+        assert!(p.running.is_empty(), "안전망이 풀어 준다");
+        assert!(p.completed.is_empty(), "그러나 완료는 아니다");
+    }
+
+    /// 내가 Ctrl-C 로 끊은 턴을 두고 "다 끝났어" 라고 할 이유가 없다.
+    /// 실측 109파일에서 `turn_aborted` 의 사유는 `interrupted` 한 종류뿐이었다.
+    #[test]
+    fn aborted_turn_is_not_reported_as_completed() {
+        let home = home_with_session(&[ev("task_started")]);
+        let mut w = TurnWatcher::default();
+        let now = Utc::now();
+        let homes = vec![home.path().to_path_buf()];
+        w.poll(&homes, now);
+        submit_prompt(home.path(), SID);
+        assert!(!w.poll(&homes, now).running.is_empty());
+
+        append(&rollout_of(home.path()), &ev("turn_aborted"));
+        let p = w.poll(&homes, now);
+        assert!(p.running.is_empty(), "턴은 끝난다");
+        assert!(p.completed.is_empty(), "그러나 완료는 아니다");
     }
 
     #[test]

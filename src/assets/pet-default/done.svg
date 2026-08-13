@@ -1,0 +1,39 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 104 96" width="104" height="96">
+  <defs>
+    <linearGradient id="shell" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#f2fdf7"/><stop offset="100%" stop-color="#9fe8c6"/>
+    </linearGradient>
+    <linearGradient id="liq" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#6fe0b8"/><stop offset="100%" stop-color="#25b184"/>
+    </linearGradient>
+    <clipPath id="body">
+      <path d="M6 82C6 44 24 16 52 16C80 16 98 44 98 82C98 88 88 93 52 93C16 93 6 88 6 82Z"/>
+    </clipPath>
+  </defs>
+
+  <path d="M6 82C6 44 24 16 52 16C80 16 98 44 98 82C98 88 88 93 52 93C16 93 6 88 6 82Z"
+        fill="url(#shell)" fill-opacity=".92" stroke="#23887b" stroke-width="2.4"/>
+
+  <!-- 액체 높이는 idle 과 같은 47 — 완료는 **작업**의 사건이지 잔량이 변한 게 아니다 -->
+  <g clip-path="url(#body)">
+    <ellipse cx="52" cy="47" rx="58" ry="4.5" fill="#6fe0b8"/>
+    <rect x="-6" y="47" width="116" height="60" fill="url(#liq)"/>
+    <ellipse cx="52" cy="93" rx="46" ry="16" fill="#14655a" opacity=".28"/>
+  </g>
+
+  <ellipse cx="33" cy="37" rx="13" ry="8.5" fill="#fff" opacity=".55" transform="rotate(-24 33 37)"/>
+  <circle cx="47" cy="27" r="3.4" fill="#fff" opacity=".8"/>
+
+  <ellipse cx="24" cy="65" rx="7.5" ry="4.2" fill="#ff92a8" opacity=".85"/>
+  <ellipse cx="80" cy="65" rx="7.5" ry="4.2" fill="#ff92a8" opacity=".85"/>
+
+  <!-- 윙크 — refreshed 의 ∪∪ 와 겹치지 않게 한쪽만 감는다.
+       뜬 눈이 남아 있어 "기뻐서 눈을 감은" refreshed 와 "해냈다" 가 구분된다 -->
+  <ellipse cx="37" cy="55" rx="6.4" ry="7.8" fill="#1f544c"/>
+  <circle cx="34.6" cy="51.5" r="2.2" fill="#fff" opacity=".95"/>
+  <path d="M61 57q6-8 12 0" fill="none" stroke="#1f544c" stroke-width="3" stroke-linecap="round"/>
+
+  <!-- 활짝 벌린 입 (idle 의 물결 입과 대비) -->
+  <path d="M43 67q9 12 18 0z" fill="#1f544c"/>
+  <path d="M47.5 72.5q4.5 4 9 0z" fill="#ff92a8" opacity=".9"/>
+</svg>
