@@ -22,8 +22,10 @@ use crate::AppState;
 
 const USAGE_INTERVAL: Duration = Duration::from_secs(10);
 const LIVE_INTERVAL: Duration = Duration::from_secs(2);
-/// 공식 플랜 한도(`claude -p "/usage"`) 폴링 주기 — CLI 프로세스를 띄우므로 여유 있게
-const PLAN_INTERVAL: Duration = Duration::from_secs(300);
+/// 공식 플랜 한도 폴링 주기. 홈마다 `.claude.json` 하나를 읽을 뿐이라 값이 싸다
+/// (예전엔 CLI 를 띄워 300초였다). 원본 캐시가 5분마다 갱신되므로 이보다 촘촘히
+/// 읽어도 더 새 값이 나오진 않지만, 갱신을 늦게 보는 일은 없어진다.
+const PLAN_INTERVAL: Duration = Duration::from_secs(30);
 /// 최근 세션 목록에 실을 개수 — 패널 한 페이지에 들어가는 만큼
 const RECENT_SESSIONS: usize = 8;
 
@@ -81,6 +83,9 @@ pub struct EnabledRoots {
     pub antigravity: Vec<PathBuf>,
     /// Claude 라이브 세션 레지스트리 (다른 소스엔 없음)
     pub sessions: Vec<PathBuf>,
+    /// Claude 홈 자체 — 공식 한도(`.claude.json`)가 트랜스크립트 루트가 아니라
+    /// 홈에 있어서 따로 들고 간다
+    pub claude_homes: Vec<PathBuf>,
 }
 
 fn enabled_roots(app: &AppHandle) -> EnabledRoots {
@@ -95,6 +100,7 @@ fn enabled_roots(app: &AppHandle) -> EnabledRoots {
             match i.source {
                 Source::Claude => {
                     r.claude.push(i.transcript_root());
+                    r.claude_homes.push(i.home.clone());
                     if let Some(d) = i.session_dir() {
                         r.sessions.push(d);
                     }
@@ -158,18 +164,25 @@ fn pick_line(lines: &[String], last: Option<&str>) -> String {
     from[idx].clone()
 }
 
-/// 공식 플랜 한도 미터 폴링 (Claude Code 미설치 시 조용히 비활성)
+/// 공식 플랜 한도 미터 폴링 (Claude Code 미설치·미로그인 시 조용히 비활성)
 /// + 블록 리셋 임박 시 캐릭터 대사 (설정 분 전, 0=끔, 리셋 시각당 1회)
 fn spawn_plan_thread(app: AppHandle) {
     std::thread::spawn(move || {
-        // 부팅 직후 CLI 스폰으로 시스템 부하 주지 않도록 짧게 대기
+        // 계정 발견이 별도 스레드에서 도는 중이라 첫 회차는 홈 목록이 비어 있다
         std::thread::sleep(Duration::from_secs(5));
         let mut last_notified_reset: Option<chrono::DateTime<Local>> = None;
         // 직전에 쓴 문구 — 후보가 둘 이상이면 연속 중복을 피한다 (프론트 speech.ts pick 과 동일 규칙)
         let mut last_notify_line: Option<String> = None;
 
         loop {
-            if let Some(plan) = usage_core::plan::fetch_plan_usage() {
+            // 활성 계정의 홈들 중 서버에서 가장 최근에 받아온 값을 쓴다.
+            // (Codex 가 `CodexAdapter::plan()` 에서 하는 것과 같은 규칙)
+            let plan = enabled_roots(&app)
+                .claude_homes
+                .iter()
+                .filter_map(|h| usage_core::plan::read_utilization(h))
+                .max_by_key(|p| p.fetched_at);
+            if let Some(plan) = plan {
                 set_plan(&app, plan.clone());
 
                 // 리셋 임박 — OS 알림 대신 캐릭터가 직접 말한다.
@@ -213,10 +226,12 @@ fn spawn_plan_thread(app: AppHandle) {
                     (s.reset_notify_minutes, lines)
                 };
                 if notify_min > 0 {
+                    // 첫 미터 = 가장 짧은 창 = 지금 당장 걸리는 한도
                     if let Some(reset) = plan
                         .meters
                         .first()
-                        .and_then(|m| usage_core::plan::parse_reset_datetime(&m.resets, Local::now()))
+                        .and_then(|m| m.resets_at)
+                        .map(|t| t.with_timezone(&Local))
                     {
                         let remain = reset - Local::now();
                         let in_window = remain > chrono::Duration::zero()

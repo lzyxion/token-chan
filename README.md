@@ -36,9 +36,35 @@ src                 # React: Pet(캐릭터) + Speech(대사 말풍선) + UsagePa
 
 | | 공식 한도 | 작업 중 감지 |
 |---|---|---|
-| Claude Code | ✅ `claude -p "/usage"` 출력 파싱 (5분 주기, 프로세스 1회 실행) | ✅ `~/.claude/sessions/*.json` 의 `status` 직독 |
-| Codex CLI | ✅ **rollout 의 `payload.rate_limits`** — 이미 읽는 파일에 서버가 준 값이 들어 있어 프로세스가 필요 없고, 리셋도 문자열이 아니라 유닉스 타임스탬프로 정확히 옵니다 | ✅ **턴 경계 이벤트 직독** (아래) |
+| Claude Code | ✅ **`<홈>/.claude.json` 의 `cachedUsageUtilization`** (아래) | ✅ `~/.claude/sessions/*.json` 의 `status` 직독 |
+| Codex CLI | ✅ **rollout 의 `payload.rate_limits`** — 이미 읽는 파일에 서버가 준 값이 들어 있습니다 | ✅ **턴 경계 이벤트 직독** (아래) |
 | Antigravity CLI | ❌ `quota_manager` 가 서버에서 받아 **메모리에만** 둡니다 (로그에 호출 기록만 있고 값이 없음) | ⚠️ DB·WAL 크기 변화로 유도 |
+
+한도를 주는 두 소스 모두 **파일에서 읽습니다. 프로세스를 띄우지 않습니다.**
+
+Claude 는 예전에 `claude -p "/usage"` 를 실행해 텍스트 출력을 파싱했습니다. 같은 값이 홈마다 파일로 있다는 걸 확인하고 바꿨습니다 — CLI 방식은 셋을 잃고 있었습니다:
+
+| | CLI 실행 | 파일 직독 |
+|---|---|---|
+| 발견 | PATH·셸 심에 좌우 — 트레이에서 뜬 앱과 터미널이 다른 답 | 홈 경로만 알면 됨 (홈 탐색과 같은 규칙) |
+| 리셋 시각 | `"Aug 1, 3pm (Asia/Seoul)"` — 로컬 타임존 문자열을 되파싱 | RFC 3339 |
+| 계정 | 프로세스 하나 = 계정 하나 | **홈마다** — `accountUuid` 가 `oauthAccount` 와 일치 |
+
+```jsonc
+"cachedUsageUtilization": {
+  "fetchedAtMs": 1786580825099, "accountUuid": "a88ff669-…",
+  "utilization": {
+    "five_hour": { "utilization": 3,  "resets_at": "2026-08-13T04:30:00Z" },
+    "seven_day": { "utilization": 39, "resets_at": "2026-08-15T06:00:00Z" },
+    "limits": [ { "kind": "session",       "group": "session", "percent": 3  },
+                { "kind": "weekly_all",    "group": "weekly",  "percent": 39 },
+                { "kind": "weekly_scoped", "group": "weekly",  "percent": 45,
+                  "scope": { "model": { "display_name": "Fable" } } } ] } }
+```
+
+`limits[]` 가 `/usage` 화면의 세 줄과 1:1 로 대응합니다. 뜻을 모르는 코드네임 창(`tangelo`, `nimbus_quill` 등)이 형제 키로 섞여 오지만 전부 무시합니다.
+
+⚠️ **캐시라서** Claude Code 가 돌지 않으면 갱신되지 않습니다(실측 갱신 주기: 세션이 도는 동안 5분). 그래서 `fetched_at` 에 읽은 시각이 아니라 `fetchedAtMs` 를 넣어 낡음을 알 수 있게 하고, 홈이 여럿이면 **가장 최근에 받아온 값**을 씁니다.
 
 Codex 의 창은 이름 없이 분으로만 옵니다(`limit_name`은 null). **창 길이는 플랜에 따라 바뀝니다** — 같은 계정에서 실측한 값입니다:
 
@@ -70,7 +96,7 @@ Codex 의 창은 이름 없이 분으로만 옵니다(`limit_name`은 null). **�
 평상시                        캐릭터에 마우스를 올리면
   [logo]                        [logo] Claude · fable-5 · 작업 중
    ◕                             ◕ 컨텍스트 16%
-   ◔                             ◔ 세션 5h 15% · 리셋 4h 22m
+   ◔                             ◔ 5시간 15% · 리셋 4h 22m
    ○                             ○ 주간 26%
 ```
 
@@ -78,7 +104,7 @@ Codex 의 창은 이름 없이 분으로만 옵니다(`limit_name`은 null). **�
 |---|---|
 | **맨 위 로고** | 지금 보고 있는 벤더. 작업 중이면 깜빡이고, 세션이 다 끝나 직전 벤더를 계속 보여주는 중이면 흐려집니다 |
 | 링 1 | 컨텍스트 소진율 |
-| 링 2·3 | **그 벤더의** 공식 한도 (짧은 창부터). Claude 는 세션 5h + 주간, Codex free 는 월간 하나 — 한도를 안 주는 벤더(AGY)는 그 줄을 아예 숨겨 열이 짧아집니다 |
+| 링 2·3 | **그 벤더의** 공식 한도 (짧은 창부터). Claude 는 5시간 + 주간, Codex free 는 월간 하나 — 한도를 안 주는 벤더(AGY)는 그 줄을 아예 숨겨 열이 짧아집니다 |
 
 리셋까지 남은 시간은 전용 시각 요소 없이 **첫 미터 라벨 뒤에 텍스트**로 붙습니다 — 그 창이 리셋되는 시각이라 의미가 같은 줄이고, 줄을 더 쌓으면 열이 포화됩니다.
 
@@ -111,7 +137,7 @@ agy 는 셋 중 가장 친절합니다 — 총계뿐 아니라 **구성 내역**
 ```
 ✳ Claude  opus-5   [작업 중]   1.2M $4.10
 컨텍스트  ▇▇▇░░░░░░  38%
-세션 5h   ▇▇▇▇░░░░░  42%   2시간 12분
+5시간     ▇▇▇▇░░░░░  42%   2시간 12분
 주간      ▇▇▇▇▇▇░░░  71%   3일
 ```
 
@@ -191,19 +217,37 @@ pnpm tauri build           # 패키징 (msi/dmg는 GitHub Actions 매트릭스 �
 
 ### 연결된 계정
 
-**펫 우클릭(또는 트레이) → 연결된 계정**에서 이 머신에 로그인된 CLI 계정을 확인하고, 계정 단위로 집계 포함 여부를 켜고 끕니다. 같은 계정을 여러 곳에 설치해 둔 경우 **한 줄로 묶입니다**:
+**설정 → 계정** 탭에서 이 머신에 로그인된 CLI 계정을 확인하고, 계정 단위로 집계 포함 여부를 켜고 끕니다. 같은 계정을 여러 곳에 설치해 둔 경우 **한 줄로 묶이고**, 그 계정이 어느 홈에 깔려 있는지와 각 홈을 어떻게 찾았는지(표준 위치 / 마커 스캔)까지 보여 줍니다:
 
 ```
-연결된 계정 ▸  ✓ Claude · you@example.com (claude_max · default_claude_max_5x) · 설치 2곳
-               ✓ Codex · you@example.com (ChatGPT 로그인) · 설치 2곳
-               ✓ AGY · you@example.com (Google 로그인)
-               ─────────
-               Claude 홈 추가…   ← 폴더 선택 다이얼로그
-               Codex 홈 추가…
-               AGY 홈 추가…
-               다시 검색
-               추가한 경로 제거 ▸  ← 직접 추가한 경로가 있을 때만
+연결된 계정                                   [다시 검색]
+ ☑ ⬤ you@example.com           [Claude Max 5x]
+      Claude 계정 로그인
+      C:\Users\you                              [표준]
+      \\wsl.localhost\Ubuntu\home\you           [표준]
+ ☑ ⬤ you@example.com                    [Plus]
+      ChatGPT 로그인
+      C:\Users\you\.codex                       [표준]
+      C:\Users\you\AppData\Roaming\orca\…       [스캔]
 ```
+
+한 줄에 들어가는 두 값은 **세 소스 모두 같은 의미**입니다 — 오른쪽 칩은 **플랜**, 이름 아래 줄은 **로그인 방식**입니다:
+
+| | 플랜 (칩) | 로그인 방식 |
+|---|---|---|
+| Claude | `.claude.json` → `oauthAccount.organizationRateLimitTier` (없으면 `organizationType`) → **Claude Max 5x** | `oauthAccount` 가 있다는 것 자체 → **Claude 계정 로그인** |
+| Codex | rollout `rate_limits.plan_type` → **Plus** | `auth.json` 의 `auth_mode` → **ChatGPT 로그인** |
+| AGY | 없음 (한도 자체를 제공하지 않음) | 로그의 `authMethod` → **Google 로그인** |
+
+플랜 원문 표기가 소스마다 달라(`default_claude_max_5x` vs `plus`) `plan::plan_label` 로 한 규칙으로 다듬습니다. 값 목록이 공개 API 가 아니라 표 대신 규칙으로 처리합니다 — 처음 보는 플랜(`max_20x` 등)도 원문이 그대로 새지 않습니다.
+
+Claude 만 인증 방식을 적어 두는 필드가 **없습니다.** 대신 그 객체 이름이 `oauthAccount` 이고, API 키·Bedrock·Vertex 로 쓰면 이 객체가 아예 없어 계정으로 잡히지도 않습니다. 그래서 "계정으로 잡혔다 = OAuth 로그인"으로 읽습니다.
+
+플랜 칩이 **어느 계정 것인지** 확실한가는 소스에 따라 다릅니다. Claude 는 계정 파일에서 읽으므로 그 계정 것이 확실하지만, Codex 는 rollout에서 오는 **소스 단위** 값이라 CLI 가 지금 로그인된 계정 기준입니다 — 같은 소스에 계정이 여럿이면 칩을 흐리게 하고 `?` 를 붙입니다. **소진율은 여기 없습니다** — 사용량 패널이 보여주는 것과 겹치기 때문입니다. 같은 소스에 계정이 여럿이면 어느 계정의 플랜인지 구분할 수 없어(CLI 가 지금 로그인된 계정 기준) 배지를 흐리게 하고 `?` 를 붙입니다.
+
+같은 탭에서 **직접 추가한 홈**(소스별 추가·제거)도 관리합니다.
+
+펫 우클릭(또는 트레이) → **연결된 계정**에는 켜고 끄는 체크만 남겨 두었습니다 — 네이티브 메뉴는 한 줄에 문자열 하나뿐이라 위 정보를 담을 수 없어서, 나머지는 전부 계정 탭이 맡습니다. 같은 메뉴의 "계정 설정…"이 그 탭을 엽니다.
 
 계정 식별에 쓰는 파일 (전부 로컬):
 
@@ -232,7 +276,7 @@ CLI 를 격리 실행하는 도구가 홈을 자기 폴더로 돌려놓는 경�
 | `%APPDATA%`·`%LOCALAPPDATA%`·XDG 아래 | **마커 스캔**이 자동으로 찾습니다 (실측: 어떤 래퍼의 Codex 런타임 홈) |
 | 그 밖 (다른 드라이브 등) | **"홈 추가…"로 직접 등록** |
 
-즉 홈을 옮겼는데 마커 스캔이 못 닿는 곳이면 한 번 등록해 두면 됩니다. 펫 우클릭(또는 트레이) → **연결된 계정**의 "홈 추가…"로 추가합니다 (`extraClaudeHomes` · `extraCodexHomes` · `extraAntigravityHomes`에 저장). 설정에 적어 두면 실행 방식과 무관하게 항상 같은 범위를 봅니다. 추가한 경로는 같은 메뉴의 **추가한 경로 제거**에서 지웁니다.
+즉 홈을 옮겼는데 마커 스캔이 못 닿는 곳이면 한 번 등록해 두면 됩니다. **설정 → 계정** 탭의 "직접 추가한 홈"에서 소스별로 추가·제거합니다 (`extraClaudeHomes` · `extraCodexHomes` · `extraAntigravityHomes`에 저장). 설정에 적어 두면 실행 방식과 무관하게 항상 같은 범위를 봅니다.
 
 **합쳐도 중복 집계되지 않습니다.** 세 어댑터 모두 파일이 아니라 이벤트 단위로 dedup 합니다 — Claude 는 `message.id`, Codex 는 `세션 id + 시각 + 사용량`, agy 는 `gen_metadata` 의 요청 id(실측 19건 전부 고유). 실제로 같은 rollout 이 `~/.codex` 와 재배치된 홈 양쪽에 있던 상황에서 검증했습니다:
 

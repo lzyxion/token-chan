@@ -5,27 +5,20 @@ use tauri::tray::TrayIconBuilder;
 use tauri::{AppHandle, Manager};
 use usage_core::model::Source;
 
-/// "연결된 계정" 서브메뉴. 같은 계정의 설치본은 한 줄로 묶여 나오고,
-/// 체크가 곧 집계 포함 여부다.
+/// "연결된 계정" 서브메뉴 — **켜고 끄는 것만** 한다. 같은 계정의 설치본은 한 줄로 묶여
+/// 나오고, 체크가 곧 집계 포함 여부다.
+///
+/// 홈 추가·제거·다시 검색과 계정 상세(플랜·인증 방식·설치 경로)는 설정 창의 계정 탭이
+/// 맡는다. 네이티브 메뉴는 한 줄에 문자열 하나뿐이라 그걸 담을 수 없다.
 ///
 /// `prefix` 는 펫 우클릭 메뉴에서 트레이와 id 가 겹치지 않게 붙이는 접두사.
 fn accounts_submenu(app: &AppHandle, prefix: &str) -> tauri::Result<Submenu<tauri::Wry>> {
-    let (accounts, overrides, extras) = {
+    let (accounts, overrides) = {
         let state = app.state::<crate::AppState>();
         // 두 락을 겹쳐 잡지 않는다
-        let (ov, ex) = {
-            let s = state.settings.lock().unwrap();
-            (
-                s.accounts_enabled.clone(),
-                [
-                    ("claude", s.extra_claude_homes.clone()),
-                    ("codex", s.extra_codex_homes.clone()),
-                    ("antigravity", s.extra_antigravity_homes.clone()),
-                ],
-            )
-        };
+        let ov = { state.settings.lock().unwrap().accounts_enabled.clone() };
         let ac = { state.accounts.lock().unwrap().clone() };
-        (ac, ov, ex)
+        (ac, ov)
     };
 
     let mut items: Vec<Box<dyn IsMenuItem<tauri::Wry>>> = vec![];
@@ -55,40 +48,13 @@ fn accounts_submenu(app: &AppHandle, prefix: &str) -> tauri::Result<Submenu<taur
         )?));
     }
     items.push(Box::new(PredefinedMenuItem::separator(app)?));
-    items.push(Box::new(MenuItem::with_id(app, format!("{prefix}acctadd:claude"), "Claude 홈 추가…", true, None::<&str>)?));
-    items.push(Box::new(MenuItem::with_id(app, format!("{prefix}acctadd:codex"), "Codex 홈 추가…", true, None::<&str>)?));
-    items.push(Box::new(MenuItem::with_id(app, format!("{prefix}acctadd:antigravity"), "AGY 홈 추가…", true, None::<&str>)?));
-    items.push(Box::new(MenuItem::with_id(app, format!("{prefix}acctrescan"), "다시 검색", true, None::<&str>)?));
-
-    // 직접 추가한 경로의 삭제 — 설정 창에서 데이터 소스 UI 를 없앴으므로 여기가 유일한 제거 경로
-    let mut del_items: Vec<Box<dyn IsMenuItem<tauri::Wry>>> = vec![];
-    for (src, list) in &extras {
-        let disp = match *src {
-            "codex" => "Codex",
-            "antigravity" => "AGY",
-            _ => "Claude",
-        };
-        for p in list.iter().filter(|p| !p.trim().is_empty()) {
-            del_items.push(Box::new(MenuItem::with_id(
-                app,
-                format!("{prefix}acctdel:{src}:{p}"),
-                format!("{disp} · {p}"),
-                true,
-                None::<&str>,
-            )?));
-        }
-    }
-    if !del_items.is_empty() {
-        let del_refs: Vec<&dyn IsMenuItem<tauri::Wry>> =
-            del_items.iter().map(|b| b.as_ref()).collect();
-        items.push(Box::new(Submenu::with_id_and_items(
-            app,
-            format!("{prefix}acctdelmenu"),
-            "추가한 경로 제거",
-            true,
-            &del_refs,
-        )?));
-    }
+    items.push(Box::new(MenuItem::with_id(
+        app,
+        format!("{prefix}acctsettings"),
+        "계정 설정…",
+        true,
+        None::<&str>,
+    )?));
 
     let refs: Vec<&dyn IsMenuItem<tauri::Wry>> = items.iter().map(|b| b.as_ref()).collect();
     Submenu::with_id_and_items(app, format!("{prefix}accounts"), "연결된 계정", true, &refs)
@@ -177,31 +143,10 @@ pub fn handle_action(app: &AppHandle, action: &str) {
                 let _ = crate::commands::toggle_panel(app.clone());
             }
             "studio" => crate::commands::open_studio(app.clone()),
-            "settings" => {
-                // 설정 패널을 트레이 근처(주 모니터 우하단)에 표시
-                if let Some(w) = app.get_webview_window("settings") {
-                    // 리사이즈 도중 ✕/Esc 로 닫혔을 수 있다 — toggle_panel 과 같은 정리
-                    crate::commands::clear_window_resize(app, "settings");
-                    // 사용자가 조절한 크기 복원 — 우하단 정렬 계산보다 먼저 적용해야
-                    // 아래 위치 계산이 실제 크기를 쓴다
-                    let saved_size = {
-                        let state = app.state::<crate::AppState>();
-                        let s = state.settings.lock().unwrap();
-                        s.settings_size
-                    };
-                    if let Some((ww, wh)) = saved_size {
-                        let _ = w.set_size(tauri::PhysicalSize::new(ww, wh));
-                    }
-                    if let (Ok(Some(mon)), Ok(size)) = (w.primary_monitor(), w.outer_size()) {
-                        let mp = mon.position();
-                        let ms = mon.size();
-                        let x = mp.x + ms.width as i32 - size.width as i32 - 16;
-                        let y = mp.y + ms.height as i32 - size.height as i32 - 80;
-                        let _ = w.set_position(tauri::PhysicalPosition::new(x, y));
-                    }
-                    let _ = w.show();
-                    let _ = w.set_focus();
-                }
+            "settings" => crate::commands::open_settings(app.clone(), None),
+            // 계정 서브메뉴의 유일한 출구 — 나머지 조작은 전부 계정 탭에 있다
+            "acctsettings" => {
+                crate::commands::open_settings(app.clone(), Some("account".into()))
             }
             "clickthrough" => {
                 let on = {
@@ -214,98 +159,23 @@ pub fn handle_action(app: &AppHandle, action: &str) {
             "quit" => app.exit(0),
             // 계정 토글 — id 의 나머지가 곧 Account::setting_key()
             a if a.starts_with("acct:") => toggle_account(app, &a["acct:".len()..]),
-            // 마커 스캔(수백 ms)에 WSL 재조회(최대 3초)까지 겹치므로 메뉴 핸들러를 막지
-            // 않는다 — 시작 시 발견을 별도 스레드로 돌리는 것과 같은 이유다.
-            "acctrescan" => {
-                let app = app.clone();
-                std::thread::spawn(move || {
-                    crate::monitor::rescan(&app);
-                    refresh_menu(&app);
-                });
-            }
-            a if a.starts_with("acctadd:") => pick_home(app, &a["acctadd:".len()..]),
-            a if a.starts_with("acctdel:") => remove_home(app, &a["acctdel:".len()..]),
             _ => {}
     }
 }
 
-/// 계정의 집계 포함 여부를 뒤집는다.
+/// 계정의 집계 포함 여부를 뒤집는다. 지금 값을 읽어 반대로 넘길 뿐, 실제 저장·알림은
+/// 계정 탭과 같은 커맨드가 한다 — 두 경로가 어긋나지 않게.
 fn toggle_account(app: &AppHandle, setting_key: &str) {
-    let state = app.state::<crate::AppState>();
-    let accounts = { state.accounts.lock().unwrap().clone() };
-    let Some(account) = accounts.iter().find(|a| a.setting_key() == setting_key) else {
-        return;
-    };
-    let updated = {
-        let mut s = state.settings.lock().unwrap();
-        let now = crate::monitor::account_enabled(account, &s.accounts_enabled);
-        s.accounts_enabled.insert(setting_key.to_string(), !now);
-        crate::settings::save(&s);
-        s.clone()
-    };
-    refresh_menu(app);
-    use tauri::Emitter;
-    let _ = app.emit("settings-changed", &updated);
-}
-
-/// 폴더 선택으로 스캔 경로 추가. 다이얼로그는 메인 스레드를 막으면 안 되므로 별도 스레드에서.
-fn pick_home(app: &AppHandle, source: &str) {
-    use tauri_plugin_dialog::DialogExt;
-    let app = app.clone();
-    let source = source.to_string();
-    std::thread::spawn(move || {
-        let Some(picked) = app.dialog().file().blocking_pick_folder() else { return };
-        let Ok(path) = picked.into_path() else { return };
-        let path = path.display().to_string();
-
-        let updated = {
-            let state = app.state::<crate::AppState>();
-            let mut s = state.settings.lock().unwrap();
-            let list = match source.as_str() {
-                "codex" => &mut s.extra_codex_homes,
-                "antigravity" => &mut s.extra_antigravity_homes,
-                _ => &mut s.extra_claude_homes,
-            };
-            if list.iter().any(|p| p == &path) {
-                return; // 이미 있는 경로 — 중복 등록 방지
-            }
-            list.push(path);
-            crate::settings::save(&s);
-            s.clone()
-        };
-        // 새 경로가 어떤 계정인지 알아야 목록에 뜨므로 다시 발견한다
-        crate::monitor::rediscover(&app);
-        refresh_menu(&app);
-        use tauri::Emitter;
-        let _ = app.emit("settings-changed", &updated);
-    });
-}
-
-/// 직접 추가한 스캔 경로를 지운다. `arg` 는 "<source>:<경로>" —
-/// 경로에 든 콜론(드라이브 문자)은 첫 콜론에서만 갈라 문제없다.
-fn remove_home(app: &AppHandle, arg: &str) {
-    let Some((source, path)) = arg.split_once(':') else { return };
-    let updated = {
+    let now = {
         let state = app.state::<crate::AppState>();
-        let mut s = state.settings.lock().unwrap();
-        let list = match source {
-            "codex" => &mut s.extra_codex_homes,
-            "antigravity" => &mut s.extra_antigravity_homes,
-            _ => &mut s.extra_claude_homes,
+        let overrides = { state.settings.lock().unwrap().accounts_enabled.clone() };
+        let accounts = { state.accounts.lock().unwrap().clone() };
+        let Some(account) = accounts.iter().find(|a| a.setting_key() == setting_key) else {
+            return;
         };
-        let before = list.len();
-        list.retain(|p| p != path);
-        if list.len() == before {
-            return; // 메뉴가 낡아 이미 지워진 경로 — 저장/재탐색 불필요
-        }
-        crate::settings::save(&s);
-        s.clone()
+        crate::monitor::account_enabled(account, &overrides)
     };
-    // 지운 경로의 계정이 목록에서 빠지도록 다시 발견한다
-    crate::monitor::rediscover(app);
-    refresh_menu(app);
-    use tauri::Emitter;
-    let _ = app.emit("settings-changed", &updated);
+    crate::commands::set_account_enabled(app.clone(), setting_key.to_string(), !now);
 }
 
 /// 트레이 메뉴의 클릭 통과 체크 표시를 현재 값에 맞춘다.

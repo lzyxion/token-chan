@@ -1,40 +1,55 @@
 //! 공식 플랜 한도 미터.
 //!
 //! 계정의 **공식** 소진율이다 — 로컬 추정치와 달리 다른 기기 사용량까지 반영된다.
-//! 소스마다 얻는 경로가 다르다:
+//! 한도를 주는 두 소스 모두 **이미 읽고 있는 파일**에서 나온다. 프로세스를 띄우지 않는다:
 //!
-//! | 소스 | 경로 | 비용 |
+//! | 소스 | 파일 | 필드 |
 //! |---|---|---|
-//! | Claude | `claude -p "/usage"` 출력 파싱 (이 파일) | 프로세스 1회 실행 |
-//! | Codex | rollout 의 `token_count` → `payload.rate_limits` ([`crate::codex`]) | 0 (이미 읽는 파일) |
+//! | Claude | `<홈>/.claude.json` (이 파일) | `cachedUsageUtilization` |
+//! | Codex | rollout 의 `token_count` ([`crate::codex`]) | `payload.rate_limits` |
 //! | Antigravity | **없음** — `quota_manager` 가 서버에서 받아 메모리에만 둔다 | — |
 //!
-//! Codex 쪽이 더 좋은 경로다: 서버가 준 값이 이미 파일에 있어서 프로세스를 띄울 필요가
-//! 없고, 리셋 시각도 문자열이 아니라 unix 타임스탬프로 정확히 온다.
+//! Claude 는 예전에 `claude -p "/usage"` 를 띄워 텍스트 출력을 파싱했다. 그 방식은 셋을
+//! 잃었다: 실행 방식에 좌우됐고(PATH·셸 심), 리셋 시각을 로컬 타임존 **문자열**로만 줘서
+//! 다시 파싱해야 했고, 프로세스 하나 = 계정 하나라 다중 계정에 쓸 수 없었다. 같은 값이
+//! 홈마다 파일로 있으므로 셋 다 사라지고, 홈 직독이라는 이 앱의 규칙과도 맞는다.
 //!
-//! 관찰된 출력 형식 (Claude Code 2.1.220):
-//! ```text
-//! Current session: 60% used · resets Jul 30, 7:10pm (Asia/Seoul)
-//! Current week (all models): 44% used · resets Aug 1, 3pm (Asia/Seoul)
-//! Current week (Fable): 40% used · resets Aug 1, 2:59pm (Asia/Seoul)
+//! 실측 `cachedUsageUtilization` (Claude Code 2.1.220):
+//! ```json
+//! { "fetchedAtMs": 1786580825099, "accountUuid": "a88ff669-…",
+//!   "utilization": {
+//!     "five_hour": { "utilization": 3,  "resets_at": "2026-08-13T04:30:00Z" },
+//!     "seven_day": { "utilization": 39, "resets_at": "2026-08-15T06:00:00Z" },
+//!     "limits": [
+//!       { "kind": "session",       "group": "session", "percent": 3  },
+//!       { "kind": "weekly_all",    "group": "weekly",  "percent": 39 },
+//!       { "kind": "weekly_scoped", "group": "weekly",  "percent": 45,
+//!         "scope": { "model": { "display_name": "Fable" } } } ] } }
 //! ```
-//! ⚠️ 출력 포맷은 버전에 따라 바뀔 수 있으므로 방어적으로 파싱하고,
-//! 파싱 실패 시 None (기능 비활성) 으로 처리한다.
+//! `limits[]` 가 `/usage` 화면이 그리던 세 줄과 1:1 로 대응한다. 뜻을 모르는 코드네임
+//! 창(`tangelo`, `nimbus_quill` 등)이 형제 키로 섞여 오지만 전부 무시한다 — 공개된
+//! 목록이 아니라 의미를 모르는 값을 화면에 올릴 수 없다.
+//!
+//! ⚠️ **캐시다.** Claude Code 가 돌지 않으면 갱신되지 않는다. 실측 갱신 주기는 세션이
+//! 도는 동안 5분이고, 낡음은 `fetchedAtMs` 로 판단한다 (그래서 [`PlanUsage::fetched_at`]
+//! 에 `Utc::now()` 가 아니라 이 값을 넣는다 — 언제 서버에서 받은 값인지가 사실이다).
+
+use std::path::Path;
 
 use chrono::{DateTime, Utc};
 use serde::Serialize;
+use serde_json::Value;
 
 use crate::model::Source;
 
 #[derive(Clone, Debug, Serialize, PartialEq)]
 pub struct PlanMeter {
-    /// 예: "Current session", "Current week (all models)", "월간"
+    /// 예: "5시간", "주간", "주간 (Fable)"
     pub label: String,
     pub used_pct: u8,
-    /// 리셋 시각 원문 (예: "Jul 30, 7:10pm (Asia/Seoul)"). 소스가 문자열로만 줄 때 쓴다.
-    pub resets: String,
-    /// 소스가 정확한 시각을 준 경우 (Codex 의 `resets_at`). 있으면 이쪽이 정답이라
-    /// 프론트가 `resets` 문자열을 파싱할 필요가 없다.
+    /// 리셋 시각. 두 소스 모두 기계가 읽는 형식으로 준다 — Codex 는 unix 초,
+    /// Claude 는 RFC 3339 — 그래서 프론트가 문자열을 파싱할 일이 없다.
+    /// 창에 리셋 개념이 없으면 None.
     pub resets_at: Option<DateTime<Utc>>,
 }
 
@@ -75,205 +90,289 @@ pub fn window_label(minutes: u64) -> String {
     }
 }
 
-/// `/usage` 텍스트 출력에서 미터들을 추출. 하나도 못 찾으면 None.
-pub fn parse_usage_output(text: &str, now: DateTime<Utc>) -> Option<PlanUsage> {
-    let mut meters = vec![];
-    for line in text.lines() {
-        let line = line.trim();
-        let Some(pct_pos) = line.find("% used") else { continue };
-        // "% used" 앞의 연속 숫자 추출
-        let digits: String = line[..pct_pos]
-            .chars()
-            .rev()
-            .take_while(|c| c.is_ascii_digit())
-            .collect::<String>()
-            .chars()
-            .rev()
-            .collect();
-        let Ok(pct) = digits.parse::<u8>() else { continue };
+/// 플랜 식별자(스네이크케이스 원문) → 사람이 읽는 이름.
+///
+/// 두 소스가 플랜을 **다른 파일에서, 다른 표기로** 준다. 그대로 보여주면 같은 화면에
+/// `claude_max · default_claude_max_5x` 와 `plus` 가 나란히 놓인다 (전부 실측):
+///
+/// | 소스 | 원문 | 결과 |
+/// |---|---|---|
+/// | Claude `.claude.json` `organizationRateLimitTier` | `default_claude_max_5x` | `Claude Max 5x` |
+/// | Claude `organizationType` (티어가 없을 때) | `claude_max` | `Claude Max` |
+/// | Codex rollout `plan_type` | `plus` | `Plus` |
+///
+/// 표를 두지 않고 규칙으로 처리한다 — 값 목록이 공개 API 가 아니라서 새 플랜(`max_20x`
+/// 등)이 나와도 표를 고칠 때까지 원문이 그대로 새어 나가면 안 된다. `default_` 접두사만
+/// 떼고, 나머지는 단어별로 첫 글자를 올린다. **`5x`·`20x` 처럼 숫자로 시작하는 조각은
+/// 그대로 둔다** (`5X` 로 올리면 어색하다).
+pub fn plan_label(raw: &str) -> String {
+    let raw = raw.trim().strip_prefix("default_").unwrap_or(raw.trim());
+    raw.split('_')
+        .filter(|w| !w.is_empty())
+        .map(|w| {
+            let mut c = w.chars();
+            match c.next() {
+                // 숫자로 시작하면 배수 표기(`5x`)라 손대지 않는다
+                Some(f) if f.is_ascii_digit() => w.to_string(),
+                Some(f) => f.to_uppercase().collect::<String>() + c.as_str(),
+                None => String::new(),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
 
-        // 레이블: 콜론 앞부분
-        let label = match line.find(':') {
-            Some(i) => line[..i].trim().to_string(),
-            None => continue,
-        };
-        // 리셋 시각: "resets " 이후 원문
-        let resets = line
-            .find("resets ")
-            .map(|i| line[i + "resets ".len()..].trim().to_string())
-            .unwrap_or_default();
+/// 한도 창 하나의 이름. Codex 와 같은 화면에 나란히 놓이므로 같은 어휘를 쓴다.
+///
+/// 창 길이는 `limits[]` 안에 없지만 **형제 키가 확인해 준다** — 같은 payload 의
+/// `five_hour`/`seven_day` 가 각 그룹과 같은 `resets_at` 을 갖는다(실측). 처음 보는
+/// 그룹은 [`plan_label`] 로 떨어뜨려 원문이 그대로 새지 않게 한다.
+fn meter_label(group: &str, model: Option<&str>) -> String {
+    let base = match group {
+        "session" => window_label(300),
+        "weekly" => window_label(10080),
+        other => plan_label(other),
+    };
+    match model {
+        Some(m) => format!("{base} ({m})"),
+        None => base,
+    }
+}
 
-        // Claude 는 리셋을 문자열로만 준다 — 정확한 시각은 프론트가 로컬 타임존
-        // 기준으로 해석해야 해서(`parse_reset_datetime`) 여기서 채우지 않는다.
-        meters.push(PlanMeter { label, used_pct: pct.min(100), resets, resets_at: None });
+/// 짧은 창이 먼저 와야 첫 미터가 "지금 당장 걸리는 한도"가 된다 (Codex 와 같은 규칙).
+/// 모르는 그룹은 뒤로 보낸다 — 첫 자리는 뜻을 아는 값만 차지해야 한다.
+fn group_rank(group: &str) -> u8 {
+    match group {
+        "session" => 0,
+        "weekly" => 1,
+        _ => 2,
+    }
+}
+
+/// `limits[]` 원소 하나 → 미터. 퍼센트가 없으면(자리만 잡은 항목) 버린다.
+fn parse_limit(v: &Value) -> Option<(u8, bool, PlanMeter)> {
+    let pct = v.get("percent").and_then(Value::as_f64)?;
+    let group = v.get("group").and_then(Value::as_str).unwrap_or_default();
+    let model = v
+        .get("scope")
+        .and_then(|s| s.get("model"))
+        .and_then(|m| m.get("display_name"))
+        .and_then(Value::as_str)
+        .filter(|s| !s.is_empty());
+    Some((
+        group_rank(group),
+        model.is_some(),
+        PlanMeter {
+            label: meter_label(group, model),
+            used_pct: pct.round().clamp(0.0, 100.0) as u8,
+            resets_at: parse_rfc3339(v.get("resets_at")),
+        },
+    ))
+}
+
+fn parse_rfc3339(v: Option<&Value>) -> Option<DateTime<Utc>> {
+    let s = v?.as_str()?;
+    DateTime::parse_from_rfc3339(s).ok().map(|d| d.with_timezone(&Utc))
+}
+
+/// 이름 있는 창(`five_hour`/`seven_day`) → 미터. `limits[]` 가 없는 옛 버전용 대비책이다.
+fn parse_named_window(v: &Value, key: &str, minutes: u64) -> Option<PlanMeter> {
+    let w = v.get(key).filter(|w| w.is_object())?;
+    let pct = w.get("utilization").and_then(Value::as_f64)?;
+    Some(PlanMeter {
+        label: window_label(minutes),
+        used_pct: pct.round().clamp(0.0, 100.0) as u8,
+        resets_at: parse_rfc3339(w.get("resets_at")),
+    })
+}
+
+/// `<홈>/.claude.json` 의 `cachedUsageUtilization` → 공식 한도 미터.
+/// 파일이 없거나 캐시가 아직 안 채워졌으면 None (기능 조용히 비활성).
+///
+/// 같은 파일의 `oauthAccount` 로 [`crate::accounts`] 가 계정을 식별하므로, 이 값이 어느
+/// 계정 것인지는 **홈이 곧 답이다** — payload 의 `accountUuid` 도 그 계정의
+/// `oauthAccount.accountUuid` 와 일치한다(실측).
+pub fn read_utilization(home: &Path) -> Option<PlanUsage> {
+    let text = std::fs::read_to_string(home.join(".claude.json")).ok()?;
+    let v: Value = serde_json::from_str(&text).ok()?;
+    let cached = v.get("cachedUsageUtilization")?;
+    // 언제 서버에서 받은 값인지 — 읽은 시각이 아니다
+    let fetched_at = cached
+        .get("fetchedAtMs")
+        .and_then(Value::as_i64)
+        .and_then(DateTime::from_timestamp_millis)?;
+    let util = cached.get("utilization")?;
+
+    let mut ranked: Vec<(u8, bool, PlanMeter)> = util
+        .get("limits")
+        .and_then(Value::as_array)
+        .map(|a| a.iter().filter_map(parse_limit).collect())
+        .unwrap_or_default();
+    // 정렬 기준이 같으면 payload 순서를 지킨다 (sort_by_key 는 안정 정렬)
+    ranked.sort_by_key(|(rank, scoped, _)| (*rank, *scoped));
+    let mut meters: Vec<PlanMeter> = ranked.into_iter().map(|(_, _, m)| m).collect();
+
+    if meters.is_empty() {
+        meters = [
+            parse_named_window(util, "five_hour", 300),
+            parse_named_window(util, "seven_day", 10080),
+        ]
+        .into_iter()
+        .flatten()
+        .collect();
     }
     if meters.is_empty() {
         return None;
     }
-    Some(PlanUsage {
-        source: Source::Claude,
-        meters,
-        detail: String::new(),
-        fetched_at: now,
-    })
-}
 
-/// `claude -p "/usage"` 를 실행해 공식 한도를 조회.
-/// Claude Code 미설치/실패/파싱 불가 시 None.
-pub fn fetch_plan_usage() -> Option<PlanUsage> {
-    let output = run_claude_usage()?;
-    parse_usage_output(&output, Utc::now())
-}
+    // 플랜 이름은 같은 파일의 계정 블록에 있다 — Codex 가 `plan_type` 을 싣는 자리와 같다
+    let detail = v
+        .get("oauthAccount")
+        .and_then(|oa| oa.get("organizationRateLimitTier"))
+        .and_then(Value::as_str)
+        .filter(|s| !s.is_empty())
+        .map(plan_label)
+        .unwrap_or_default();
 
-const MONTHS: [&str; 12] = [
-    "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
-];
-
-/// 리셋 원문("Jul 30, 7:09pm (Asia/Seoul)", "Aug 1, 3pm (…)")을 로컬 시각으로 파싱.
-/// 연도는 now 기준(12시간 이상 과거면 +1년, 연말 경계). 형식이 다르면 None.
-pub fn parse_reset_datetime(
-    resets: &str,
-    now: chrono::DateTime<chrono::Local>,
-) -> Option<chrono::DateTime<chrono::Local>> {
-    use chrono::{Datelike, NaiveDate, TimeZone};
-
-    let month = MONTHS.iter().position(|m| resets.starts_with(m))? as u32 + 1;
-    let rest = &resets[3..];
-    let day: u32 = rest
-        .trim_start()
-        .chars()
-        .take_while(|c| c.is_ascii_digit())
-        .collect::<String>()
-        .parse()
-        .ok()?;
-
-    // 시간부: "7:09pm" 또는 "3pm"
-    let lower = resets.to_ascii_lowercase();
-    let ampm_pos = lower.find("am").or_else(|| lower.find("pm"))?;
-    let is_pm = &lower[ampm_pos..ampm_pos + 2] == "pm";
-    // ampm 앞의 "H" 또는 "H:MM" 추출
-    let time_part: String = lower[..ampm_pos]
-        .chars()
-        .rev()
-        .take_while(|c| c.is_ascii_digit() || *c == ':')
-        .collect::<String>()
-        .chars()
-        .rev()
-        .collect();
-    let time_part = time_part.trim_matches(':');
-    let (h_str, m_str) = match time_part.split_once(':') {
-        Some((h, m)) => (h, m),
-        None => (time_part, "0"),
-    };
-    let mut hour: u32 = h_str.parse().ok()?;
-    let minute: u32 = m_str.parse().ok()?;
-    if hour == 12 {
-        hour = 0;
-    }
-    if is_pm {
-        hour += 12;
-    }
-
-    let build = |year: i32| {
-        NaiveDate::from_ymd_opt(year, month, day)
-            .and_then(|d| d.and_hms_opt(hour, minute, 0))
-            .and_then(|ndt| chrono::Local.from_local_datetime(&ndt).single())
-    };
-    let mut dt = build(now.year())?;
-    if dt < now - chrono::Duration::hours(12) {
-        dt = build(now.year() + 1)?;
-    }
-    Some(dt)
-}
-
-#[cfg(windows)]
-fn run_claude_usage() -> Option<String> {
-    use std::os::windows::process::CommandExt;
-    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-    // npm 전역 셸 심(claude.cmd) 해석을 위해 cmd /C 경유
-    let out = std::process::Command::new("cmd")
-        .args(["/C", "claude", "-p", "/usage", "--output-format", "text"])
-        .creation_flags(CREATE_NO_WINDOW)
-        .output()
-        .ok()?;
-    if !out.status.success() {
-        return None;
-    }
-    Some(String::from_utf8_lossy(&out.stdout).into_owned())
-}
-
-#[cfg(not(windows))]
-fn run_claude_usage() -> Option<String> {
-    let out = std::process::Command::new("claude")
-        .args(["-p", "/usage", "--output-format", "text"])
-        .output()
-        .ok()?;
-    if !out.status.success() {
-        return None;
-    }
-    Some(String::from_utf8_lossy(&out.stdout).into_owned())
+    Some(PlanUsage { source: Source::Claude, meters, detail, fetched_at })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    const SAMPLE: &str = r#"You are currently using your subscription to power your Claude Code usage
-
-Current session: 60% used · resets Jul 30, 7:10pm (Asia/Seoul)
-Current week (all models): 44% used · resets Aug 1, 3pm (Asia/Seoul)
-Current week (Fable): 40% used · resets Aug 1, 2:59pm (Asia/Seoul)
-
-What's contributing to your limits usage?
-Last 24h · 267 requests · 2 sessions
-  88% of your usage was at >150k context
-"#;
-
+    /// 실측 원문 두 개가 같은 화면에서 같은 모양으로 읽혀야 한다.
     #[test]
-    fn parses_observed_output() {
-        let p = parse_usage_output(SAMPLE, Utc::now()).unwrap();
+    fn plan_label_reads_like_a_plan_name() {
+        // Claude `.claude.json` (이 머신 실측)
+        assert_eq!(plan_label("default_claude_max_5x"), "Claude Max 5x");
+        assert_eq!(plan_label("claude_max"), "Claude Max");
+        // Codex rollout `plan_type` (실측 free/plus)
+        assert_eq!(plan_label("plus"), "Plus");
+        assert_eq!(plan_label("free"), "Free");
+    }
+
+    /// 값 목록이 공개 API 가 아니라, 처음 보는 플랜도 원문이 그대로 새면 안 된다.
+    #[test]
+    fn plan_label_handles_unseen_values() {
+        assert_eq!(plan_label("default_claude_max_20x"), "Claude Max 20x");
+        assert_eq!(plan_label("claude_enterprise"), "Claude Enterprise");
+        assert_eq!(plan_label("business"), "Business");
+        // 빈 값·구분자만 있는 값에도 패닉하지 않는다
+        assert_eq!(plan_label(""), "");
+        assert_eq!(plan_label("default_"), "");
+        assert_eq!(plan_label("__"), "");
+        // 앞뒤 공백은 원문에 섞여 올 수 있다
+        assert_eq!(plan_label("  plus  "), "Plus");
+    }
+
+    /// `.claude.json` 하나를 만들고 홈을 돌려준다
+    fn home_with(json: &str) -> tempfile::TempDir {
+        let d = tempfile::tempdir().unwrap();
+        std::fs::write(d.path().join(".claude.json"), json).unwrap();
+        d
+    }
+
+    /// 이 머신에서 실제로 읽은 payload (토큰 등 무관한 필드는 뺐다)
+    const REAL: &str = r#"{
+      "oauthAccount": {
+        "accountUuid": "a88ff669-0f57-41e0-ae20-2db7eb9c5b94",
+        "emailAddress": "u@example.com",
+        "organizationRateLimitTier": "default_claude_max_5x"
+      },
+      "cachedUsageUtilization": {
+        "fetchedAtMs": 1786580825099,
+        "accountUuid": "a88ff669-0f57-41e0-ae20-2db7eb9c5b94",
+        "utilization": {
+          "five_hour": {"utilization": 3, "resets_at": "2026-08-13T04:30:00.940401+00:00"},
+          "seven_day": {"utilization": 39, "resets_at": "2026-08-15T06:00:00.940424+00:00"},
+          "seven_day_opus": null,
+          "tangelo": null,
+          "nimbus_quill": {"utilization": 0, "resets_at": null},
+          "limits": [
+            {"kind": "session", "group": "session", "percent": 3,
+             "resets_at": "2026-08-13T04:30:00.940401+00:00", "scope": null, "is_active": false},
+            {"kind": "weekly_all", "group": "weekly", "percent": 39,
+             "resets_at": "2026-08-15T06:00:00.940424+00:00", "scope": null, "is_active": false},
+            {"kind": "weekly_scoped", "group": "weekly", "percent": 45,
+             "resets_at": "2026-08-15T05:59:59.940701+00:00",
+             "scope": {"model": {"id": null, "display_name": "Fable"}, "surface": null},
+             "is_active": true}
+          ]
+        }
+      }
+    }"#;
+
+    /// `/usage` 화면이 그리던 세 줄이 그대로 나와야 한다 — 이게 CLI 를 없앤 근거다.
+    #[test]
+    fn reads_the_three_meters_the_usage_screen_showed() {
+        let home = home_with(REAL);
+        let p = read_utilization(home.path()).unwrap();
+
+        assert_eq!(p.source, Source::Claude);
+        let seen: Vec<(&str, u8)> =
+            p.meters.iter().map(|m| (m.label.as_str(), m.used_pct)).collect();
+        // 짧은 창 먼저, 모델 한정은 전체 뒤에
+        assert_eq!(seen, vec![("5시간", 3), ("주간", 39), ("주간 (Fable)", 45)]);
+        assert_eq!(p.session_pct(), Some(3));
+
+        // 리셋은 기계가 읽는 형식으로 온다 — 문자열을 다시 파싱할 일이 없다
+        assert_eq!(
+            p.meters[0].resets_at.unwrap().to_rfc3339(),
+            "2026-08-13T04:30:00.940401+00:00"
+        );
+        // 플랜 이름은 Codex 의 `plan_type` 과 같은 자리(detail)에, 같은 규칙으로
+        assert_eq!(p.detail, "Claude Max 5x");
+        // 읽은 시각이 아니라 서버에서 받은 시각
+        assert_eq!(p.fetched_at.timestamp_millis(), 1_786_580_825_099);
+    }
+
+    /// 뜻을 모르는 코드네임 창(`tangelo`, `nimbus_quill`)은 화면에 올리지 않는다.
+    #[test]
+    fn unnamed_codename_windows_are_ignored() {
+        let home = home_with(REAL);
+        let p = read_utilization(home.path()).unwrap();
         assert_eq!(p.meters.len(), 3);
-        assert_eq!(p.meters[0].label, "Current session");
-        assert_eq!(p.meters[0].used_pct, 60);
-        assert_eq!(p.meters[0].resets, "Jul 30, 7:10pm (Asia/Seoul)");
-        assert_eq!(p.meters[1].label, "Current week (all models)");
-        assert_eq!(p.meters[1].used_pct, 44);
-        assert_eq!(p.meters[2].used_pct, 40);
-        assert_eq!(p.session_pct(), Some(60));
-        // 하단 통계 라인("88% of your usage...")은 "% used" 가 없어 미터로 오인하지 않음
+        assert!(!p.meters.iter().any(|m| m.label.to_lowercase().contains("quill")));
     }
 
+    /// `limits[]` 가 없는 버전이라도 이름 있는 창으로 굴러가야 한다.
     #[test]
-    fn unparseable_output_returns_none() {
-        assert!(parse_usage_output("no meters here", Utc::now()).is_none());
-        assert!(parse_usage_output("", Utc::now()).is_none());
+    fn falls_back_to_named_windows_without_limits() {
+        let home = home_with(
+            r#"{"cachedUsageUtilization": {"fetchedAtMs": 1786580825099, "utilization": {
+                 "five_hour": {"utilization": 7, "resets_at": "2026-08-13T04:30:00+00:00"},
+                 "seven_day": {"utilization": 50, "resets_at": null}}}}"#,
+        );
+        let p = read_utilization(home.path()).unwrap();
+        assert_eq!(p.meters.len(), 2);
+        assert_eq!((p.meters[0].label.as_str(), p.meters[0].used_pct), ("5시간", 7));
+        assert_eq!(p.meters[1].label, "주간");
+        assert!(p.meters[1].resets_at.is_none());
     }
 
+    /// 처음 보는 그룹은 원문이 새지 않고, 뜻을 아는 창 뒤로 밀린다.
     #[test]
-    fn parses_reset_datetime_variants() {
-        use chrono::{Datelike, Local, TimeZone, Timelike};
-        let now = Local.with_ymd_and_hms(2026, 7, 30, 14, 0, 0).unwrap();
+    fn unseen_groups_are_prettified_and_sorted_last() {
+        let home = home_with(
+            r#"{"cachedUsageUtilization": {"fetchedAtMs": 1, "utilization": {"limits": [
+                 {"group": "monthly_burst", "percent": 10},
+                 {"group": "session", "percent": 20}]}}}"#,
+        );
+        let p = read_utilization(home.path()).unwrap();
+        assert_eq!(p.meters[0].label, "5시간");
+        assert_eq!(p.meters[1].label, "Monthly Burst");
+    }
 
-        // 분 있는 형식
-        let d = parse_reset_datetime("Jul 30, 7:09pm (Asia/Seoul)", now).unwrap();
-        assert_eq!((d.month(), d.day(), d.hour(), d.minute()), (7, 30, 19, 9));
-
-        // 분 없는 형식
-        let d = parse_reset_datetime("Aug 1, 3pm (Asia/Seoul)", now).unwrap();
-        assert_eq!((d.month(), d.day(), d.hour(), d.minute()), (8, 1, 15, 0));
-
-        // 12am/12pm 경계
-        let d = parse_reset_datetime("Jul 31, 12am (Asia/Seoul)", now).unwrap();
-        assert_eq!(d.hour(), 0);
-        let d = parse_reset_datetime("Jul 31, 12pm (Asia/Seoul)", now).unwrap();
-        assert_eq!(d.hour(), 12);
-
-        // 연말 경계: 12월 30일 시점에 "Jan 2" → 내년
-        let dec = Local.with_ymd_and_hms(2026, 12, 30, 22, 0, 0).unwrap();
-        let d = parse_reset_datetime("Jan 2, 1am (Asia/Seoul)", dec).unwrap();
-        assert_eq!(d.year(), 2027);
-
-        // 형식 불일치
-        assert!(parse_reset_datetime("무슨 요일", now).is_none());
+    /// 캐시가 아직 없거나 파일 자체가 없으면 조용히 비활성.
+    #[test]
+    fn missing_cache_disables_the_meter() {
+        assert!(read_utilization(std::path::Path::new("/이런/홈은/없다")).is_none());
+        // 로그인은 했지만 아직 한 번도 안 받아온 홈
+        let home = home_with(r#"{"oauthAccount": {"accountUuid": "x"}}"#);
+        assert!(read_utilization(home.path()).is_none());
+        // 캐시는 있는데 창이 하나도 없는 경우
+        let home = home_with(r#"{"cachedUsageUtilization": {"fetchedAtMs": 1, "utilization": {}}}"#);
+        assert!(read_utilization(home.path()).is_none());
     }
 }

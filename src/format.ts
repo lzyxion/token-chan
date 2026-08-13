@@ -51,33 +51,6 @@ export function fmtRemaining(target: Date, now: Date = new Date()): string {
   return `${d}일 ${rh}시간`;
 }
 
-const MONTHS: Record<string, number> = {
-  Jan: 0, Feb: 1, Mar: 2, Apr: 3, May: 4, Jun: 5,
-  Jul: 6, Aug: 7, Sep: 8, Oct: 9, Nov: 10, Dec: 11,
-};
-
-/**
- * 공식 /usage 리셋 문자열("Jul 30, 7:09pm (Asia/Seoul)", "Aug 1, 3pm (…)")을
- * 로컬 타임존 Date로 파싱. 연도는 현재 연도로 가정, 과거로 나오면 +1년 (연말 경계).
- * 형식이 다르면 null (호출부는 로컬 추정치로 폴백).
- */
-export function parseResetTime(resets: string, now: Date = new Date()): Date | null {
-  const m = resets.match(/([A-Z][a-z]{2})\s+(\d{1,2}),?\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm)/i);
-  if (!m) return null;
-  const month = MONTHS[m[1] as keyof typeof MONTHS];
-  if (month == null) return null;
-  const day = parseInt(m[2], 10);
-  let hour = parseInt(m[3], 10) % 12;
-  if (m[5].toLowerCase() === "pm") hour += 12;
-  const minute = m[4] ? parseInt(m[4], 10) : 0;
-  let d = new Date(now.getFullYear(), month, day, hour, minute);
-  // 12시간 이상 과거면 내년으로 (연말 경계)
-  if (d.getTime() < now.getTime() - 12 * 3600 * 1000) {
-    d = new Date(now.getFullYear() + 1, month, day, hour, minute);
-  }
-  return d;
-}
-
 /** 얼마나 지났는지 — 세션 로그는 "언제였나"보다 "얼마나 전인가"가 읽기 쉽다 */
 export function fmtAgo(at: string, now: Date = new Date()): string {
   const d = new Date(at);

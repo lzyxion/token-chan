@@ -9,7 +9,6 @@ import {
   fmtCost,
   fmtMinutes,
   fmtTokens,
-  parseResetTime,
   shortModel,
   SOURCE_LABEL,
   totalOf,
@@ -207,26 +206,28 @@ export default function Pet() {
   // 상태 사용은 캐릭터의 속성 — 팩이면 pack.json, 기본 캐릭터면 전역 설정
   const effectiveDisabled = packDisabled ?? disabledStates;
 
+  // 첫 미터 = 가장 짧은 창 = 지금 당장 걸리는 한도. 두 소스 모두 파일에서 정확한
+  // 시각으로 주므로 문자열을 파싱하지 않는다.
+  const resets = plan?.meters?.[0]?.resets_at ?? null;
+
   // 세션 라벨·대사 변수용 리셋 카운트다운 (summary 갱신 주기(10s)에 맞춰 재계산)
   const resetRemainMin = useMemo(() => {
-    const resets = plan?.meters?.[0]?.resets;
     if (!resets) return null;
-    const d = parseResetTime(resets);
-    if (!d) return null;
+    const d = new Date(resets);
+    if (Number.isNaN(d.getTime())) return null;
     return Math.max(0, Math.round((d.getTime() - Date.now()) / 60000));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [plan, summary?.generated_at]);
+  }, [resets, summary?.generated_at]);
 
-  // 블록 초기화 감지: 공식 리셋 시각 문자열이 바뀌면 새 5시간 윈도우 시작 → 5분간 refreshed
+  // 블록 초기화 감지: 공식 리셋 시각이 바뀌면 새 창이 열린 것 → 5분간 refreshed
   const [refreshedUntil, setRefreshedUntil] = useState(0);
   const prevResetsRef = useRef<string | null>(null);
   useEffect(() => {
-    const resets = plan?.meters?.[0]?.resets ?? null;
     if (resets && prevResetsRef.current && resets !== prevResetsRef.current) {
       setRefreshedUntil(Date.now() + 5 * 60 * 1000);
     }
     if (resets) prevResetsRef.current = resets;
-  }, [plan]);
+  }, [resets]);
 
   // 클릭 반응이 유지되는 시각 (0 = 반응 아님)
   const [pokeUntil, setPokeUntil] = useState(0);
@@ -236,11 +237,11 @@ export default function Pet() {
     return () => clearTimeout(t);
   }, [pokeUntil]);
 
-  // 공식 미터 (링/컨디션/라벨/상태 판정 공용)
+  // 공식 미터 (링/컨디션/라벨/상태 판정 공용).
+  // 백엔드가 **짧은 창부터** 담아 주므로 [0]=지금 걸리는 한도, [1]=그 다음 긴 창이다.
+  // (라벨로 찾지 않는다 — 두 소스가 서로 다른 창 이름을 쓴다)
   const sessionPct = plan?.meters?.[0]?.used_pct ?? null;
-  const weeklyPct =
-    (plan?.meters?.find((m) => /week/i.test(m.label) && /all/i.test(m.label)) ?? plan?.meters?.[1])
-      ?.used_pct ?? null;
+  const weeklyPct = plan?.meters?.[1]?.used_pct ?? null;
   /// 컨디션(피로도) 0..1 — 활성 벤더의 공식 세션 %.
   /// 공식 한도를 안 주는 벤더(agy)를 보고 있으면 피로도가 없다. 추정치로 캐릭터를
   /// 지치게 만드느니 아무 말도 안 하는 게 낫다.
@@ -387,8 +388,7 @@ export default function Pet() {
 
   // 문구 템플릿의 `{변수}` 에 넣을 표시 시점 값 (null = 아직 모르는 값 → 그 줄 생략)
   const speechVars = (): Record<string, string | null> => {
-    const resets = plan?.meters?.[0]?.resets;
-    const resetAt = resets ? parseResetTime(resets) : null;
+    const resetAt = resets ? new Date(resets) : null;
     return {
       오늘토큰: summary ? fmtTokens(totalOf(summary.today)) : null,
       오늘비용: summary ? fmtCost(summary.today_cost, summary.cost_partial) : null,
@@ -517,19 +517,20 @@ export default function Pet() {
   );
 
   // 링 2·3은 활성 벤더의 한도 미터를 짧은 창부터 그대로 얹는다.
-  // Claude 는 세션 5h + 주간, Codex free 는 월간 하나, agy 는 없음.
+  // Claude 는 5시간 + 주간, Codex free 는 월간 하나, agy 는 없음.
+  // (Claude 의 세 번째 미터인 모델별 주간은 링이 모자라 여기선 빠진다 — 사용량 패널엔 있다)
   const meters = plan?.meters ?? [];
   const meterRow = (slot: number) => {
     const m = meters[slot];
     const key = `meter${slot}`;
-    // 한도를 안 주는 벤더(agy)·창이 하나뿐인 벤더(Codex free)는 빈 줄 대신 줄 자체를 숨긴다
+    // 한도를 안 주는 벤더(agy)·창이 하나뿐인 벤더(Codex — free/plus 모두 secondary 가
+    // null 이라 실측상 항상 한 줄)는 빈 줄 대신 줄 자체를 숨긴다
     if (!m) return null;
-    const label = m.label.replace("Current session", "세션 5h").replace("Current week", "주간");
     return ringRow(
       key,
       m.used_pct,
       <>
-        {label} <b>{m.used_pct}%</b>
+        {m.label} <b>{m.used_pct}%</b>
         {/* 리셋은 첫 미터(가장 짧은 창)의 것 — 그 창이 리셋되는 시각이라 같은 줄에 얹는다 */}
         {slot === 0 && resetRemainMin != null ? <> · 리셋 {fmtMinutes(resetRemainMin)}</> : null}
       </>,

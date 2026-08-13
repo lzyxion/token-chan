@@ -111,19 +111,50 @@ export interface LiveState {
 export interface PlanMeter {
   label: string;
   used_pct: number;
-  /** 리셋 시각 원문 (Claude). 소스가 문자열로만 줄 때 쓴다 */
-  resets: string;
-  /** 소스가 정확한 시각을 준 경우 (Codex) — 있으면 `resets` 파싱이 필요 없다 */
+  /** 리셋 시각 (ISO). 두 소스 모두 기계가 읽는 형식으로 주므로 문자열 파싱이 없다 */
   resets_at: string | null;
 }
 
-/** 소스 하나의 공식 한도. Claude 는 `claude -p /usage`, Codex 는 rollout 의 `rate_limits` */
+/**
+ * 소스 하나의 공식 한도. 둘 다 **파일**에서 온다 —
+ * Claude 는 `<홈>/.claude.json` 의 `cachedUsageUtilization`,
+ * Codex 는 rollout 의 `rate_limits`.
+ */
 export interface PlanUsage {
   source: Source;
   meters: PlanMeter[];
-  /** 플랜 종류 등 (예: "free 플랜") */
+  /** 플랜 이름 (예: "Claude Max 5x", "Plus") */
   detail: string;
+  /** 서버에서 받아온 시각 — 읽은 시각이 아니라 낡음 판단에 쓸 수 있다 */
   fetched_at: string;
+}
+
+/** 설치본 하나 = 홈 디렉토리 하나 */
+export interface Install {
+  source: Source;
+  home: string;
+  /** 표준 위치가 아니라 마커 스캔으로 찾아낸 것인지 */
+  discovered: boolean;
+}
+
+/** 같은 계정으로 묶인 설치본들 (`get_accounts`) */
+export interface Account {
+  source: Source;
+  key: string;
+  /** 사람이 읽는 이름 — 이메일이 있으면 이메일, 없으면 계정 id 앞자리 */
+  label: string;
+  /** 로그인 방식 — 세 소스 공통 (예: "Claude 계정 로그인", "ChatGPT 로그인") */
+  detail: string;
+  /** 플랜 이름 (예: "Claude Max 5x"). 계정 파일에서 알 수 있는 소스만 —
+   *  Codex 는 비어 있고 `PlanUsage.detail` 로 온다 */
+  plan: string;
+  installs: Install[];
+  /** 표준 위치에서 한 번이라도 발견된 계정인지 — 기본 포함 여부의 근거 */
+  standard: boolean;
+  /** 토글할 때 그대로 돌려보내는 키 */
+  setting_key: string;
+  /** 지금 집계에 포함되는가 (백엔드가 규칙을 풀어서 준다) */
+  enabled: boolean;
 }
 
 export type PetState =
