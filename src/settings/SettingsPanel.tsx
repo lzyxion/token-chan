@@ -16,12 +16,14 @@ import ResizeGrips from "../components/ResizeGrips";
 import VendorIcon from "../components/VendorIcon";
 import "./settings.css";
 
-/** 설정 탭 — 일반(창·한도·말풍선·시스템) / 캐릭터(팩·규칙·크기) / 계정(계정·홈·플랜).
+/** 설정 탭 — 일반(비용·게이지·시스템) / 알림(한도·리셋·작업 완료·잠자기) /
+ *  캐릭터(팩·규칙·크기·말풍선) / 계정(계정·홈·플랜).
  *  상태 사용·이미지·대사 편집은 캐릭터 스튜디오(전용 창)가 맡는다. */
 
-type Tab = "general" | "character" | "account";
+type Tab = "general" | "alerts" | "character" | "account";
 const TABS: [Tab, string][] = [
   ["general", "일반"],
+  ["alerts", "알림"],
   ["character", "캐릭터"],
   ["account", "계정"],
 ];
@@ -327,6 +329,45 @@ export default function SettingsPanel() {
               </div>
             </div>
 
+            <div className="settings-group">
+              <label className="settings-check">
+                <input
+                  type="checkbox"
+                  checked={s.speechEnabled}
+                  onChange={(e) =>
+                    update({ speechEnabled: e.currentTarget.checked })
+                  }
+                />
+                상황별 대사 말풍선
+                <span className="settings-hint-inline">
+                  (경고·리셋·작업·잠자기)
+                </span>
+              </label>
+              <div className="settings-label">
+                대사 표시 시간 <b>{(s.speechDurationMs / 1000).toFixed(1)}s</b>
+              </div>
+              <div className="settings-row">
+                <span className="settings-min">1s</span>
+                <input
+                  type="range"
+                  min={1000}
+                  max={15000}
+                  step={500}
+                  value={s.speechDurationMs}
+                  disabled={!s.speechEnabled}
+                  onChange={(e) =>
+                    update({
+                      speechDurationMs: parseInt(e.currentTarget.value, 10),
+                    })
+                  }
+                />
+                <span className="settings-max">15s</span>
+              </div>
+              <div className="settings-hint">
+                문구 내용은 캐릭터 스튜디오(캐릭터 탭)에서 편집합니다
+              </div>
+            </div>
+
           </>
         )}
 
@@ -368,7 +409,11 @@ export default function SettingsPanel() {
                 </>
               )}
             </div>
+          </>
+        )}
 
+        {tab === "alerts" && (
+          <>
             <div className="settings-group">
               <div className="settings-label">
                 위험 한도 · 세션{" "}
@@ -453,31 +498,6 @@ export default function SettingsPanel() {
 
             <div className="settings-group">
               <div className="settings-label">
-                잠자기 진입 시간 <b>{s.sleepAfterMinutes}분</b>
-              </div>
-              <div className="settings-row">
-                <span className="settings-min">5분</span>
-                <input
-                  type="range"
-                  min={5}
-                  max={120}
-                  step={5}
-                  value={s.sleepAfterMinutes}
-                  onChange={(e) =>
-                    update({
-                      sleepAfterMinutes: parseInt(e.currentTarget.value, 10),
-                    })
-                  }
-                />
-                <span className="settings-max">2h</span>
-              </div>
-              <div className="settings-hint">
-                마지막 AI 사용 후 이 시간이 지나면 캐릭터가 잠듭니다
-              </div>
-            </div>
-
-            <div className="settings-group">
-              <div className="settings-label">
                 블록 리셋 임박 대사{" "}
                 <b>
                   {s.resetNotifyMinutes === 0
@@ -538,41 +558,27 @@ export default function SettingsPanel() {
             </div>
 
             <div className="settings-group">
-              <label className="settings-check">
-                <input
-                  type="checkbox"
-                  checked={s.speechEnabled}
-                  onChange={(e) =>
-                    update({ speechEnabled: e.currentTarget.checked })
-                  }
-                />
-                상황별 대사 말풍선
-                <span className="settings-hint-inline">
-                  (경고·리셋·작업·잠자기)
-                </span>
-              </label>
               <div className="settings-label">
-                대사 표시 시간 <b>{(s.speechDurationMs / 1000).toFixed(1)}s</b>
+                잠자기 진입 시간 <b>{s.sleepAfterMinutes}분</b>
               </div>
               <div className="settings-row">
-                <span className="settings-min">1s</span>
+                <span className="settings-min">5분</span>
                 <input
                   type="range"
-                  min={1000}
-                  max={15000}
-                  step={500}
-                  value={s.speechDurationMs}
-                  disabled={!s.speechEnabled}
+                  min={5}
+                  max={120}
+                  step={5}
+                  value={s.sleepAfterMinutes}
                   onChange={(e) =>
                     update({
-                      speechDurationMs: parseInt(e.currentTarget.value, 10),
+                      sleepAfterMinutes: parseInt(e.currentTarget.value, 10),
                     })
                   }
                 />
-                <span className="settings-max">15s</span>
+                <span className="settings-max">2h</span>
               </div>
               <div className="settings-hint">
-                문구 내용은 캐릭터 스튜디오(캐릭터 탭)에서 편집합니다
+                마지막 AI 사용 후 이 시간이 지나면 캐릭터가 잠듭니다
               </div>
             </div>
           </>
