@@ -335,9 +335,17 @@ const OAUTH_BETA: (&str, &str) = ("anthropic-beta", "oauth-2025-04-20");
 const CODEX_USAGE_URL: &str = "https://chatgpt.com/backend-api/codex/usage";
 
 /// 두 벤더 호출이 공유하는 GET — 클라이언트 설정(10초 제한)을 한 곳에 둔다.
+///
+/// User-Agent 는 반드시 **제품명/버전** 형태로 보낸다. ureq 기본값(`ureq/2.12.1`)은
+/// chatgpt.com 앞의 Cloudflare 봇 차단에 간헐적으로 403 을 맞는다 — 실측(2026-08-15):
+/// 같은 시각·같은 토큰으로 `ureq/2.10.1`·UA 없음은 403, `codex_cli_rs/0.146.0` 과
+/// `token-chan/0.1.0` 은 통과했고, 버전 없는 `token-chan` 도 403 이었다. 403 이면
+/// 호출이 조용히 물러나 ② 폴백(마지막 턴의 rollout)이 이기는데, 그 값은 턴을 돌려야만
+/// 갱신되는 옛 값이라 화면의 주간 소진율이 실제와 어긋난다.
 fn http_get(url: &str, headers: &[(&str, &str)]) -> Option<String> {
     let mut req = ureq::AgentBuilder::new()
         .timeout(std::time::Duration::from_secs(10))
+        .user_agent(concat!("token-chan/", env!("CARGO_PKG_VERSION")))
         .build()
         .get(url);
     for (k, v) in headers {
@@ -890,6 +898,41 @@ mod tests {
         let tok = fake_jwt(r#"{"exp": 1000}"#);
         let home = codex_home_with(&format!(r#"{{"tokens": {{"access_token": "{tok}"}}}}"#));
         assert!(fetch_codex_usage(home.path(), Utc::now()).is_none());
+    }
+
+    /// UA 는 제품명/버전이어야 한다 — ureq 기본 UA 는 chatgpt.com 의 Cloudflare 에
+    /// 간헐적으로 403 을 맞아 폴백(옛 rollout 값)이 화면을 차지했다 (`http_get` 주석).
+    #[test]
+    fn requests_carry_a_product_user_agent() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let served = std::thread::spawn(move || {
+            use std::io::{BufRead, BufReader, Write};
+            let (mut conn, _) = listener.accept().unwrap();
+            let mut lines = vec![];
+            for line in BufReader::new(conn.try_clone().unwrap()).lines() {
+                let line = line.unwrap();
+                if line.is_empty() {
+                    break;
+                }
+                lines.push(line);
+            }
+            conn.write_all(b"HTTP/1.1 200 OK\r\ncontent-length: 2\r\n\r\nok").unwrap();
+            lines
+        });
+
+        let body = http_get(&format!("http://{addr}/"), &[]);
+        assert_eq!(body.as_deref(), Some("ok"));
+        let ua = served
+            .join()
+            .unwrap()
+            .into_iter()
+            .find(|l| l.to_ascii_lowercase().starts_with("user-agent:"))
+            .expect("UA 헤더가 있어야 한다");
+        assert!(
+            ua.contains(concat!("token-chan/", env!("CARGO_PKG_VERSION"))),
+            "제품명/버전 UA 여야 한다 (실제: {ua})"
+        );
     }
 
     /// 파일이 없거나 토큰이 비면 None — rollout 폴백으로 간다.
