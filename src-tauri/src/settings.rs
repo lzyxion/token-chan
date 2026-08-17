@@ -230,9 +230,17 @@ pub fn load() -> Settings {
     load_from(&path).unwrap_or_default()
 }
 
-pub fn save(settings: &Settings) {
-    let Some(path) = config_path() else { return };
-    let _ = save_to(&path, settings);
+/// 저장 실패를 삼키지 않고 돌려준다 — 호출부(`commands::save_settings`)가
+/// 성공↔실패 전환을 추적해 설정 창 배너로 알린다.
+pub fn save(settings: &Settings) -> Result<(), String> {
+    // 배너 확인용 강제 실패 스위치 — 실제 저장은 시도하지 않는다
+    if std::env::var_os("TOKENCHAN_FAIL_SAVE").is_some() {
+        return Err("강제 실패 (TOKENCHAN_FAIL_SAVE)".into());
+    }
+    let Some(path) = config_path() else {
+        return Err("설정 폴더를 찾을 수 없습니다".into());
+    };
+    save_to(&path, settings).map_err(|e| e.to_string())
 }
 
 /// 못 읽거나 깨졌으면 `None`. **깨진 파일은 `.bad` 로 옮겨 둔다** —

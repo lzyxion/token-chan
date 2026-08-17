@@ -4,6 +4,8 @@
   display: flex;
   align-items: stretch;
   padding: 8px;
+  /* 저장 실패 배너 오버레이의 기준 좌표계 */
+  position: relative;
 }
 
 /* 스크롤은 카드 안에서 — 창 가장자리 8px 은 리사이즈 손잡이(components/resize.css)
@@ -32,6 +34,69 @@
 .settings-card::-webkit-scrollbar-thumb {
   background: rgba(255, 255, 255, 0.15);
   border-radius: 3px;
+}
+
+/* 저장 실패 배너 — 카드 콘텐츠 **위에 떠 있는** 오버레이 (문서 흐름 밖).
+   레이아웃을 밀지도, 탭·콘트롤을 가리지도 않도록 제목줄 자리에 겹친다 —
+   "설정" 글자는 장식에 가깝고, ✕ 는 오른쪽 여백(right)으로 피한다.
+   카드가 스크롤해도 자리를 지키고, 저장이 복구되면 사라진다. */
+.settings-save-error {
+  position: absolute;
+  top: 12px;
+  left: 20px;
+  right: 44px;
+  z-index: 20;
+  /* 아래 콘텐츠가 비치면 글자가 뭉개진다 — 카드색 위에 경고 틴트를 얹은 불투명 배경 */
+  background: linear-gradient(rgba(255, 141, 117, 0.13), rgba(255, 141, 117, 0.13)), #1b1e26;
+  border: 1px solid rgba(255, 141, 117, 0.45);
+  border-radius: 8px;
+  color: #ff8d75;
+  padding: 6px 9px;
+  line-height: 1.45;
+  font-size: 11px;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.5);
+  animation: save-error-in 0.18s ease-out;
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+}
+
+/* 오류 문자열은 길이를 통제할 수 없다(OS 메시지) — 4줄에서 자른다.
+   실제 OS 오류는 이 폭에서 4줄이면 충분하고, 조치 안내(앞부분)는 항상
+   보인다. 조치 안내까지 담느라 탭 줄을 덮지만, ✕ 로 닫을 수 있어
+   내비게이션이 갇히지는 않는다. 클램프를 내부 요소에 두는 이유: 바깥에
+   두면 잘린 다음 줄이 padding 영역에 조각으로 비친다. */
+.settings-save-error-text {
+  display: -webkit-box;
+  -webkit-line-clamp: 4;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.settings-save-error-close {
+  background: none;
+  border: none;
+  color: #ff8d75;
+  opacity: 0.7;
+  font-size: 12px;
+  line-height: 1.45;
+  padding: 0 2px;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.settings-save-error-close:hover {
+  opacity: 1;
+}
+
+@keyframes save-error-in {
+  from {
+    opacity: 0;
+    transform: translateY(-6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 
 .settings-head {

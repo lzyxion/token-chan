@@ -131,6 +131,23 @@ mod tests {
     }
 
     #[test]
+    fn gpt_5_6_prices_and_alias_match_the_official_tiers() {
+        let t = PriceTable::builtin();
+        let cases = [
+            ("gpt-5.6-sol", 5.0, 30.0, 6.25, 0.5),
+            ("gpt-5.6-terra", 2.5, 15.0, 3.125, 0.25),
+            ("gpt-5.6-luna", 1.0, 6.0, 1.25, 0.1),
+            // 공식 별칭 `gpt-5.6` 은 Sol 로 라우팅된다.
+            ("gpt-5.6", 5.0, 30.0, 6.25, 0.5),
+        ];
+        for (model, input, output, cache_write, cache_read) in cases {
+            let p = t.lookup(model).unwrap();
+            assert_eq!((p.input, p.output, p.cw, p.cr), (input, output, cache_write, cache_read));
+            assert_eq!(p.ctx, Some(1_050_000));
+        }
+    }
+
+    #[test]
     fn cost_math() {
         let t = PriceTable::builtin();
         // opus-4-8: in 5, out 25, cw 6.25, cr 0.5 (USD/MTok)
