@@ -14,6 +14,18 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      # 프론트 빌드(tsc + vite)를 여기서 검증한다 — 번들 잡은 태그에서만 돌아서
+      # 이게 없으면 TypeScript 오류가 릴리스 직전에야 드러난다. Rust 와 같은 잡인
+      # 이유: ubuntu 1배라 잡을 쪼개 셋업을 중복하는 쪽이 오히려 비싸다.
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
       - uses: dtolnay/rust-toolchain@stable
       - uses: swatinem/rust-cache@v2
       # `--workspace` 는 src-tauri 크레이트까지 컴파일하므로 리눅스에서는 Tauri 시스템

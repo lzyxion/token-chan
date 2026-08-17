@@ -26,6 +26,28 @@ pub fn get_settings(state: State<'_, AppState>) -> Settings {
     state.settings.lock().unwrap().clone()
 }
 
+/// 설정을 저장하고 결과를 추적한다 — 모든 저장 지점이 이 함수를 거친다.
+/// 성공↔실패가 **전환될 때만** `settings-save-error` 를 보내(payload: 오류 문자열
+/// 또는 해제를 뜻하는 null), 드래그처럼 연속 저장되는 경로에서 알림이 쏟아지지
+/// 않게 한다. 설정 창이 이 이벤트를 상단 배너로 표시한다.
+fn save_settings(app: &AppHandle, s: &Settings) {
+    let err = settings::save(s).err();
+    let state = app.state::<AppState>();
+    let mut last = state.save_error.lock().unwrap();
+    if *last != err {
+        *last = err.clone();
+        use tauri::Emitter;
+        let _ = app.emit("settings-save-error", &err);
+    }
+}
+
+/// 설정 창이 열릴 때 현재 배너 상태를 물어본다 — 실패는 창이 닫혀 있는 동안
+/// (드래그·트레이 토글) 일어날 수 있어, 이벤트만으로는 놓친다.
+#[tauri::command]
+pub fn get_save_error(state: State<'_, AppState>) -> Option<String> {
+    state.save_error.lock().unwrap().clone()
+}
+
 /// 설정 일괄 갱신: 변경된 항목의 side effect(autostart/클릭 통과/크기)를 적용하고
 /// `settings-changed` 이벤트로 모든 창에 알림. 설정 패널의 단일 진입점.
 #[tauri::command]
@@ -81,7 +103,7 @@ pub fn set_settings(app: AppHandle, state: State<'_, AppState>, mut new_settings
         let _ = app.emit("pet-scale", new_settings.pet_scale);
     }
 
-    settings::save(&new_settings);
+    save_settings(&app, &new_settings);
     *state.settings.lock().unwrap() = new_settings.clone();
     use tauri::Emitter;
     let _ = app.emit("settings-changed", &new_settings);
@@ -97,7 +119,7 @@ pub fn set_gauge_vendor(app: AppHandle, vendor: String) {
         let state = app.state::<AppState>();
         let mut s = state.settings.lock().unwrap();
         s.gauge_vendor = vendor;
-        settings::save(&s);
+        save_settings(&app, &s);
         s.clone()
     };
     use tauri::Emitter;
@@ -114,7 +136,7 @@ pub fn set_click_through(app: &AppHandle, on: bool) {
             None
         } else {
             s.click_through = on;
-            settings::save(&s);
+            save_settings(&app, &s);
             Some(s.clone())
         }
     };
@@ -142,10 +164,10 @@ pub fn apply_click_through(app: &AppHandle, on: bool) {
 }
 
 #[tauri::command]
-pub fn save_pet_position(state: State<'_, AppState>, x: i32, y: i32) {
+pub fn save_pet_position(app: AppHandle, state: State<'_, AppState>, x: i32, y: i32) {
     let mut s = state.settings.lock().unwrap();
     s.pet_pos = Some((x, y));
-    settings::save(&s);
+    save_settings(&app, &s);
 }
 
 /// 펫 웹뷰가 캐릭터의 실측 위치를 미리 보고 (크기·팩·상태·게이지 위치 변경 시).
@@ -365,7 +387,7 @@ pub(crate) fn position_on_screen(win: &tauri::WebviewWindow, x: i32, y: i32) -> 
 /// 사용자가 옮긴 자리를 기억한다. `save_window_size` 와 같은 라벨 규칙을 쓴다 —
 /// 창마다 커맨드를 따로 두면 새 창이 생길 때마다 둘씩 늘어난다.
 #[tauri::command]
-pub fn save_window_position(state: State<'_, AppState>, label: String, x: i32, y: i32) {
+pub fn save_window_position(app: AppHandle, state: State<'_, AppState>, label: String, x: i32, y: i32) {
     let mut s = state.settings.lock().unwrap();
     match label.as_str() {
         "panel" => s.panel_pos = Some((x, y)),
@@ -373,7 +395,7 @@ pub fn save_window_position(state: State<'_, AppState>, label: String, x: i32, y
         "studio" => s.studio_pos = Some((x, y)),
         _ => return,
     }
-    settings::save(&s);
+    save_settings(&app, &s);
 }
 
 /// 리사이즈를 허용하는 창과 각각의 최소 크기 (논리 px).
@@ -499,7 +521,13 @@ pub fn clear_window_resize(app: &AppHandle, label: &str) {
 }
 
 #[tauri::command]
-pub fn save_window_size(state: State<'_, AppState>, label: String, width: u32, height: u32) {
+pub fn save_window_size(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    label: String,
+    width: u32,
+    height: u32,
+) {
     // 최소화 등으로 0이 오면 저장하지 않는다 — 다음 실행 때 창이 사라져 보인다
     if width == 0 || height == 0 {
         return;
@@ -511,7 +539,7 @@ pub fn save_window_size(state: State<'_, AppState>, label: String, width: u32, h
         "studio" => s.studio_size = Some((width, height)),
         _ => return,
     }
-    settings::save(&s);
+    save_settings(&app, &s);
 }
 
 #[tauri::command]
@@ -544,7 +572,7 @@ pub fn apply_pet_scale(app: &AppHandle, scale: f64) {
         let state = app.state::<AppState>();
         let mut s = state.settings.lock().unwrap();
         s.pet_scale = scale;
-        settings::save(&s);
+        save_settings(&app, &s);
     }
     resize_pet(app, scale);
     use tauri::Emitter;
@@ -639,6 +667,9 @@ pub fn fit_pet_window(app: AppHandle, width: f64, height: f64) {
 /// svg 는 `<img>` 로 그려지므로 바깥 CSS 가 내부에 닿지 않는다 —
 /// 애니메이션이 필요하면 SVG 파일 안에 직접 넣어야 한다.
 const CHAR_EXTS: [&str; 5] = ["gif", "webp", "apng", "png", "svg"];
+/// 상태 이미지 크기 상한. 렌더링(`image_data_url`)과 교체(`copy_state_image`)가
+/// 같은 값을 봐야 한다 — 복사만 성공하고 화면에는 안 나오는 반쪽 상태를 막는다.
+const CHAR_MAX_BYTES: u64 = 20 * 1024 * 1024;
 const CHAR_STATES: [&str; 8] =
     ["idle", "working", "alert", "sleep", "exhausted", "refreshed", "done", "poke"];
 
@@ -749,7 +780,7 @@ pub fn rename_character_pack(app: AppHandle, old: String, new: String) -> Result
                 r.pack = new.clone();
             }
         }
-        settings::save(&s);
+        save_settings(&app, &s);
         s.clone()
     };
     use tauri::Emitter;
@@ -788,8 +819,12 @@ pub fn list_character_dirs() -> Vec<String> {
     dirs
 }
 
-/// 원본 이미지를 팩 폴더에 `<상태>.<확장자>` 로 복사. 같은 상태의 다른 확장자
-/// 파일은 지운다 — 탐색 우선순위(CHAR_EXTS)가 옛 파일을 계속 집는 걸 막는다.
+/// 원본 이미지를 팩 폴더에 `<상태>.<확장자>` 로 **원자적으로** 복사 — 임시 파일에
+/// 다 받은 뒤 `rename` 으로 갈아끼운다(settings.rs `save_to` 와 같은 패턴). 대상에
+/// 직접 복사하면 도중에 앱이 죽었을 때 잘린 이미지가 남는다.
+///
+/// 같은 상태의 다른 확장자 파일은 **교체가 성공한 뒤에** 지운다 — 탐색 우선순위
+/// (CHAR_EXTS)가 옛 파일을 계속 집는 걸 막되, 복사가 실패하면 기존 이미지를 지킨다.
 fn copy_state_image(dir: &std::path::Path, state: &str, src: &std::path::Path) -> bool {
     let Some(ext) = src
         .extension()
@@ -799,10 +834,31 @@ fn copy_state_image(dir: &std::path::Path, state: &str, src: &std::path::Path) -
     else {
         return false;
     };
+    // 크기 선검사 — 렌더링이 거부할 파일이면 손대기 전에 거른다. 여기서 안 거르면
+    // 교체는 성공했는데 화면에는 안 나오고, 멀쩡하던 기존 이미지만 잃는다.
+    match std::fs::metadata(src) {
+        Ok(m) if m.len() <= CHAR_MAX_BYTES => {}
+        _ => return false,
+    }
+    // 고정 이름이라 중간에 죽어 남더라도 다음 교체가 덮어쓴다. 확장자가 tmp 라
+    // CHAR_EXTS 탐색에는 절대 걸리지 않는다.
+    let tmp = dir.join(format!("{state}.{ext}.tmp"));
+    // sync_all(FlushFileBuffers)은 Windows 에서 쓰기 핸들을 요구한다 — write 로 연다.
+    let copied = std::fs::copy(src, &tmp).is_ok()
+        && std::fs::OpenOptions::new()
+            .write(true)
+            .open(&tmp)
+            .and_then(|f| f.sync_all())
+            .is_ok()
+        && std::fs::rename(&tmp, dir.join(format!("{state}.{ext}"))).is_ok();
+    if !copied {
+        let _ = std::fs::remove_file(&tmp);
+        return false;
+    }
     for other in CHAR_EXTS.iter().filter(|e| **e != ext) {
         let _ = std::fs::remove_file(dir.join(format!("{state}.{other}")));
     }
-    std::fs::copy(src, dir.join(format!("{state}.{ext}"))).is_ok()
+    true
 }
 
 /// 상태 이미지 첨부 — 파일 선택 다이얼로그를 별도 스레드에서 띄운다
@@ -844,7 +900,10 @@ pub fn import_state_image_from_path(
         return Err("잘못된 팩 이름입니다".into());
     };
     if !copy_state_image(&dir, &state, std::path::Path::new(&path)) {
-        return Err("이미지 파일이 아니거나 복사에 실패했습니다 (gif·webp·apng·png·svg)".into());
+        return Err(
+            "이미지 파일이 아니거나 20MB 를 넘거나 복사에 실패했습니다 (gif·webp·apng·png·svg)"
+                .into(),
+        );
     }
     use tauri::Emitter;
     let _ = app.emit("character-images-changed", &pack);
@@ -970,7 +1029,7 @@ pub fn set_account_enabled(app: AppHandle, setting_key: String, enabled: bool) {
         let state = app.state::<AppState>();
         let mut s = state.settings.lock().unwrap();
         s.accounts_enabled.insert(setting_key, enabled);
-        settings::save(&s);
+        save_settings(&app, &s);
         s.clone()
     };
     crate::tray::refresh_menu(&app);
@@ -1018,7 +1077,7 @@ pub fn add_home(app: AppHandle, source: String) {
                 return; // 이미 있는 경로 — 중복 등록 방지
             }
             list.push(path);
-            settings::save(&s);
+            save_settings(&app, &s);
             s.clone()
         };
         after_home_change(&app, &updated);
@@ -1037,7 +1096,7 @@ pub fn remove_home(app: AppHandle, source: String, path: String) {
         if list.len() == before {
             return; // 화면이 낡아 이미 지워진 경로 — 저장/재탐색 불필요
         }
-        settings::save(&s);
+        save_settings(&app, &s);
         s.clone()
     };
     after_home_change(&app, &updated);
@@ -1072,7 +1131,7 @@ pub fn list_character_packs() -> Vec<String> {
     packs
 }
 
-/// 이미지 파일 → data URL (20MB 상한 — 데스크톱 펫 이미지로는 과대한 크기 방지)
+/// 이미지 파일 → data URL (CHAR_MAX_BYTES 상한 — 데스크톱 펫 이미지로는 과대한 크기 방지)
 fn image_data_url(p: &std::path::Path) -> Option<String> {
     use base64::Engine;
     let mime = match p.extension()?.to_str()? {
@@ -1082,10 +1141,11 @@ fn image_data_url(p: &std::path::Path) -> Option<String> {
         "svg" => "image/svg+xml",
         _ => "image/png",
     };
-    let bytes = std::fs::read(p).ok()?;
-    if bytes.len() > 20 * 1024 * 1024 {
+    // 읽기 전에 거른다 — 거부할 파일을 메모리에 통째로 올릴 이유가 없다
+    if std::fs::metadata(p).ok()?.len() > CHAR_MAX_BYTES {
         return None;
     }
+    let bytes = std::fs::read(p).ok()?;
     Some(format!("data:{mime};base64,{}", base64::engine::general_purpose::STANDARD.encode(bytes)))
 }
 
@@ -1097,7 +1157,7 @@ pub fn get_character_images(
     pack: Option<String>,
 ) -> Option<std::collections::HashMap<String, String>> {
     let pack = pack.or_else(|| state.settings.lock().unwrap().character_pack.clone())?;
-    let dir = settings::characters_dir()?.join(&pack);
+    let dir = settings::pack_dir(&pack)?;
     let idle = find_state_file(&dir, "idle")?; // idle 필수
 
     let idle_url = image_data_url(&idle)?;
@@ -1143,4 +1203,94 @@ pub fn open_characters_dir() {
     let _ = std::process::Command::new("open").arg(&root).spawn();
     #[cfg(all(unix, not(target_os = "macos")))]
     let _ = std::process::Command::new("xdg-open").arg(&root).spawn();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn files_in(dir: &std::path::Path) -> Vec<String> {
+        let mut v: Vec<String> = std::fs::read_dir(dir)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .collect();
+        v.sort();
+        v
+    }
+
+    /// 확장자가 바뀌는 교체 — 새 파일이 자리잡고, 옛 확장자와 임시 파일은 안 남는다
+    #[test]
+    fn replacing_across_extensions_leaves_only_the_new_file() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("idle.png"), b"old").unwrap();
+        let src = dir.path().join("src.gif");
+        std::fs::write(&src, b"new").unwrap();
+
+        assert!(copy_state_image(dir.path(), "idle", &src));
+        assert_eq!(files_in(dir.path()), ["idle.gif", "src.gif"]);
+        assert_eq!(std::fs::read(dir.path().join("idle.gif")).unwrap(), b"new");
+    }
+
+    /// 원자성의 핵심 — 원본을 못 읽으면 기존 이미지가 그대로 살아 있어야 한다
+    #[test]
+    fn failed_copy_keeps_the_existing_image() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("idle.png"), b"old").unwrap();
+
+        assert!(!copy_state_image(dir.path(), "idle", &dir.path().join("missing.gif")));
+        assert_eq!(files_in(dir.path()), ["idle.png"]);
+        assert_eq!(std::fs::read(dir.path().join("idle.png")).unwrap(), b"old");
+    }
+
+    /// 중간에 죽어 남은 임시 파일이 있어도 다음 교체가 덮어쓴다
+    #[test]
+    fn stale_temp_file_does_not_block_replacement() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("idle.png.tmp"), b"stale").unwrap();
+        let src = dir.path().join("src.png");
+        std::fs::write(&src, b"new").unwrap();
+
+        assert!(copy_state_image(dir.path(), "idle", &src));
+        assert_eq!(files_in(dir.path()), ["idle.png", "src.png"]);
+        assert_eq!(std::fs::read(dir.path().join("idle.png")).unwrap(), b"new");
+    }
+
+    /// 같은 확장자 교체 — Windows 에서 rename 이 기존 파일을 대체하는 경로
+    #[test]
+    fn replacing_same_extension_overwrites_in_place() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("idle.png"), b"old").unwrap();
+        let src = dir.path().join("src.png");
+        std::fs::write(&src, b"new").unwrap();
+
+        assert!(copy_state_image(dir.path(), "idle", &src));
+        assert_eq!(files_in(dir.path()), ["idle.png", "src.png"]);
+        assert_eq!(std::fs::read(dir.path().join("idle.png")).unwrap(), b"new");
+    }
+
+    /// 렌더링이 거부할 크기는 교체 전에 거른다 — 기존 이미지가 그대로 살아 있어야 한다
+    #[test]
+    fn oversized_source_is_rejected_before_touching_anything() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("idle.png"), b"old").unwrap();
+        let src = dir.path().join("src.gif");
+        let big = std::fs::File::create(&src).unwrap();
+        big.set_len(CHAR_MAX_BYTES + 1).unwrap();
+
+        assert!(!copy_state_image(dir.path(), "idle", &src));
+        assert_eq!(files_in(dir.path()), ["idle.png", "src.gif"]);
+        assert_eq!(std::fs::read(dir.path().join("idle.png")).unwrap(), b"old");
+    }
+
+    /// 허용 목록 밖 확장자는 손대기 전에 거른다
+    #[test]
+    fn unknown_extension_is_rejected() {
+        let dir = tempfile::tempdir().unwrap();
+        let src = dir.path().join("src.bmp");
+        std::fs::write(&src, b"x").unwrap();
+
+        assert!(!copy_state_image(dir.path(), "idle", &src));
+        assert_eq!(files_in(dir.path()), ["src.bmp"]);
+    }
 }

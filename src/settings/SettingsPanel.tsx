@@ -47,6 +47,13 @@ export default function SettingsPanel() {
   const plans = usePlans();
   // 다시 검색은 별도 스레드에서 돌고 끝나면 accounts-changed 로 알려 온다
   const [rescanning, setRescanning] = useState(false);
+  // 설정 저장 실패 배너 (null = 정상). 실패는 이 창이 닫혀 있는 동안에도
+  // 일어나므로(드래그·트레이 토글) 마운트 시 현재 상태를 묻고, 이후엔
+  // 백엔드가 성공↔실패 전환 시에만 보내는 이벤트를 받는다.
+  const [saveError, setSaveError] = useState<string | null>(null);
+  // ✕ 로 닫으면 같은 실패가 지속되는 동안은 다시 안 띄운다. 복구됐다가
+  // **새로 실패하면**(전환 이벤트) 다시 보여야 하므로 그때 리셋한다.
+  const [saveErrorDismissed, setSaveErrorDismissed] = useState(false);
 
   const refreshPacks = () => {
     invoke<string[]>("list_character_packs")
@@ -99,11 +106,23 @@ export default function SettingsPanel() {
     const unTab = listen<string>("settings-tab", (e) => {
       if (alive && TABS.some(([k]) => k === e.payload)) setTab(e.payload as Tab);
     });
+    invoke<string | null>("get_save_error")
+      .then((v) => {
+        if (alive) setSaveError(v);
+      })
+      .catch(() => {});
+    const unSave = listen<string | null>("settings-save-error", (e) => {
+      if (alive) {
+        setSaveError(e.payload);
+        setSaveErrorDismissed(false);
+      }
+    });
     return () => {
       alive = false;
       un.then((f) => f());
       unAcct.then((f) => f());
       unTab.then((f) => f());
+      unSave.then((f) => f());
     };
   }, []);
 
@@ -184,6 +203,26 @@ export default function SettingsPanel() {
   return (
     <div className="settings-root">
       <ResizeGrips />
+      {/* 저장 실패 배너 — 카드 **위에 띄우는** 오버레이. 문서 흐름에 넣으면
+          기존 설정 내용이 통째로 밀려 내려가고, 탭 아래에 띄우면 내비게이션을
+          가린다. 제목줄("설정" 글자)만 덮고 ✕·탭·콘텐츠는 그대로 보이도록
+          스크롤 컨테이너(.settings-card) 밖에 둔다. */}
+      {saveError && !saveErrorDismissed && (
+        <div className="settings-save-error" role="alert">
+          <span className="settings-save-error-text">
+            ⚠️ 설정 저장 실패: {saveError} — 변경 사항이 파일에 반영되지 않고
+            있습니다. 디스크 공간·권한을 확인한 뒤 아무 설정이나 바꾸면 다시
+            저장을 시도합니다.
+          </span>
+          <button
+            className="settings-save-error-close"
+            title="닫기 (같은 오류가 지속되는 동안 다시 띄우지 않음)"
+            onClick={() => setSaveErrorDismissed(true)}
+          >
+            ✕
+          </button>
+        </div>
+      )}
       <div className="settings-card">
         <div className="settings-head" data-tauri-drag-region>
           <span data-tauri-drag-region>설정</span>

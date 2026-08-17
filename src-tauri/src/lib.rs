@@ -62,6 +62,9 @@ pub struct AppState {
     /// 트레이 메뉴의 "클릭 통과" 체크 항목 — 설정이 어디서 바뀌든 체크 표시를
     /// 맞추려면 핸들이 필요하다. 트레이 생성(setup) 전까지는 None.
     pub tray_click_through: Mutex<Option<tauri::menu::CheckMenuItem<tauri::Wry>>>,
+    /// 마지막 설정 저장의 오류 (None = 성공). 전환 시에만 이벤트를 보내기 위한
+    /// 비교용이자, 설정 창이 열릴 때 현재 배너 상태를 물어보는 원본.
+    pub save_error: Mutex<Option<String>>,
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -103,6 +106,7 @@ pub fn run() {
             speech_gen: Mutex::new(0),
             speech_tail: Mutex::new("bottom"),
             drag_grab: Mutex::new(None),
+            save_error: Mutex::new(None),
             window_resize: Mutex::new(None),
             tray_click_through: Mutex::new(None),
         })
@@ -192,6 +196,7 @@ pub fn run() {
             commands::get_plan,
             commands::get_settings,
             commands::set_settings,
+            commands::get_save_error,
             commands::open_settings,
             commands::get_accounts,
             commands::set_account_enabled,
