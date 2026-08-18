@@ -7,10 +7,9 @@ import type {
   AppSettings,
   CharacterRule,
   GaugeSide,
-  Source,
   Summary,
 } from "../types";
-import { fmtDuration } from "../format";
+import { fmtDuration, SOURCE_LABEL, SOURCES } from "../format";
 import { usePlans } from "../hooks/useUsage";
 import { useWindowPersist } from "../hooks/useWindowPersist";
 import ResizeGrips from "../components/ResizeGrips";
@@ -27,13 +26,6 @@ const TABS: [Tab, string][] = [
   ["alerts", "알림"],
   ["character", "캐릭터"],
   ["account", "계정"],
-];
-
-/** 홈 추가/제거 커맨드가 받는 소스 키 — `Source` 와 같은 문자열을 쓴다 */
-const HOME_SOURCES: [Source, string][] = [
-  ["claude", "Claude"],
-  ["codex", "Codex"],
-  ["antigravity", "Antigravity"],
 ];
 
 export default function SettingsPanel() {
@@ -646,9 +638,11 @@ export default function SettingsPanel() {
                     }
                   >
                     <option value="auto">자동 (작업 중인 벤더)</option>
-                    <option value="claude">Claude 고정</option>
-                    <option value="codex">Codex 고정</option>
-                    <option value="antigravity">Antigravity 고정</option>
+                    {SOURCES.map((src) => (
+                      <option key={src} value={src}>
+                        {SOURCE_LABEL[src]} 고정
+                      </option>
+                    ))}
                   </select>
                 </div>
               )}
@@ -814,7 +808,7 @@ export default function SettingsPanel() {
                 폴더, Codex·Antigravity 는 홈 폴더 자체입니다.
               </div>
 
-              {HOME_SOURCES.map(([src, disp]) => {
+              {SOURCES.map((src) => {
                 const list =
                   src === "codex"
                     ? s.extraCodexHomes
@@ -825,7 +819,7 @@ export default function SettingsPanel() {
                   <div className="home-block" key={src}>
                     <div className="home-head">
                       <VendorIcon source={src} size={12} />
-                      <span>{disp}</span>
+                      <span>{SOURCE_LABEL[src]}</span>
                       <button
                         className="settings-btn"
                         onClick={() => void invoke("add_home", { source: src })}
