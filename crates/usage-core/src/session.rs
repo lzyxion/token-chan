@@ -127,7 +127,7 @@ fn percent_decode(s: &str) -> String {
 
 /// 여러 소스의 세션을 최근순으로 합친다. 같은 id 는 한 번만 (복사본 대비).
 pub fn merge(mut rows: Vec<SessionRow>, limit: usize) -> Vec<SessionRow> {
-    rows.sort_by(|a, b| b.at.cmp(&a.at));
+    rows.sort_by_key(|r| std::cmp::Reverse(r.at));
     let mut seen = std::collections::HashSet::new();
     rows.retain(|r| seen.insert((r.source, r.id.clone())));
     rows.truncate(limit);

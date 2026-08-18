@@ -292,7 +292,7 @@ fn log_auth(home: &Path) -> Option<(String, String)> {
             push(e.path());
         }
     }
-    logs.sort_by(|a, b| b.0.cmp(&a.0));
+    logs.sort_by_key(|(mtime, _)| std::cmp::Reverse(*mtime));
 
     for (_, path) in logs {
         let Ok(text) = std::fs::read_to_string(&path) else { continue };

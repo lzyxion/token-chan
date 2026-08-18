@@ -86,7 +86,7 @@ pub struct EnabledRoots {
 }
 
 /// 소스의 스캔 루트. 스레드들이 소스 불문 루프를 돌 때 이 매핑 하나만 소스를 안다.
-fn roots_for<'a>(r: &'a EnabledRoots, s: Source) -> &'a Vec<PathBuf> {
+fn roots_for(r: &EnabledRoots, s: Source) -> &Vec<PathBuf> {
     match s {
         Source::Claude => &r.claude,
         Source::Codex => &r.codex,
@@ -358,7 +358,7 @@ fn spawn_usage_thread(app: AppHandle) {
             let offset = *Local::now().offset();
             // 잔디 격자 기간은 보존기간에서 유도한다 (아는 범위를 넘겨 그리면 빈칸이 거짓말이 된다)
             let days = usage_core::aggregate::daily_window(retention_days);
-            let mut summary = build_summary(&events, &statuses, &pricing, days, now, offset.into());
+            let mut summary = build_summary(&events, &statuses, &pricing, days, now, offset);
             // 컨텍스트는 트랜스크립트 파일 단위 정보라 이벤트 집계로 안 나온다 —
             // 어댑터가 스캔하며 모아 둔 것 중 가장 최근에 움직인 세션을 얹는다.
             // (세 CLI 를 번갈아 쓰면 방금 만진 쪽이 게이지에 뜬다)

@@ -12,6 +12,7 @@ import type {
 } from "../types";
 import { fmtDuration } from "../format";
 import { usePlans } from "../hooks/useUsage";
+import { useWindowPersist } from "../hooks/useWindowPersist";
 import ResizeGrips from "../components/ResizeGrips";
 import VendorIcon from "../components/VendorIcon";
 import "./settings.css";
@@ -126,36 +127,9 @@ export default function SettingsPanel() {
     };
   }, []);
 
-  // 사용자가 옮긴 위치·조절한 크기 기억 (연속 이벤트 debounce — 패널과 동일).
   // 이 창은 최상단이 아니라 뒤로 갔다가 다시 불려 오는 일이 잦다 — 그때마다 자리가
   // 튀지 않으려면 위치도 기억해야 한다.
-  useEffect(() => {
-    const win = getCurrentWindow();
-    let moveTimer: ReturnType<typeof setTimeout> | undefined;
-    let sizeTimer: ReturnType<typeof setTimeout> | undefined;
-    const unMoved = win.onMoved(({ payload }) => {
-      clearTimeout(moveTimer);
-      moveTimer = setTimeout(() => {
-        void invoke("save_window_position", { label: "settings", x: payload.x, y: payload.y });
-      }, 500);
-    });
-    const unResized = win.onResized(({ payload }) => {
-      clearTimeout(sizeTimer);
-      sizeTimer = setTimeout(() => {
-        void invoke("save_window_size", {
-          label: "settings",
-          width: payload.width,
-          height: payload.height,
-        });
-      }, 500);
-    });
-    return () => {
-      clearTimeout(moveTimer);
-      clearTimeout(sizeTimer);
-      unMoved.then((f) => f());
-      unResized.then((f) => f());
-    };
-  }, []);
+  useWindowPersist("settings");
 
   if (!s) {
     return (

@@ -21,7 +21,7 @@ fn main() {
         [claude.sessions(), codex.sessions(), agy.sessions()].concat(),
         15,
     );
-    println!("{:<12} {:<28} {:<18} {:>10}  {}", "소스", "이름", "모델", "토큰", "시각");
+    println!("{:<12} {:<28} {:<18} {:>10}  시각", "소스", "이름", "모델", "토큰");
     for r in &rows {
         let name: String = r.label.chars().take(26).collect();
         println!(
