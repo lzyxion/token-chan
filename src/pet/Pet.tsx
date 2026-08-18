@@ -12,7 +12,10 @@ import {
   fmtTokens,
   resetIsStale,
   shortModel,
+  meterColor,
+  meterLevel,
   SOURCE_LABEL,
+  SOURCES,
   SOURCE_SHORT,
   totalOf,
 } from "../format";
@@ -50,13 +53,6 @@ const DONE_MS = 8000;
 const DRAG_THRESHOLD_PX = 4;
 /** 이 간격 안에 다시 클릭되면 더블클릭으로 보고 두 번째 대사를 생략 */
 const DOUBLE_CLICK_MS = 400;
-
-/** 게이지 색상 단계 (말풍선 meterClass와 동일 기준) */
-function ringColor(pct: number): string {
-  if (pct >= 85) return "#ff5d47";
-  if (pct >= 60) return "#ffb45e";
-  return "#35d07f";
-}
 
 /** 활성 모델 → 캐릭터 팩 결정 (최장 접두사 매칭, 미매칭 시 기본 팩) */
 function resolvePack(
@@ -637,8 +633,8 @@ export default function Pet() {
         <div className={`gauge-bar ${pct == null ? "empty" : ""}`}>
           {pct != null && (
             <div
-              className={`gauge-bar-fill${pct >= 85 ? " crit" : ""}`}
-              style={{ width: `${100 - pct}%`, backgroundColor: ringColor(pct) }}
+              className={`gauge-bar-fill${meterLevel(pct) === "danger" ? " crit" : ""}`}
+              style={{ width: `${100 - pct}%`, backgroundColor: meterColor(pct) }}
             />
           )}
         </div>
@@ -649,7 +645,7 @@ export default function Pet() {
             pct == null
               ? undefined
               : {
-                  background: `conic-gradient(${ringColor(pct)} ${pct}%, rgba(255,255,255,0.14) 0)`,
+                  background: `conic-gradient(${meterColor(pct)} ${pct}%, rgba(255,255,255,0.14) 0)`,
                 }
           }
         />
@@ -684,7 +680,7 @@ export default function Pet() {
 
   // 로고 클릭 = 벤더 순환 (자동 → Claude → Codex → Antigravity → 자동).
   // 설정 창을 열지 않고 게이지가 보는 벤더를 바꾼다.
-  const VENDOR_CYCLE: ("auto" | Source)[] = ["auto", "claude", "codex", "antigravity"];
+  const VENDOR_CYCLE: ("auto" | Source)[] = ["auto", ...SOURCES];
   const cycleVendor = () => {
     const i = VENDOR_CYCLE.indexOf(gaugeVendor);
     const next = VENDOR_CYCLE[(i + 1) % VENDOR_CYCLE.length];

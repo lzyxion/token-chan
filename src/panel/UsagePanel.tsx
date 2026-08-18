@@ -10,6 +10,7 @@ import {
   fmtCost,
   fmtRemaining,
   fmtTokens,
+  meterLevel,
   resetIsStale,
   shortModel,
   SOURCE_LABEL,
@@ -18,12 +19,6 @@ import {
 } from "../format";
 import type { ContextState, PlanMeter, PlanUsage, SourceStatus, SourceSummary } from "../types";
 import "./panel.css";
-
-function meterClass(pct: number): string {
-  if (pct >= 85) return "danger";
-  if (pct >= 60) return "warn";
-  return "ok";
-}
 
 function statusChip(status: SourceStatus) {
   switch (status.kind) {
@@ -57,9 +52,9 @@ function MeterRow({
     <div className="vendor-row" title={title}>
       <span className="vendor-key">{label}</span>
       <div className="bar plan-bar">
-        <div className={`bar-fill meter ${meterClass(pct)}`} style={{ width: `${pct}%` }} />
+        <div className={`bar-fill meter ${meterLevel(pct)}`} style={{ width: `${pct}%` }} />
       </div>
-      <span className={`plan-pct ${meterClass(pct)}`}>{pct}%</span>
+      <span className={`plan-pct ${meterLevel(pct)}`}>{pct}%</span>
       {/* 계산값이면 `~` 를 붙인다 — 숫자는 믿을 만하지만(실측에서 공식과 일치) 출처가
           공식이 아니라는 건 밝혀야 한다. 리셋을 못 구하면 "낡음" 으로 이유를 적는다:
           그냥 비우면 왜 사라졌는지 알 수 없고, "0분" 은 지금 막 리셋된다는 거짓말이다. */}
