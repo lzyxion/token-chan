@@ -671,7 +671,7 @@ mod tests {
     fn parses_per_request_tokens() {
         let (_d, home) = home_with(&sample());
         let mut a = AntigravityAdapter::new(vec![home]);
-        let out = a.scan(DateTime::UNIX_EPOCH.into());
+        let out = a.scan(DateTime::UNIX_EPOCH);
 
         assert_eq!(out.status, SourceStatus::Ok);
         assert_eq!(out.events.len(), 3);
@@ -693,7 +693,7 @@ mod tests {
     fn context_uses_reported_window_and_skips_the_bogus_first_row() {
         let (_d, home) = home_with(&sample());
         let mut a = AntigravityAdapter::new(vec![home]);
-        a.scan(DateTime::UNIX_EPOCH.into());
+        a.scan(DateTime::UNIX_EPOCH);
         let c = a.context(&PriceTable::builtin()).unwrap();
 
         assert_eq!(c.source, Source::Antigravity);
@@ -723,7 +723,7 @@ mod tests {
         let (_d, home) = home_with_models(&rows, &["gemini-3.6-flash", "gemini-3.6-flash", "gemini-3.6-flash", ""]);
 
         let mut a = AntigravityAdapter::new(vec![home]);
-        let out = a.scan(DateTime::UNIX_EPOCH.into());
+        let out = a.scan(DateTime::UNIX_EPOCH);
         assert_eq!(out.events.len(), 3, "사용량 0인 꼬리 행은 이벤트가 아니다");
 
         let c = a.context(&PriceTable::builtin()).unwrap();
@@ -737,7 +737,7 @@ mod tests {
     fn single_row_conversation_has_no_context() {
         let (_d, home) = home_with(&sample()[..1]);
         let mut a = AntigravityAdapter::new(vec![home]);
-        let out = a.scan(DateTime::UNIX_EPOCH.into());
+        let out = a.scan(DateTime::UNIX_EPOCH);
         assert_eq!(out.events.len(), 1, "사용량 집계는 그대로 되어야 함");
         assert!(a.context(&PriceTable::builtin()).is_none());
     }
@@ -748,7 +748,7 @@ mod tests {
         let (_a, home_a) = home_with(&sample());
         let (_b, home_b) = home_with(&sample());
         let mut a = AntigravityAdapter::new(vec![home_a, home_b.clone()]);
-        assert_eq!(a.scan(DateTime::UNIX_EPOCH.into()).events.len(), 3);
+        assert_eq!(a.scan(DateTime::UNIX_EPOCH).events.len(), 3);
 
         // 서로 다른 요청은 그대로 남아야 한다 (dedup 이 과하게 먹으면 안 됨)
         let mut extra = sample();
@@ -758,13 +758,13 @@ mod tests {
             &extra[3..],
         );
         let mut a = AntigravityAdapter::new(vec![home_b]);
-        assert_eq!(a.scan(DateTime::UNIX_EPOCH.into()).events.len(), 4);
+        assert_eq!(a.scan(DateTime::UNIX_EPOCH).events.len(), 4);
     }
 
     #[test]
     fn no_home_reports_no_data() {
         let mut a = AntigravityAdapter::new(vec![]);
-        assert_eq!(a.scan(DateTime::UNIX_EPOCH.into()).status, SourceStatus::NoData);
+        assert_eq!(a.scan(DateTime::UNIX_EPOCH).status, SourceStatus::NoData);
     }
 
     #[test]
@@ -773,7 +773,7 @@ mod tests {
         let home = dir.path().join("antigravity-cli");
         std::fs::create_dir_all(&home).unwrap();
         let mut a = AntigravityAdapter::new(vec![home]);
-        assert_eq!(a.scan(DateTime::UNIX_EPOCH.into()).status, SourceStatus::NoData);
+        assert_eq!(a.scan(DateTime::UNIX_EPOCH).status, SourceStatus::NoData);
     }
 
     /// 손상된 blob 이 섞여도 나머지 행은 살아야 한다
@@ -790,7 +790,7 @@ mod tests {
         drop(conn);
 
         let mut a = AntigravityAdapter::new(vec![home]);
-        assert_eq!(a.scan(DateTime::UNIX_EPOCH.into()).events.len(), 3);
+        assert_eq!(a.scan(DateTime::UNIX_EPOCH).events.len(), 3);
     }
 }
 

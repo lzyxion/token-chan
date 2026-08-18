@@ -6,6 +6,7 @@ import { getCurrentWebview } from "@tauri-apps/api/webview";
 import type { AppSettings, PackConfig } from "../types";
 import ResizeGrips from "../components/ResizeGrips";
 import { SpeechField } from "../components/SpeechEditor";
+import { useWindowPersist } from "../hooks/useWindowPersist";
 import { DEFAULT_PACK_IMAGES } from "../pet/defaultPack";
 import "../settings/settings.css";
 import "./studio.css";
@@ -135,34 +136,7 @@ export default function CharacterStudio() {
     };
   }, [selected]);
 
-  // 창 위치·크기 기억 (설정 창과 동일 패턴)
-  useEffect(() => {
-    const win = getCurrentWindow();
-    let moveTimer: ReturnType<typeof setTimeout> | undefined;
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const unMoved = win.onMoved(({ payload }) => {
-      clearTimeout(moveTimer);
-      moveTimer = setTimeout(() => {
-        void invoke("save_window_position", { label: "studio", x: payload.x, y: payload.y });
-      }, 500);
-    });
-    const unResized = win.onResized(({ payload }) => {
-      clearTimeout(timer);
-      timer = setTimeout(() => {
-        void invoke("save_window_size", {
-          label: "studio",
-          width: payload.width,
-          height: payload.height,
-        });
-      }, 500);
-    });
-    return () => {
-      clearTimeout(moveTimer);
-      clearTimeout(timer);
-      unMoved.then((f) => f());
-      unResized.then((f) => f());
-    };
-  }, []);
+  useWindowPersist("studio");
 
   // 선택된 팩의 이미지·설정·대사 로드 + 이미지 첨부/삭제 반영
   useEffect(() => {

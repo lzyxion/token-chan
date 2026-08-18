@@ -2,6 +2,7 @@ mod commands;
 mod monitor;
 mod settings;
 mod tray;
+mod window;
 
 use std::sync::Mutex;
 
@@ -127,7 +128,7 @@ pub fn run() {
                         // 화면 밖으로 걸쳐 두는 건 의도된 배치일 수 있으므로 되돌리지 않는다.
                         // 다만 모니터 구성이 바뀌어 어느 화면에도 안 걸리면 창을 영영
                         // 못 찾으므로, 그때만 첫 모니터 안으로 복구한다.
-                        if !commands::position_on_screen(&pet, x, y) {
+                        if !window::position_on_screen(&pet, x, y) {
                             if let Some(m) =
                                 pet.available_monitors().ok().and_then(|ms| ms.into_iter().next())
                             {
