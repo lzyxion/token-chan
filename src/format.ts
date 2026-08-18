@@ -23,16 +23,60 @@ export const SOURCE_SHORT: Record<Source, string> = {
 /** 소진율 위험 단계 — CSS 클래스(`.meter.ok` 등)와 이름이 같다 */
 export type MeterLevel = "ok" | "warn" | "danger";
 
-/** 위험 단계 경계 (%). 캐릭터 옆 게이지와 사용량 패널이 **같은 값**을 써야 한다 —
- *  색만 맞추고 경계가 갈리면 같은 사용률이 두 화면에서 다른 색으로 보인다. */
-export const METER_WARN_PCT = 60;
-export const METER_DANGER_PCT = 85;
+/**
+ * 미터 종류별 위험 한도 (%). **설정(알림 탭)이 정하는 값**이다.
+ *
+ * 종류를 나누는 이유는 성격이 달라서다 — 5시간 창은 곧 리셋되지만 주간은 아니고,
+ * 컨텍스트는 소진되면 대화가 잘린다. 그래서 사용자가 각각 다른 선을 긋는다.
+ */
+export interface AlertThresholds {
+  /** 짧은 창(5시간 등) — `alertThreshold` */
+  session: number;
+  /** 긴 창(주간·월간·모델별 주간) — `weeklyAlertThreshold` */
+  weekly: number;
+  /** 컨텍스트 — `contextAlertThreshold` */
+  context: number;
+}
 
-/** 소진율(%) → 위험 단계 */
-export function meterLevel(pct: number): MeterLevel {
-  if (pct >= METER_DANGER_PCT) return "danger";
-  if (pct >= METER_WARN_PCT) return "warn";
+/** 설정을 아직 못 읽었을 때 (백엔드 `Settings::default` 와 같은 값) */
+export const DEFAULT_THRESHOLDS: AlertThresholds = {
+  session: 80,
+  weekly: 90,
+  context: 90,
+};
+
+/**
+ * 노랑이 켜지는 지점 = 위험 한도의 이 비율.
+ *
+ * 단계는 셋인데 사용자가 정하는 선은 **하나**다. 그 하나는 빨강에 준다 —
+ * 색이 빨개지는 순간과 펫이 경고하는 순간이 어긋나면 안 되기 때문이다
+ * (`Pet.tsx` 의 alert 판정이 같은 값을 쓴다). 노랑은 그 앞의 예고고,
+ * 비율로 두면 한도를 낮게 잡은 사람도 예고 구간을 그대로 갖는다.
+ */
+export const WARN_RATIO = 0.75;
+
+/**
+ * 소진율(%) → 위험 단계. `dangerPct` 는 그 미터의 위험 한도(%)다.
+ *
+ * 예전에는 60/85 고정이었는데, 그러면 세션 한도를 75% 로 낮춰 둔 사람은
+ * 펫이 경고하는 동안에도 게이지가 노란색이었다 — 설정이 색에 닿지 않았다.
+ */
+export function meterLevel(pct: number, dangerPct: number): MeterLevel {
+  if (pct >= dangerPct) return "danger";
+  if (pct >= dangerPct * WARN_RATIO) return "warn";
   return "ok";
+}
+
+/**
+ * 공식 한도 미터의 순서 → 어느 한도를 쓸 것인가.
+ *
+ * 미터는 **창이 짧은 순**으로 온다 (`plan.rs` 의 rank 정렬). 그래서 0번은 5시간 같은
+ * 짧은 창이고 그 뒤는 전부 긴 창이다 — Claude 의 세 번째 미터(모델별 주간)도 여기
+ * 해당한다. 라벨로 찾지 않는 이유는 소스마다 창 이름이 다르기 때문이다
+ * ("5시간" · "주간" · "월간").
+ */
+export function planMeterThreshold(index: number, t: AlertThresholds): number {
+  return index === 0 ? t.session : t.weekly;
 }
 
 /**
@@ -43,8 +87,8 @@ export function meterLevel(pct: number): MeterLevel {
  * 주석으로 "같은 기준"이라고 약속해 두는 방식이었다. `var()` 를 넘기면 정의는
  * CSS 한 곳에 남고 약속이 코드가 된다.
  */
-export function meterColor(pct: number): string {
-  return `var(--${meterLevel(pct)})`;
+export function meterColor(pct: number, dangerPct: number): string {
+  return `var(--${meterLevel(pct, dangerPct)})`;
 }
 
 /** 1234567 → "1.2M", 84500 → "84.5K" */

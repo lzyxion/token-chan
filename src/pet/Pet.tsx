@@ -13,6 +13,7 @@ import {
   resetIsStale,
   shortModel,
   meterColor,
+  planMeterThreshold,
   meterLevel,
   SOURCE_LABEL,
   SOURCES,
@@ -627,14 +628,20 @@ export default function Pet() {
    *  · bar — RPG HP 바. 채움이 **남은 양**이다 (가득 = 리셋 직후, 빈 바 = 소진).
    *    색은 링과 같은 위험 단계(사용률 기준)를 쓰므로 바닥난 HP 가 빨갛게 물든다.
    */
-  const ringRow = (key: string, pct: number | null, label: React.ReactNode) => (
+  const ringRow = (
+    key: string,
+    pct: number | null,
+    label: React.ReactNode,
+    /** 이 줄의 위험 한도 (%) — 설정에서 온 값이라 줄마다 다르다 */
+    danger: number,
+  ) => (
     <div className="gauge-row" key={key}>
       {gaugeStyle === "bar" ? (
         <div className={`gauge-bar ${pct == null ? "empty" : ""}`}>
           {pct != null && (
             <div
-              className={`gauge-bar-fill${meterLevel(pct) === "danger" ? " crit" : ""}`}
-              style={{ width: `${100 - pct}%`, backgroundColor: meterColor(pct) }}
+              className={`gauge-bar-fill${meterLevel(pct, danger) === "danger" ? " crit" : ""}`}
+              style={{ width: `${100 - pct}%`, backgroundColor: meterColor(pct, danger) }}
             />
           )}
         </div>
@@ -645,7 +652,7 @@ export default function Pet() {
             pct == null
               ? undefined
               : {
-                  background: `conic-gradient(${meterColor(pct)} ${pct}%, rgba(255,255,255,0.14) 0)`,
+                  background: `conic-gradient(${meterColor(pct, danger)} ${pct}%, rgba(255,255,255,0.14) 0)`,
                 }
           }
         />
@@ -675,6 +682,11 @@ export default function Pet() {
           <> · 리셋 {m.resets_computed ? "~" : ""}{fmtMinutes(resetRemainMin)}</>
         ) : null}
       </>,
+      planMeterThreshold(slot, {
+        session: threshold * 100,
+        weekly: weeklyThreshold * 100,
+        context: ctxThreshold * 100,
+      }),
     );
   };
 
@@ -779,8 +791,9 @@ export default function Pet() {
                 컨텍스트 <b>{contextPct}%</b>
                 {ctx.interim ? " · 정리 중" : ""}
               </>,
+              ctxThreshold * 100,
             )
-          : ringRow("context", null, <>컨텍스트 <b>—</b></>)}
+          : ringRow("context", null, <>컨텍스트 <b>—</b></>, ctxThreshold * 100)}
         {meterRow(0)}
         {meterRow(1)}
       </div>

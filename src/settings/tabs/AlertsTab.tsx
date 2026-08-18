@@ -53,7 +53,9 @@ export default function AlertsTab({ s, update }: TabProps) {
             <span className="settings-max">100%</span>
           </div>
           <div className="settings-hint">
-            공식 세션/주간 사용률이 한도를 넘으면 펫이 경고 상태로 변합니다
+            공식 세션/주간 사용률이 한도를 넘으면 펫이 경고 상태로 변합니다 —
+            게이지와 패널 막대도 이 지점에서 빨갛게 바뀌고, 그 앞 구간(한도의
+            75%)은 노랑입니다
           </div>
         </div>
 
@@ -83,7 +85,7 @@ export default function AlertsTab({ s, update }: TabProps) {
           </div>
           <div className="settings-hint">
             활성 벤더의 컨텍스트가 이만큼 차면 경고 — 곧 압축(compact)되거나
-            창이 바닥난다는 뜻입니다
+            창이 바닥난다는 뜻입니다. 컨텍스트 게이지 색도 이 값을 따릅니다
           </div>
         </div>
 
