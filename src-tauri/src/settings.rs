@@ -20,7 +20,12 @@ pub struct Settings {
     pub pet_pos: Option<(i32, i32)>,
     /// 사용량 보존/스캔 기간 (일)
     pub retention_days: u32,
-    /// 5시간 블록 소진율 경고 임계값 (0..1)
+    /// 공식 한도 소진율 경고 임계값 (0..1).
+    ///
+    /// **창 종류를 가리지 않는다** — 5시간·주간·월간·모델별 주간 모두 이 하나를 쓴다.
+    /// 예전엔 주간용 설정이 따로 있었는데, 어느 미터가 "주간"인지는 소스와 플랜에 따라
+    /// 달라서(Codex 는 창이 하나뿐인 플랜이 있다) 두 설정 중 무엇이 걸리는지 화면에서
+    /// 구분되지 않았다. 한도 하나가 모든 한도 미터를 덮는 쪽이 예측 가능하다.
     pub alert_threshold: f64,
     /// 단가 오버라이드 JSON 경로
     pub price_override_path: Option<String>,
@@ -28,8 +33,6 @@ pub struct Settings {
     pub autostart: bool,
     /// 캐릭터 크기 배율 (0.5 ~ 2.5)
     pub pet_scale: f64,
-    /// 주간 한도 경고 임계값 (0..1) — 공식 주간 % 기준
-    pub weekly_alert_threshold: f64,
     /// 컨텍스트 경고 임계값 (0..1) — 활성 벤더의 컨텍스트 사용률 기준 (compact 임박)
     pub context_alert_threshold: f64,
     /// 블록 리셋 임박 대사 (분 전, 0 = 끔) — OS 알림이 아니라 말풍선으로 나간다
@@ -128,7 +131,6 @@ impl Default for Settings {
             price_override_path: None,
             autostart: false,
             pet_scale: 1.0,
-            weekly_alert_threshold: 0.9,
             context_alert_threshold: 0.9,
             reset_notify_minutes: 15,
             done_notice_seconds: 60,

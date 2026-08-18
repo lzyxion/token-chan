@@ -215,11 +215,11 @@ export type PetState =
 export interface AppSettings {
   petPos: [number, number] | null;
   retentionDays: number;
+  /** 공식 한도 경고 임계값 (0..1) — 5시간·주간·월간을 가리지 않고 모두 이 값 */
   alertThreshold: number;
   priceOverridePath: string | null;
   autostart: boolean;
   petScale: number;
-  weeklyAlertThreshold: number;
   /** 컨텍스트 경고 임계값 (0..1) — 활성 벤더 컨텍스트 사용률 기준 (compact 임박) */
   contextAlertThreshold: number;
   resetNotifyMinutes: number;

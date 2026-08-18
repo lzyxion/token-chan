@@ -11,7 +11,6 @@ import {
   fmtRemaining,
   fmtTokens,
   meterLevel,
-  planMeterThreshold,
   resetIsStale,
   shortModel,
   SOURCE_LABEL,
@@ -140,12 +139,12 @@ function VendorCard({
         />
       )}
       {/* 라벨은 백엔드가 두 소스 공통 어휘로 준다 ("5시간"·"주간") — 여기서 손보지 않는다 */}
-      {meters.map((m, i) => (
+      {meters.map((m) => (
         <MeterRow
           key={m.label}
           label={m.label}
           pct={m.used_pct}
-          danger={planMeterThreshold(i, thresholds)}
+          danger={thresholds.plan}
           resetAt={meterReset(m)}
           stale={meterIsStale(m)}
           computed={m.resets_computed}

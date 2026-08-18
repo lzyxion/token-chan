@@ -13,7 +13,6 @@ import {
   resetIsStale,
   shortModel,
   meterColor,
-  planMeterThreshold,
   meterLevel,
   SOURCE_LABEL,
   SOURCES,
@@ -90,7 +89,6 @@ export default function Pet() {
   const plan = active?.plan ?? null;
   const [scale, setScale] = useState(1.0);
   const [threshold, setThreshold] = useState(0.8);
-  const [weeklyThreshold, setWeeklyThreshold] = useState(0.9);
   const [ctxThreshold, setCtxThreshold] = useState(0.9);
   const [packImages, setPackImages] = useState<CharacterImages | null>(null);
   const [sleepAfterMin, setSleepAfterMin] = useState(30);
@@ -118,7 +116,6 @@ export default function Pet() {
       if (!alive || !s) return;
       if (s.petScale) setScale(s.petScale);
       if (s.alertThreshold) setThreshold(s.alertThreshold);
-      if (s.weeklyAlertThreshold) setWeeklyThreshold(s.weeklyAlertThreshold);
       if (s.contextAlertThreshold) setCtxThreshold(s.contextAlertThreshold);
       if (s.sleepAfterMinutes) setSleepAfterMin(s.sleepAfterMinutes);
       // 0 은 "끔" 이라 의미 있는 값 — 다른 항목처럼 truthy 로 거르면 끌 수가 없다
@@ -288,7 +285,7 @@ export default function Pet() {
     // 포즈만 계속 타자를 치고 있으면 둘이 어긋난다. 잔상이 짧아 곧 working 으로 돌아온다.
     if (Date.now() < doneUntil && !off.has("done")) return "done";
     if (live.busy && !off.has("working")) return "working";
-    // 경고: 공식 세션 % ≥ 세션 한도, 공식 주간 % ≥ 주간 한도, 또는
+    // 경고: 공식 한도(세션·주간) 중 하나라도 위험 한도를 넘었거나, 또는
     // 활성 벤더 컨텍스트 ≥ 컨텍스트 한도 (compact 임박 — agy 처럼 공식
     // 한도가 없는 벤더도 컨텍스트는 직접 주는 값이라 경고 근거가 된다).
     // 공식 한도는 없는 벤더면 겁주지 않는다 (추정치로 경고하지 않는다).
@@ -296,7 +293,7 @@ export default function Pet() {
     const alert =
       (sessionPct != null &&
         (sessionPct >= threshold * 100 ||
-          (weeklyPct != null && weeklyPct >= weeklyThreshold * 100))) ||
+          (weeklyPct != null && weeklyPct >= threshold * 100))) ||
       (ctxPct != null && ctxPct >= ctxThreshold * 100);
     if (alert && !off.has("alert")) return "alert";
     if (Date.now() < refreshedUntil && !off.has("refreshed")) return "refreshed";
@@ -310,7 +307,6 @@ export default function Pet() {
     summary,
     plan,
     threshold,
-    weeklyThreshold,
     ctxThreshold,
     active,
     refreshedUntil,
@@ -682,11 +678,8 @@ export default function Pet() {
           <> · 리셋 {m.resets_computed ? "~" : ""}{fmtMinutes(resetRemainMin)}</>
         ) : null}
       </>,
-      planMeterThreshold(slot, {
-        session: threshold * 100,
-        weekly: weeklyThreshold * 100,
-        context: ctxThreshold * 100,
-      }),
+      // 공식 한도는 창 길이를 가리지 않고 한 설정을 쓴다 (`AlertThresholds.plan`)
+      threshold * 100,
     );
   };
 
