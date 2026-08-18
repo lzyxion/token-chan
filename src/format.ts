@@ -24,24 +24,24 @@ export const SOURCE_SHORT: Record<Source, string> = {
 export type MeterLevel = "ok" | "warn" | "danger";
 
 /**
- * 미터 종류별 위험 한도 (%). **설정(알림 탭)이 정하는 값**이다.
+ * 위험 한도 (%). **설정(알림 탭)이 정하는 값**이다.
  *
- * 종류를 나누는 이유는 성격이 달라서다 — 5시간 창은 곧 리셋되지만 주간은 아니고,
- * 컨텍스트는 소진되면 대화가 잘린다. 그래서 사용자가 각각 다른 선을 긋는다.
+ * 둘로 나뉘는 이유는 성격이 다르기 때문이다 — 공식 한도는 넘으면 **기다려야** 하고,
+ * 컨텍스트는 차면 대화가 **잘린다**. 반면 5시간·주간·월간은 셋 다 "기다려야 한다"는
+ * 같은 성격이라 하나로 묶는다: 어느 미터가 주간인지는 소스와 플랜마다 달라
+ * (Codex 는 창이 하나뿐인 플랜이 있다) 나눠 두면 어느 설정이 걸리는지 화면에서
+ * 구분되지 않았다.
  */
 export interface AlertThresholds {
-  /** 짧은 창(5시간 등) — `alertThreshold` */
-  session: number;
-  /** 긴 창(주간·월간·모델별 주간) — `weeklyAlertThreshold` */
-  weekly: number;
+  /** 공식 한도 미터 전부 (5시간·주간·월간·모델별 주간) — `alertThreshold` */
+  plan: number;
   /** 컨텍스트 — `contextAlertThreshold` */
   context: number;
 }
 
 /** 설정을 아직 못 읽었을 때 (백엔드 `Settings::default` 와 같은 값) */
 export const DEFAULT_THRESHOLDS: AlertThresholds = {
-  session: 80,
-  weekly: 90,
+  plan: 80,
   context: 90,
 };
 
@@ -67,17 +67,6 @@ export function meterLevel(pct: number, dangerPct: number): MeterLevel {
   return "ok";
 }
 
-/**
- * 공식 한도 미터의 순서 → 어느 한도를 쓸 것인가.
- *
- * 미터는 **창이 짧은 순**으로 온다 (`plan.rs` 의 rank 정렬). 그래서 0번은 5시간 같은
- * 짧은 창이고 그 뒤는 전부 긴 창이다 — Claude 의 세 번째 미터(모델별 주간)도 여기
- * 해당한다. 라벨로 찾지 않는 이유는 소스마다 창 이름이 다르기 때문이다
- * ("5시간" · "주간" · "월간").
- */
-export function planMeterThreshold(index: number, t: AlertThresholds): number {
-  return index === 0 ? t.session : t.weekly;
-}
 
 /**
  * 소진율(%) → 색. 값이 아니라 **CSS 변수 참조**를 돌려준다 (`styles.css` `:root`).

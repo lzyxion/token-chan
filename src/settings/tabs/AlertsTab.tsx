@@ -7,7 +7,7 @@ export default function AlertsTab({ s, update }: TabProps) {
     <>
         <div className="settings-group">
           <div className="settings-label">
-            위험 한도 · 세션{" "}
+            위험 한도 · 공식 한도{" "}
             <b className="warn-b">{Math.round(s.alertThreshold * 100)}%</b>
           </div>
           <div className="settings-row">
@@ -26,36 +26,10 @@ export default function AlertsTab({ s, update }: TabProps) {
             />
             <span className="settings-max">100%</span>
           </div>
-        </div>
-
-        <div className="settings-group">
-          <div className="settings-label">
-            위험 한도 · 주간{" "}
-            <b className="warn-b">
-              {Math.round(s.weeklyAlertThreshold * 100)}%
-            </b>
-          </div>
-          <div className="settings-row">
-            <span className="settings-min">10%</span>
-            <input
-              type="range"
-              min={10}
-              max={100}
-              step={5}
-              value={Math.round(s.weeklyAlertThreshold * 100)}
-              onChange={(e) =>
-                update({
-                  weeklyAlertThreshold:
-                    parseInt(e.currentTarget.value, 10) / 100,
-                })
-              }
-            />
-            <span className="settings-max">100%</span>
-          </div>
           <div className="settings-hint">
-            공식 세션/주간 사용률이 한도를 넘으면 펫이 경고 상태로 변합니다 —
-            게이지와 패널 막대도 이 지점에서 빨갛게 바뀌고, 그 앞 구간(한도의
-            75%)은 노랑입니다
+            5시간·주간·월간을 가리지 않고 공식 한도 미터 전부에 적용됩니다. 넘으면
+            펫이 경고 상태가 되고, 게이지와 패널 막대도 같은 지점에서 빨갛게
+            바뀝니다 (그 앞 구간, 한도의 75%부터는 노랑)
           </div>
         </div>
 

@@ -46,7 +46,6 @@ pub fn set_settings(app: AppHandle, state: State<'_, AppState>, mut new_settings
     new_settings.pet_pos = old.pet_pos;
     new_settings.pet_scale = new_settings.pet_scale.clamp(0.5, 2.5);
     new_settings.alert_threshold = new_settings.alert_threshold.clamp(0.1, 1.0);
-    new_settings.weekly_alert_threshold = new_settings.weekly_alert_threshold.clamp(0.1, 1.0);
     new_settings.context_alert_threshold = new_settings.context_alert_threshold.clamp(0.1, 1.0);
     new_settings.speech_duration_ms = new_settings.speech_duration_ms.clamp(1000, 15000);
     // 창 위치·크기는 설정 화면이 편집하지 않음 — 드래그/리사이즈 저장과의 경합 방지.
