@@ -3,7 +3,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import ResizeGrips from "../components/ResizeGrips";
 import VendorIcon from "../components/VendorIcon";
 import { ModelMix, recordedDays, UsageHeatmap, WeekBars } from "./UsageCharts";
-import { useCurrency, useLive, usePlans, useSummary } from "../hooks/useUsage";
+import { useCurrency, useLive, usePlans, useSummary, useThresholds } from "../hooks/useUsage";
 import { useWindowPersist } from "../hooks/useWindowPersist";
 import {
   fmtAgo,
@@ -11,10 +11,12 @@ import {
   fmtRemaining,
   fmtTokens,
   meterLevel,
+  planMeterThreshold,
   resetIsStale,
   shortModel,
   SOURCE_LABEL,
   totalOf,
+  type AlertThresholds,
   type Currency,
 } from "../format";
 import type { ContextState, PlanMeter, PlanUsage, SourceStatus, SourceSummary } from "../types";
@@ -38,9 +40,12 @@ function MeterRow({
   stale,
   computed,
   title,
+  danger,
 }: {
   label: string;
   pct: number;
+  /** 이 미터의 위험 한도 (%) — 설정(알림 탭)에서 온다 */
+  danger: number;
   resetAt?: Date | null;
   /** 리셋 시각이 이미 지났다 = 캐시가 굳었고 계산으로도 못 메웠다 */
   stale?: boolean;
@@ -52,9 +57,9 @@ function MeterRow({
     <div className="vendor-row" title={title}>
       <span className="vendor-key">{label}</span>
       <div className="bar plan-bar">
-        <div className={`bar-fill meter ${meterLevel(pct)}`} style={{ width: `${pct}%` }} />
+        <div className={`bar-fill meter ${meterLevel(pct, danger)}`} style={{ width: `${pct}%` }} />
       </div>
-      <span className={`plan-pct ${meterLevel(pct)}`}>{pct}%</span>
+      <span className={`plan-pct ${meterLevel(pct, danger)}`}>{pct}%</span>
       {/* 계산값이면 `~` 를 붙인다 — 숫자는 믿을 만하지만(실측에서 공식과 일치) 출처가
           공식이 아니라는 건 밝혀야 한다. 리셋을 못 구하면 "낡음" 으로 이유를 적는다:
           그냥 비우면 왜 사라졌는지 알 수 없고, "0분" 은 지금 막 리셋된다는 거짓말이다. */}
@@ -95,6 +100,7 @@ function VendorCard({
   active,
   busy,
   currency,
+  thresholds,
 }: {
   s: SourceSummary;
   context: ContextState | null;
@@ -102,6 +108,7 @@ function VendorCard({
   active: boolean;
   busy: boolean;
   currency: Currency;
+  thresholds: AlertThresholds;
 }) {
   const total = totalOf(s.today);
   const chip = statusChip(s.status);
@@ -126,17 +133,19 @@ function VendorCard({
         <MeterRow
           label="컨텍스트"
           pct={pct}
+          danger={thresholds.context}
           title={`${context.tokens.toLocaleString()} / ${context.window.toLocaleString()} 토큰${
             context.interim ? " (정리 중)" : ""
           }`}
         />
       )}
       {/* 라벨은 백엔드가 두 소스 공통 어휘로 준다 ("5시간"·"주간") — 여기서 손보지 않는다 */}
-      {meters.map((m) => (
+      {meters.map((m, i) => (
         <MeterRow
           key={m.label}
           label={m.label}
           pct={m.used_pct}
+          danger={planMeterThreshold(i, thresholds)}
           resetAt={meterReset(m)}
           stale={meterIsStale(m)}
           computed={m.resets_computed}
@@ -173,6 +182,7 @@ export default function UsagePanel() {
   const live = useLive();
   const plans = usePlans();
   const currency = useCurrency();
+  const thresholds = useThresholds();
   const [page, setPage] = useState(0);
   const bodyRef = useRef<HTMLDivElement | null>(null);
 
@@ -274,6 +284,7 @@ export default function UsagePanel() {
                     active={s.source === activeSource}
                     busy={busySources.has(s.source)}
                     currency={currency}
+                    thresholds={thresholds}
                   />
                 ))}
             </div>
