@@ -370,12 +370,11 @@ fn parse_transcript(
         let Some(dedup_key) = msg.id.or(row.request_id) else { continue };
 
         // 세션 목록용 집계 — 메인체인 기준 (서브에이전트 모델이 대표로 뜨면 안 된다)
-        if !sidechain {
-            if last_at.map(|prev| ts >= prev).unwrap_or(true) {
+        if !sidechain
+            && last_at.map(|prev| ts >= prev).unwrap_or(true) {
                 last_at = Some(ts);
                 last_model = model.clone();
             }
-        }
         tokens += usage.input_tokens
             + usage.output_tokens
             + usage.cache_creation_input_tokens
@@ -476,7 +475,7 @@ mod tests {
         fs::write(proj.join("session1.jsonl"), lines.join("\n")).unwrap();
 
         let mut adapter = ClaudeAdapter::new(vec![dir.path().to_path_buf()]);
-        let out = adapter.scan(DateTime::UNIX_EPOCH.into());
+        let out = adapter.scan(DateTime::UNIX_EPOCH);
 
         assert_eq!(out.events.len(), 2, "중복 라인이 dedup 되지 않으면 과대집계");
         let total_output: u64 = out.events.iter().map(|e| e.output).sum();
@@ -491,7 +490,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let proj = dir.path().join("-proj");
         fs::create_dir_all(&proj).unwrap();
-        let lines = vec![
+        let lines = [
             r#"{"type":"user","isMeta":true,"cwd":"/home/u/projects/api","gitBranch":"main","message":{"role":"user","content":"<local-command-caveat>Caveat: The messages below…</local-command-caveat>"}}"#.to_string(),
             r#"{"type":"user","message":{"role":"user","content":"<command-name>/model</command-name>\n<command-message>model</command-message>"}}"#.to_string(),
             r#"{"type":"user","message":{"role":"user","content":"<local-command-stdout>Set model to Opus 5</local-command-stdout>"}}"#.to_string(),
@@ -503,7 +502,7 @@ mod tests {
         fs::write(proj.join("s.jsonl"), lines.join("\n")).unwrap();
 
         let mut adapter = ClaudeAdapter::new(vec![dir.path().to_path_buf()]);
-        adapter.scan(DateTime::UNIX_EPOCH.into());
+        adapter.scan(DateTime::UNIX_EPOCH);
         let rows = adapter.sessions();
 
         assert_eq!(rows.len(), 1);
@@ -517,14 +516,12 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let proj = dir.path().join("-proj");
         fs::create_dir_all(&proj).unwrap();
-        let lines = vec![
-            r#"{"type":"user","cwd":"/home/u/projects/api","message":{"role":"user","content":[{"type":"tool_result","content":"..."},{"type":"text","text":"블록 배열 안의 텍스트"}]}}"#.to_string(),
-            assistant_line("msg_U", "req_U", "claude-opus-5", "2026-08-12T01:00:00.000Z", 10, 20),
-        ];
+        let lines = [r#"{"type":"user","cwd":"/home/u/projects/api","message":{"role":"user","content":[{"type":"tool_result","content":"..."},{"type":"text","text":"블록 배열 안의 텍스트"}]}}"#.to_string(),
+            assistant_line("msg_U", "req_U", "claude-opus-5", "2026-08-12T01:00:00.000Z", 10, 20)];
         fs::write(proj.join("s.jsonl"), lines.join("\n")).unwrap();
 
         let mut adapter = ClaudeAdapter::new(vec![dir.path().to_path_buf()]);
-        adapter.scan(DateTime::UNIX_EPOCH.into());
+        adapter.scan(DateTime::UNIX_EPOCH);
         assert_eq!(adapter.sessions()[0].label, "블록 배열 안의 텍스트");
     }
 
@@ -534,14 +531,12 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let proj = dir.path().join("-proj");
         fs::create_dir_all(&proj).unwrap();
-        let lines = vec![
-            r#"{"type":"user","cwd":"/home/u/projects/api","message":{"role":"user","content":"<command-name>/usage</command-name>"}}"#.to_string(),
-            assistant_line("msg_V", "req_V", "claude-opus-5", "2026-08-12T01:00:00.000Z", 10, 20),
-        ];
+        let lines = [r#"{"type":"user","cwd":"/home/u/projects/api","message":{"role":"user","content":"<command-name>/usage</command-name>"}}"#.to_string(),
+            assistant_line("msg_V", "req_V", "claude-opus-5", "2026-08-12T01:00:00.000Z", 10, 20)];
         fs::write(proj.join("s.jsonl"), lines.join("\n")).unwrap();
 
         let mut adapter = ClaudeAdapter::new(vec![dir.path().to_path_buf()]);
-        adapter.scan(DateTime::UNIX_EPOCH.into());
+        adapter.scan(DateTime::UNIX_EPOCH);
         assert_eq!(adapter.sessions()[0].label, "api");
     }
 
@@ -557,7 +552,7 @@ mod tests {
         .unwrap();
 
         let mut adapter = ClaudeAdapter::new(vec![dir.path().to_path_buf()]);
-        let out = adapter.scan(DateTime::UNIX_EPOCH.into());
+        let out = adapter.scan(DateTime::UNIX_EPOCH);
         assert_eq!(out.events.len(), 1, "서브에이전트 중첩 파일을 재귀 탐색해야 함");
         assert_eq!(out.events[0].model, "claude-fable-5");
     }
@@ -567,11 +562,9 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let proj = dir.path().join("-proj");
         fs::create_dir_all(&proj).unwrap();
-        let lines = vec![
-            assistant_line("msg_1", "req_1", "<synthetic>", "2026-07-30T01:00:00.000Z", 0, 0),
+        let lines = [assistant_line("msg_1", "req_1", "<synthetic>", "2026-07-30T01:00:00.000Z", 0, 0),
             assistant_line("msg_2", "req_2", "claude-opus-4-8", "2026-07-01T01:00:00.000Z", 10, 10),
-            assistant_line("msg_3", "req_3", "claude-opus-4-8", "2026-07-30T01:00:00.000Z", 10, 10),
-        ];
+            assistant_line("msg_3", "req_3", "claude-opus-4-8", "2026-07-30T01:00:00.000Z", 10, 10)];
         fs::write(proj.join("s.jsonl"), lines.join("\n")).unwrap();
 
         let mut adapter = ClaudeAdapter::new(vec![dir.path().to_path_buf()]);
@@ -599,14 +592,12 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let proj = dir.path().join("-proj");
         fs::create_dir_all(&proj).unwrap();
-        let lines = vec![
-            ctx_line("m1", "claude-opus-5", "2026-08-10T01:00:00.000Z", 2, 10_000, 26_000, 500),
-            ctx_line("m2", "claude-opus-5", "2026-08-10T01:05:00.000Z", 2, 1_000, 36_500, 700),
-        ];
+        let lines = [ctx_line("m1", "claude-opus-5", "2026-08-10T01:00:00.000Z", 2, 10_000, 26_000, 500),
+            ctx_line("m2", "claude-opus-5", "2026-08-10T01:05:00.000Z", 2, 1_000, 36_500, 700)];
         fs::write(proj.join("sess-1.jsonl"), lines.join("\n")).unwrap();
 
         let mut adapter = ClaudeAdapter::new(vec![dir.path().to_path_buf()]);
-        adapter.scan(DateTime::UNIX_EPOCH.into());
+        adapter.scan(DateTime::UNIX_EPOCH);
         let c = adapter.context(&PriceTable::builtin()).unwrap();
 
         assert_eq!(c.tokens, 2 + 1_000 + 36_500 + 700, "마지막 턴의 in+cw+cr+out");
@@ -621,14 +612,12 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let proj = dir.path().join("-proj");
         fs::create_dir_all(&proj).unwrap();
-        let lines = vec![
-            ctx_line("m1", "claude-opus-5", "2026-08-10T01:00:00.000Z", 2, 3_000, 100_000, 600),
-            compact_line("2026-08-10T01:10:00.000Z", "manual", 103_602, 9_000),
-        ];
+        let lines = [ctx_line("m1", "claude-opus-5", "2026-08-10T01:00:00.000Z", 2, 3_000, 100_000, 600),
+            compact_line("2026-08-10T01:10:00.000Z", "manual", 103_602, 9_000)];
         fs::write(proj.join("sess-1.jsonl"), lines.join("\n")).unwrap();
 
         let mut adapter = ClaudeAdapter::new(vec![dir.path().to_path_buf()]);
-        adapter.scan(DateTime::UNIX_EPOCH.into());
+        adapter.scan(DateTime::UNIX_EPOCH);
         let c = adapter.context(&PriceTable::builtin()).unwrap();
 
         assert!(c.interim, "compact 뒤 턴이 없으면 잠정값이어야 함");
@@ -658,7 +647,7 @@ mod tests {
         .unwrap();
 
         let mut adapter = ClaudeAdapter::new(vec![dir.path().to_path_buf()]);
-        adapter.scan(DateTime::UNIX_EPOCH.into());
+        adapter.scan(DateTime::UNIX_EPOCH);
         let c = adapter.context(&PriceTable::builtin()).unwrap();
         assert_eq!(c.tokens, 2 + 1_000 + 50_000 + 300);
     }
@@ -677,7 +666,7 @@ mod tests {
         }
 
         let mut adapter = ClaudeAdapter::new(vec![a.path().to_path_buf(), b.path().to_path_buf()]);
-        let out = adapter.scan(DateTime::UNIX_EPOCH.into());
+        let out = adapter.scan(DateTime::UNIX_EPOCH);
         assert_eq!(out.events.len(), 1);
         assert_eq!(out.events[0].output, 500);
     }
@@ -686,7 +675,7 @@ mod tests {
     fn empty_root_reports_no_data() {
         let dir = tempfile::tempdir().unwrap();
         let mut adapter = ClaudeAdapter::new(vec![dir.path().to_path_buf()]);
-        let out = adapter.scan(DateTime::UNIX_EPOCH.into());
+        let out = adapter.scan(DateTime::UNIX_EPOCH);
         assert_eq!(out.status, SourceStatus::NoData);
     }
 }

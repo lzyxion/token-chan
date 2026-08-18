@@ -225,7 +225,7 @@ pub fn build_summary(
             cost_known: !partial,
         })
         .collect();
-    models_today.sort_by(|a, b| b.totals.total().cmp(&a.totals.total()));
+    models_today.sort_by_key(|m| std::cmp::Reverse(m.totals.total()));
 
     // 최근 N일 (빈 날 포함, 오름차순)
     let mut daily = vec![];
@@ -244,7 +244,7 @@ pub fn build_summary(
     for i in (0..week_len).rev() {
         let d = today - Duration::days(i as i64);
         let mut models = by_date.remove(&d).unwrap_or_default();
-        models.sort_by(|a, b| b.tokens.cmp(&a.tokens));
+        models.sort_by_key(|m| std::cmp::Reverse(m.tokens));
         week_models.push(DailyModels { date: d.to_string(), models });
     }
 

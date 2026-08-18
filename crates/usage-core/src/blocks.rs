@@ -56,7 +56,7 @@ fn anchor(t: DateTime<Utc>) -> DateTime<Utc> {
 /// 창이 이미 닫혔으면(마지막 활동 뒤 5시간이 지났으면) `None` 이다. 그때는 다음 창이
 /// 언제 열릴지 알 수 없다 — **다음 메시지를 보내는 순간** 열리기 때문이다.
 pub fn active_block_end(
-    stamps: &mut Vec<DateTime<Utc>>,
+    stamps: &mut [DateTime<Utc>],
     now: DateTime<Utc>,
 ) -> Option<DateTime<Utc>> {
     stamps.sort_unstable();
@@ -111,7 +111,7 @@ mod tests {
 
     #[test]
     fn empty_input_has_no_window() {
-        assert_eq!(active_block_end(&mut vec![], t("2026-08-13T12:00:00Z")), None);
+        assert_eq!(active_block_end(&mut [], t("2026-08-13T12:00:00Z")), None);
     }
 
     /// 정렬·중복은 호출자가 신경 쓰지 않아도 된다 (파일별로 모아 붙이므로 뒤섞여 온다).

@@ -959,7 +959,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let day = dir.path().join("sessions/2026/07/30");
         fs::create_dir_all(&day).unwrap();
-        let lines = vec![
+        let lines = [
             // 세션 메타 (무시됨)
             r#"{"timestamp":"2026-07-30T01:00:00.000Z","type":"session_meta","payload":{"id":"s1","cwd":"/x"}}"#.to_string(),
             // 모델 컨텍스트
@@ -972,7 +972,7 @@ mod tests {
         fs::write(day.join("rollout-2026-07-30-abc.jsonl"), lines.join("\n")).unwrap();
 
         let mut adapter = CodexAdapter::new(vec![dir.path().to_path_buf()]);
-        let out = adapter.scan(DateTime::UNIX_EPOCH.into());
+        let out = adapter.scan(DateTime::UNIX_EPOCH);
 
         assert_eq!(out.status, SourceStatus::Ok);
         assert_eq!(out.events.len(), 2);
@@ -997,7 +997,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let day = dir.path().join("sessions/2026/07/31");
         fs::create_dir_all(&day).unwrap();
-        let lines = vec![
+        let lines = [
             r#"{"timestamp":"2026-07-31T02:00:00.000Z","type":"session_meta","payload":{"id":"019fb5e6","cwd":"/x"}}"#.to_string(),
             r#"{"timestamp":"2026-07-31T02:00:01.000Z","type":"turn_context","payload":{"model":"gpt-5.6-terra","cwd":"/x"}}"#.to_string(),
             r#"{"timestamp":"2026-07-31T02:03:12.104Z","type":"event_msg","payload":{"type":"token_count","info":{"model_context_window":258400,"total_token_usage":{"input_tokens":13249,"cached_input_tokens":9984,"cache_write_input_tokens":0,"output_tokens":12,"reasoning_output_tokens":0,"total_tokens":13261},"last_token_usage":{"input_tokens":13249,"cached_input_tokens":9984,"cache_write_input_tokens":0,"output_tokens":12,"reasoning_output_tokens":0,"total_tokens":13261}}}}"#.to_string(),
@@ -1007,7 +1007,7 @@ mod tests {
         fs::write(day.join("rollout-x.jsonl"), lines.join("\n")).unwrap();
 
         let mut adapter = CodexAdapter::new(vec![dir.path().to_path_buf()]);
-        adapter.scan(DateTime::UNIX_EPOCH.into());
+        adapter.scan(DateTime::UNIX_EPOCH);
         let c = adapter.context(&crate::pricing::PriceTable::builtin()).unwrap();
 
         assert_eq!(c.source, Source::Codex);
@@ -1026,14 +1026,12 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let day = dir.path().join("sessions/2026/07/30");
         fs::create_dir_all(&day).unwrap();
-        let lines = vec![
-            r#"{"timestamp":"2026-07-30T01:00:01.000Z","type":"turn_context","payload":{"model":"gpt-5-codex"}}"#,
-            r#"{"timestamp":"2026-07-30T01:00:10.000Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":1000,"cached_input_tokens":0,"output_tokens":200,"total_tokens":1200},"last_token_usage":null}}}"#,
-        ];
+        let lines = [r#"{"timestamp":"2026-07-30T01:00:01.000Z","type":"turn_context","payload":{"model":"gpt-5-codex"}}"#,
+            r#"{"timestamp":"2026-07-30T01:00:10.000Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":1000,"cached_input_tokens":0,"output_tokens":200,"total_tokens":1200},"last_token_usage":null}}}"#];
         fs::write(day.join("rollout-y.jsonl"), lines.join("\n")).unwrap();
 
         let mut adapter = CodexAdapter::new(vec![dir.path().to_path_buf()]);
-        let out = adapter.scan(DateTime::UNIX_EPOCH.into());
+        let out = adapter.scan(DateTime::UNIX_EPOCH);
         assert_eq!(out.events.len(), 1, "사용량 집계는 그대로 되어야 함");
         assert!(adapter.context(&crate::pricing::PriceTable::builtin()).is_none());
     }
@@ -1053,7 +1051,7 @@ mod tests {
         }
 
         let mut adapter = CodexAdapter::new(vec![a.path().to_path_buf(), b.path().to_path_buf()]);
-        let out = adapter.scan(DateTime::UNIX_EPOCH.into());
+        let out = adapter.scan(DateTime::UNIX_EPOCH);
         assert_eq!(out.events.len(), 1, "같은 rollout 이 두 홈에 있으면 중복 집계된다");
 
         // 서로 다른 요청은 그대로 남아야 한다 (dedup 이 과하게 먹으면 안 됨)
@@ -1061,13 +1059,13 @@ mod tests {
         let other = line.replace("02:03:12", "02:09:12");
         fs::write(day.join("rollout-same.jsonl"), format!("{meta}\n{line}\n{other}")).unwrap();
         let mut adapter = CodexAdapter::new(vec![a.path().to_path_buf(), b.path().to_path_buf()]);
-        assert_eq!(adapter.scan(DateTime::UNIX_EPOCH.into()).events.len(), 2);
+        assert_eq!(adapter.scan(DateTime::UNIX_EPOCH).events.len(), 2);
     }
 
     #[test]
     fn no_home_reports_no_data() {
         let mut adapter = CodexAdapter::new(vec![]);
-        let out = adapter.scan(DateTime::UNIX_EPOCH.into());
+        let out = adapter.scan(DateTime::UNIX_EPOCH);
         assert_eq!(out.status, SourceStatus::NoData);
     }
 
@@ -1078,7 +1076,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let day = dir.path().join("sessions/2026/08/11");
         fs::create_dir_all(&day).unwrap();
-        let lines = vec![
+        let lines = [
             r#"{"timestamp":"2026-08-11T01:00:00.000Z","type":"turn_context","payload":{"model":"gpt-5.6-terra"}}"#,
             // 이전 값 — 나중 이벤트가 이겨야 한다
             r#"{"timestamp":"2026-08-11T01:20:00.000Z","type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":10,"output_tokens":1,"total_tokens":11}},"rate_limits":{"limit_id":"codex","primary":{"used_percent":3.0,"window_minutes":43200,"resets_at":1789004769},"secondary":null,"plan_type":"free"}}}"#,
@@ -1087,7 +1085,7 @@ mod tests {
         fs::write(day.join("rollout-limits.jsonl"), lines.join("\n")).unwrap();
 
         let mut adapter = CodexAdapter::new(vec![dir.path().to_path_buf()]);
-        adapter.scan(DateTime::UNIX_EPOCH.into());
+        adapter.scan(DateTime::UNIX_EPOCH);
         let p = adapter.plan().unwrap();
 
         assert_eq!(p.source, Source::Codex);
@@ -1097,7 +1095,7 @@ mod tests {
         assert_eq!(p.meters[0].used_pct, 4, "마지막 이벤트 값이어야 함");
         // 문자열 파싱 없이 정확한 시각이 온다 (Claude 와의 차이)
         assert_eq!(p.meters[0].resets_at.unwrap().timestamp(), 1_789_004_769);
-        assert_eq!(adapter.last_activity().is_some(), true);
+        assert!(adapter.last_activity().is_some());
     }
 
     /// **합성 픽스처다** — 두 창이 오는 플랜은 아직 관측하지 못했다 (free 30일 단일,
@@ -1112,7 +1110,7 @@ mod tests {
         fs::write(day.join("rollout-two.jsonl"), line).unwrap();
 
         let mut adapter = CodexAdapter::new(vec![dir.path().to_path_buf()]);
-        adapter.scan(DateTime::UNIX_EPOCH.into());
+        adapter.scan(DateTime::UNIX_EPOCH);
         let p = adapter.plan().unwrap();
 
         assert_eq!(p.meters.len(), 2);
@@ -1131,7 +1129,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let day = dir.path().join("sessions/2026/08/12");
         fs::create_dir_all(&day).unwrap();
-        let lines = vec![
+        let lines = [
             r#"{"timestamp":"2026-08-12T01:00:00.000Z","type":"session_meta","payload":{"id":"019ff4c7","cwd":"C:\\Users\\u\\projects\\token-chan","git":{"branch":"main","commit_hash":"d6728af"}}}"#,
             // 실측 그대로 — 첫 줄 뒤에 붙여넣은 JSON 이 이어진다
             r#"{"timestamp":"2026-08-12T01:00:01.000Z","type":"event_msg","payload":{"type":"user_message","message":"상태 정보를 가져오는데\n{\n  \"a\": 1\n}"}}"#,
@@ -1141,7 +1139,7 @@ mod tests {
         fs::write(day.join("rollout-2026-08-12T01-00-00-019ff4c7.jsonl"), lines.join("\n")).unwrap();
 
         let mut adapter = CodexAdapter::new(vec![dir.path().to_path_buf()]);
-        adapter.scan(DateTime::UNIX_EPOCH.into());
+        adapter.scan(DateTime::UNIX_EPOCH);
         let rows = adapter.sessions();
 
         assert_eq!(rows.len(), 1);
@@ -1157,15 +1155,13 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let day = dir.path().join("sessions/2026/08/12");
         fs::create_dir_all(&day).unwrap();
-        let lines = vec![
-            r#"{"timestamp":"2026-08-12T01:00:00.000Z","type":"session_meta","payload":{"id":"019ff4e0","cwd":"C:\\Users\\u\\projects\\token-chan\\src-tauri"}}"#,
+        let lines = [r#"{"timestamp":"2026-08-12T01:00:00.000Z","type":"session_meta","payload":{"id":"019ff4e0","cwd":"C:\\Users\\u\\projects\\token-chan\\src-tauri"}}"#,
             r#"{"timestamp":"2026-08-12T01:00:01.000Z","type":"event_msg","payload":{"type":"user_message","message":"<command-name>/usage</command-name>\n<command-message>usage</command-message>"}}"#,
-            r#"{"timestamp":"2026-08-12T01:00:03.000Z","type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":10,"output_tokens":1,"total_tokens":11}}}}"#,
-        ];
+            r#"{"timestamp":"2026-08-12T01:00:03.000Z","type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":10,"output_tokens":1,"total_tokens":11}}}}"#];
         fs::write(day.join("rollout-2026-08-12T01-00-00-019ff4e0.jsonl"), lines.join("\n")).unwrap();
 
         let mut adapter = CodexAdapter::new(vec![dir.path().to_path_buf()]);
-        adapter.scan(DateTime::UNIX_EPOCH.into());
+        adapter.scan(DateTime::UNIX_EPOCH);
         assert_eq!(adapter.sessions()[0].label, "src-tauri", "래퍼는 제목이 아니다");
     }
 
@@ -1175,14 +1171,12 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let day = dir.path().join("sessions/2026/08/12");
         fs::create_dir_all(&day).unwrap();
-        let lines = vec![
-            r#"{"timestamp":"2026-08-12T01:00:00.000Z","type":"session_meta","payload":{"id":"019ff4c8","cwd":"/home/u/projects/api"}}"#,
-            r#"{"timestamp":"2026-08-12T01:00:03.000Z","type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":10,"output_tokens":1,"total_tokens":11}}}}"#,
-        ];
+        let lines = [r#"{"timestamp":"2026-08-12T01:00:00.000Z","type":"session_meta","payload":{"id":"019ff4c8","cwd":"/home/u/projects/api"}}"#,
+            r#"{"timestamp":"2026-08-12T01:00:03.000Z","type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":10,"output_tokens":1,"total_tokens":11}}}}"#];
         fs::write(day.join("rollout-2026-08-12T01-00-00-019ff4c8.jsonl"), lines.join("\n")).unwrap();
 
         let mut adapter = CodexAdapter::new(vec![dir.path().to_path_buf()]);
-        adapter.scan(DateTime::UNIX_EPOCH.into());
+        adapter.scan(DateTime::UNIX_EPOCH);
         let rows = adapter.sessions();
 
         assert_eq!(rows[0].label, "api");
@@ -1201,7 +1195,7 @@ mod tests {
         .unwrap();
 
         let mut adapter = CodexAdapter::new(vec![dir.path().to_path_buf()]);
-        adapter.scan(DateTime::UNIX_EPOCH.into());
+        adapter.scan(DateTime::UNIX_EPOCH);
         assert!(adapter.plan().is_none());
     }
 }

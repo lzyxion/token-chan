@@ -1,10 +1,10 @@
 import { useEffect, useRef, useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import ResizeGrips from "../components/ResizeGrips";
 import VendorIcon from "../components/VendorIcon";
 import { ModelMix, recordedDays, UsageHeatmap, WeekBars } from "./UsageCharts";
 import { useCurrency, useLive, usePlans, useSummary } from "../hooks/useUsage";
+import { useWindowPersist } from "../hooks/useWindowPersist";
 import {
   fmtAgo,
   fmtCost,
@@ -181,30 +181,7 @@ export default function UsagePanel() {
   const [page, setPage] = useState(0);
   const bodyRef = useRef<HTMLDivElement | null>(null);
 
-  // 사용자가 옮긴 위치·조절한 크기 기억 (연속 이벤트 debounce)
-  useEffect(() => {
-    const win = getCurrentWindow();
-    let moveTimer: ReturnType<typeof setTimeout> | undefined;
-    let sizeTimer: ReturnType<typeof setTimeout> | undefined;
-    const unMoved = win.onMoved(({ payload }) => {
-      clearTimeout(moveTimer);
-      moveTimer = setTimeout(() => {
-        void invoke("save_window_position", { label: "panel", x: payload.x, y: payload.y });
-      }, 500);
-    });
-    const unResized = win.onResized(({ payload }) => {
-      clearTimeout(sizeTimer);
-      sizeTimer = setTimeout(() => {
-        void invoke("save_window_size", { label: "panel", width: payload.width, height: payload.height });
-      }, 500);
-    });
-    return () => {
-      clearTimeout(moveTimer);
-      clearTimeout(sizeTimer);
-      unMoved.then((f) => f());
-      unResized.then((f) => f());
-    };
-  }, []);
+  useWindowPersist("panel");
 
   // Esc로 닫기
   useEffect(() => {

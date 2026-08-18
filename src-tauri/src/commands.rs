@@ -4,6 +4,7 @@ use tauri::{AppHandle, Manager, PhysicalPosition, State};
 use tauri_plugin_autostart::ManagerExt;
 
 use crate::settings::{self, Settings};
+use crate::window;
 use crate::AppState;
 
 #[tauri::command]
@@ -30,7 +31,7 @@ pub fn get_settings(state: State<'_, AppState>) -> Settings {
 /// 성공↔실패가 **전환될 때만** `settings-save-error` 를 보내(payload: 오류 문자열
 /// 또는 해제를 뜻하는 null), 드래그처럼 연속 저장되는 경로에서 알림이 쏟아지지
 /// 않게 한다. 설정 창이 이 이벤트를 상단 배너로 표시한다.
-fn save_settings(app: &AppHandle, s: &Settings) {
+pub(crate) fn save_settings(app: &AppHandle, s: &Settings) {
     let err = settings::save(s).err();
     let state = app.state::<AppState>();
     let mut last = state.save_error.lock().unwrap();
@@ -52,7 +53,7 @@ pub fn get_save_error(state: State<'_, AppState>) -> Option<String> {
 /// `settings-changed` 이벤트로 모든 창에 알림. 설정 패널의 단일 진입점.
 #[tauri::command]
 pub fn set_settings(app: AppHandle, state: State<'_, AppState>, mut new_settings: Settings) {
-    let old = state.settings.lock().unwrap().clone();
+    let mut old = state.settings.lock().unwrap().clone();
 
     // petPos는 패널이 편집하지 않음 — 드래그 저장과의 경합 방지를 위해 서버 상태 유지
     new_settings.pet_pos = old.pet_pos;
@@ -61,13 +62,9 @@ pub fn set_settings(app: AppHandle, state: State<'_, AppState>, mut new_settings
     new_settings.weekly_alert_threshold = new_settings.weekly_alert_threshold.clamp(0.1, 1.0);
     new_settings.context_alert_threshold = new_settings.context_alert_threshold.clamp(0.1, 1.0);
     new_settings.speech_duration_ms = new_settings.speech_duration_ms.clamp(1000, 15000);
-    // panelPos·panelSize·settingsSize·studioSize는 패널이 편집하지 않음 — 드래그/리사이즈 저장과의 경합 방지
-    new_settings.panel_pos = old.panel_pos;
-    new_settings.panel_size = old.panel_size;
-    new_settings.settings_size = old.settings_size;
-    new_settings.settings_pos = old.settings_pos;
-    new_settings.studio_size = old.studio_size;
-    new_settings.studio_pos = old.studio_pos;
+    // 창 위치·크기는 설정 화면이 편집하지 않음 — 드래그/리사이즈 저장과의 경합 방지.
+    // 대상 목록은 `window::WINDOWS` 표가 안다 (창이 늘어도 여기는 그대로).
+    window::keep_geometry(&mut old, &mut new_settings);
     new_settings.reset_notify_minutes = new_settings.reset_notify_minutes.min(120);
     // 통화는 아는 값만 받는다 — 설정 파일은 사람이 고치는 JSON 이라 오타가 들어올 수 있고,
     // 모르는 값이면 곱하지 않은 달러로 떨어지는 게 안전하다.
@@ -136,7 +133,7 @@ pub fn set_click_through(app: &AppHandle, on: bool) {
             None
         } else {
             s.click_through = on;
-            save_settings(&app, &s);
+            save_settings(app, &s);
             Some(s.clone())
         }
     };
@@ -333,81 +330,21 @@ pub fn toggle_panel(app: AppHandle) -> bool {
         let _ = panel.hide();
         return false;
     }
-    place_panel(&app, &panel);
+    if let Some(sp) = window::spec("panel") {
+        window::restore(&app, sp, &panel);
+    }
     let _ = panel.show();
     let _ = panel.set_always_on_top(true);
     let _ = panel.set_focus();
     true
 }
 
-/// 저장된 크기·위치로 패널 배치. 위치가 없으면 펫이 있는 모니터의 우하단 근처.
-/// 크기를 먼저 적용해야 기본 위치 계산(우하단 정렬)이 실제 크기를 쓴다.
-fn place_panel(app: &AppHandle, panel: &tauri::WebviewWindow) {
-    let (saved, saved_size) = {
-        let s = app.state::<AppState>();
-        let s = s.settings.lock().unwrap();
-        (s.panel_pos, s.panel_size)
-    };
-    if let Some((w, h)) = saved_size {
-        let _ = panel.set_size(tauri::PhysicalSize::new(w, h));
-    }
-    if let Some((x, y)) = saved.filter(|&(x, y)| position_on_screen(panel, x, y)) {
-        let _ = panel.set_position(PhysicalPosition::new(x, y));
-        return;
-    }
-    let Ok(psize) = panel.outer_size() else { return };
-    let mon = app
-        .get_webview_window("pet")
-        .and_then(|p| p.current_monitor().ok().flatten())
-        .or_else(|| panel.primary_monitor().ok().flatten());
-    if let Some(mon) = mon {
-        let mp = mon.position();
-        let ms = mon.size();
-        let x = mp.x + ms.width as i32 - psize.width as i32 - 24;
-        let y = mp.y + ms.height as i32 - psize.height as i32 - 96;
-        let _ = panel.set_position(PhysicalPosition::new(x, y));
-    }
-}
-
-/// 저장된 좌표가 현재 모니터 어딘가에 걸치는지. 멀티 모니터를 해제하면 예전 좌표가
-/// 화면 밖을 가리켜 창을 영영 못 찾으므로, 복원 전에 이걸로 걸러 기본 배치로 돌린다.
-/// 일부만 걸쳐 있는 건 의도된 배치일 수 있어 통과시킨다 (펫과 같은 규칙).
-pub(crate) fn position_on_screen(win: &tauri::WebviewWindow, x: i32, y: i32) -> bool {
-    let (Ok(size), Ok(monitors)) = (win.outer_size(), win.available_monitors()) else {
-        // 판정 자체가 안 되면 저장값을 믿는 쪽이 덜 놀랍다
-        return true;
-    };
-    let (w, h) = (size.width as i32, size.height as i32);
-    monitors.iter().any(|m| {
-        let (mp, ms) = (m.position(), m.size());
-        x + w > mp.x && x < mp.x + ms.width as i32 && y + h > mp.y && y < mp.y + ms.height as i32
-    })
-}
-
-/// 사용자가 옮긴 자리를 기억한다. `save_window_size` 와 같은 라벨 규칙을 쓴다 —
+/// 사용자가 옮긴 자리를 기억한다. 어느 창인지는 [`window::WINDOWS`] 표가 안다 —
 /// 창마다 커맨드를 따로 두면 새 창이 생길 때마다 둘씩 늘어난다.
 #[tauri::command]
-pub fn save_window_position(app: AppHandle, state: State<'_, AppState>, label: String, x: i32, y: i32) {
-    let mut s = state.settings.lock().unwrap();
-    match label.as_str() {
-        "panel" => s.panel_pos = Some((x, y)),
-        "settings" => s.settings_pos = Some((x, y)),
-        "studio" => s.studio_pos = Some((x, y)),
-        _ => return,
-    }
-    save_settings(&app, &s);
-}
-
-/// 리사이즈를 허용하는 창과 각각의 최소 크기 (논리 px).
-/// 패널은 이보다 작으면 헤더와 페이지 내비게이션이 겹친다.
-/// 설정 창은 본문이 스크롤되므로 헤더·탭이 남을 만큼만 막는다.
-fn resize_target(label: &str) -> Option<(&'static str, f64, f64)> {
-    match label {
-        "panel" => Some(("panel", 260.0, 180.0)),
-        "settings" => Some(("settings", 280.0, 240.0)),
-        // 2열 레이아웃이라 이보다 좁으면 우측 열이 못 산다
-        "studio" => Some(("studio", 460.0, 340.0)),
-        _ => None,
+pub fn save_window_position(app: AppHandle, label: String, x: i32, y: i32) {
+    if let Some(sp) = window::spec(&label) {
+        sp.save_pos(&app, x, y);
     }
 }
 
@@ -420,10 +357,11 @@ fn resize_target(label: &str) -> Option<(&'static str, f64, f64)> {
 /// 커서 물리 좌표로 직접 옮기면 창을 장식 없이 둔 채 여덟 방향 모두 잡을 수 있다.
 #[tauri::command]
 pub fn start_window_resize(app: AppHandle, label: String, dir: String) {
-    let Some((label, min_w, min_h)) = resize_target(&label) else {
+    // 표에 없는 라벨은 리사이즈를 허용하지 않는다 (펫·말풍선)
+    let Some(sp) = window::spec(&label) else {
         return;
     };
-    let Some(win) = app.get_webview_window(label) else {
+    let Some(win) = app.get_webview_window(sp.label) else {
         return;
     };
     let (Ok(cursor), Ok(pos), Ok(size)) = (
@@ -444,7 +382,7 @@ pub fn start_window_resize(app: AppHandle, label: String, dir: String) {
         return;
     }
     *app.state::<AppState>().window_resize.lock().unwrap() = Some(crate::WindowResize {
-        label,
+        label: sp.label,
         cursor: (cursor.x, cursor.y),
         rect: (
             pos.x,
@@ -453,7 +391,7 @@ pub fn start_window_resize(app: AppHandle, label: String, dir: String) {
             pos.y + size.height as i32,
         ),
         edges,
-        min: (min_w, min_h),
+        min: sp.min,
     });
 }
 
@@ -521,25 +459,10 @@ pub fn clear_window_resize(app: &AppHandle, label: &str) {
 }
 
 #[tauri::command]
-pub fn save_window_size(
-    app: AppHandle,
-    state: State<'_, AppState>,
-    label: String,
-    width: u32,
-    height: u32,
-) {
-    // 최소화 등으로 0이 오면 저장하지 않는다 — 다음 실행 때 창이 사라져 보인다
-    if width == 0 || height == 0 {
-        return;
+pub fn save_window_size(app: AppHandle, label: String, width: u32, height: u32) {
+    if let Some(sp) = window::spec(&label) {
+        sp.save_size(&app, width, height);
     }
-    let mut s = state.settings.lock().unwrap();
-    match label.as_str() {
-        "panel" => s.panel_size = Some((width, height)),
-        "settings" => s.settings_size = Some((width, height)),
-        "studio" => s.studio_size = Some((width, height)),
-        _ => return,
-    }
-    save_settings(&app, &s);
 }
 
 #[tauri::command]
@@ -572,7 +495,7 @@ pub fn apply_pet_scale(app: &AppHandle, scale: f64) {
         let state = app.state::<AppState>();
         let mut s = state.settings.lock().unwrap();
         s.pet_scale = scale;
-        save_settings(&app, &s);
+        save_settings(app, &s);
     }
     resize_pet(app, scale);
     use tauri::Emitter;
@@ -930,21 +853,8 @@ pub fn remove_state_image(app: AppHandle, pack: String, state: String) {
 pub fn open_studio(app: AppHandle) {
     let Some(w) = app.get_webview_window("studio") else { return };
     clear_window_resize(&app, "studio");
-    let (saved, saved_pos) = {
-        let state = app.state::<AppState>();
-        let s = state.settings.lock().unwrap();
-        (s.studio_size, s.studio_pos)
-    };
-    if let Some((ww, wh)) = saved {
-        let _ = w.set_size(tauri::PhysicalSize::new(ww, wh));
-    }
-    match saved_pos {
-        Some((x, y)) if position_on_screen(&w, x, y) => {
-            let _ = w.set_position(tauri::PhysicalPosition::new(x, y));
-        }
-        _ => {
-            let _ = w.center();
-        }
+    if let Some(sp) = window::spec("studio") {
+        window::restore(&app, sp, &w);
     }
     let _ = w.show();
     let _ = w.set_focus();
@@ -959,26 +869,9 @@ pub fn open_settings(app: AppHandle, tab: Option<String>) {
     let Some(w) = app.get_webview_window("settings") else { return };
     // 리사이즈 도중 ✕/Esc 로 닫혔을 수 있다 — toggle_panel 과 같은 정리
     clear_window_resize(&app, "settings");
-    // 사용자가 조절한 크기 복원 — 우하단 정렬 계산보다 먼저 적용해야
-    // 아래 위치 계산이 실제 크기를 쓴다
-    let (saved_size, saved_pos) = {
-        let state = app.state::<AppState>();
-        let s = state.settings.lock().unwrap();
-        (s.settings_size, s.settings_pos)
-    };
-    if let Some((ww, wh)) = saved_size {
-        let _ = w.set_size(tauri::PhysicalSize::new(ww, wh));
-    }
-    // 옮겨 둔 자리가 있으면 그대로 — 최상단이 아니라 뒤로 갔다가 다시 부르는 일이
-    // 잦은데, 그때마다 우하단으로 튀면 옮겨 둔 의미가 없다 (패널과 같은 규칙)
-    if let Some((x, y)) = saved_pos.filter(|&(x, y)| position_on_screen(&w, x, y)) {
-        let _ = w.set_position(tauri::PhysicalPosition::new(x, y));
-    } else if let (Ok(Some(mon)), Ok(size)) = (w.primary_monitor(), w.outer_size()) {
-        let mp = mon.position();
-        let ms = mon.size();
-        let x = mp.x + ms.width as i32 - size.width as i32 - 16;
-        let y = mp.y + ms.height as i32 - size.height as i32 - 80;
-        let _ = w.set_position(tauri::PhysicalPosition::new(x, y));
+    // 크기·자리 복원은 세 창이 같은 규칙을 쓴다 (`window::restore`)
+    if let Some(sp) = window::spec("settings") {
+        window::restore(&app, sp, &w);
     }
     let _ = w.show();
     let _ = w.set_focus();

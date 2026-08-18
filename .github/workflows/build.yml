@@ -27,6 +27,9 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm build
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          # 기본 프로필에는 clippy 가 없다 — 아래 린트 스텝이 쓰므로 명시한다
+          components: clippy
       - uses: swatinem/rust-cache@v2
       # `--workspace` 는 src-tauri 크레이트까지 컴파일하므로 리눅스에서는 Tauri 시스템
       # 의존성이 필요하다. 목록은 README 개발 안내와 같다.
@@ -40,6 +43,9 @@ jobs:
       # 덤으로 token-chan 크레이트의 리눅스 컴파일도 여기서만 검증된다
       # (번들 매트릭스는 windows/macOS 뿐) — cfg 분기 실수를 잡아 준다.
       - run: cargo test --workspace
+      # 경고를 오류로 올린다. 한 번 쌓이기 시작하면 아무도 안 읽어서, 0 을 유지하는
+      # 것만이 신호로 남는 유일한 방법이다. `--all-targets` 는 테스트·예제까지 본다.
+      - run: cargo clippy --workspace --all-targets -- -D warnings
 
   # 번들은 **릴리스용**이다. 매 푸시마다 돌리면 차감의 98% 를 여기서 쓴다
   # (실측 1회: windows 6분×2배 + macOS 3분×10배 ≈ 46분).
