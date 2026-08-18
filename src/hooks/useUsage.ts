@@ -1,7 +1,12 @@
 import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { DEFAULT_CURRENCY, type Currency } from "../format";
+import {
+  DEFAULT_CURRENCY,
+  DEFAULT_THRESHOLDS,
+  type AlertThresholds,
+  type Currency,
+} from "../format";
 import type { AppSettings, LiveState, PlanUsage, Source, Summary } from "../types";
 
 /**
@@ -28,6 +33,36 @@ export function useCurrency(): Currency {
     };
   }, []);
   return cur;
+}
+
+/**
+ * 위험 한도 구독 — 알림 탭에서 바꾸면 게이지·패널 색이 즉시 따라간다.
+ *
+ * 설정은 0..1 로 저장되고 미터는 % 로 오므로 여기서 한 번만 환산한다.
+ * 0 은 "설정 안 됨"이 아니라 "항상 위험"이 되므로 기본값으로 되돌린다.
+ */
+export function useThresholds(): AlertThresholds {
+  const [t, setT] = useState<AlertThresholds>(DEFAULT_THRESHOLDS);
+  useEffect(() => {
+    let alive = true;
+    const pct = (v: number | undefined, fallback: number) =>
+      v && v > 0 ? Math.round(v * 100) : fallback;
+    const apply = (s: AppSettings | null) => {
+      if (!alive || !s) return;
+      setT({
+        session: pct(s.alertThreshold, DEFAULT_THRESHOLDS.session),
+        weekly: pct(s.weeklyAlertThreshold, DEFAULT_THRESHOLDS.weekly),
+        context: pct(s.contextAlertThreshold, DEFAULT_THRESHOLDS.context),
+      });
+    };
+    invoke<AppSettings>("get_settings").then(apply).catch(() => {});
+    const un = listen<AppSettings>("settings-changed", (e) => apply(e.payload));
+    return () => {
+      alive = false;
+      un.then((f) => f());
+    };
+  }, []);
+  return t;
 }
 
 /** 요약 데이터 구독: 초기 invoke + usage-updated 이벤트 */
