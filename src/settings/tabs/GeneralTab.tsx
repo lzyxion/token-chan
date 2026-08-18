@@ -1,6 +1,5 @@
-import { useEffect } from "react";
 import type { Account, AppSettings, GaugeSide } from "../../types";
-import { SOURCE_LABEL, SOURCES } from "../../format";
+import { enabledSources, SOURCE_LABEL, SOURCES } from "../../format";
 import type { TabProps } from "./types";
 
 interface Props extends TabProps {
@@ -14,20 +13,10 @@ interface Props extends TabProps {
  *  알림 탭 블록이 끼어 있었다. 동작은 맞지만 뒤쪽 조각은 찾지 못한다 — 탭 하나가
  *  파일 하나면 그 종류의 사고가 아예 생기지 않는다. */
 export default function GeneralTab({ s, update, accounts }: Props) {
-  // 계정을 꺼 둔 벤더는 스캔 자체를 안 하므로 게이지에 실을 게 없다 — 목록에서 뺀다.
-  // 아직 계정을 못 읽었으면(null) 전부 보여준다: 로딩 한순간에 항목이 사라졌다가
-  // 다시 나타나는 게 더 놀랍다.
-  const pickable = accounts
-    ? SOURCES.filter((src) => accounts.some((a) => a.source === src && a.enabled))
-    : SOURCES;
-
-  // 고정해 둔 벤더의 계정을 나중에 꺼 버렸다면 자동으로 되돌린다. 그대로 두면
-  // 게이지가 빈 링만 그리는데, 화면에는 이유가 어디에도 안 적힌다.
-  useEffect(() => {
-    const pinned = s.gaugeVendor;
-    if (!accounts || !pinned || pinned === "auto") return;
-    if (!pickable.includes(pinned)) update({ gaugeVendor: "auto" });
-  }, [accounts, s.gaugeVendor]);
+  // 계정을 꺼 둔 벤더는 게이지에 실을 게 없다 — 목록에서 뺀다.
+  // 고정해 둔 벤더가 꺼졌을 때 "자동" 으로 되돌리는 건 백엔드가 한다
+  // (`set_account_enabled`) — 이 탭이 열려 있지 않을 때도 성립해야 한다.
+  const pickable = enabledSources(accounts) ?? SOURCES;
 
   return (
     <>

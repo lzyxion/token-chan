@@ -2,12 +2,13 @@ import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import {
+  enabledSources,
   DEFAULT_CURRENCY,
   DEFAULT_THRESHOLDS,
   type AlertThresholds,
   type Currency,
 } from "../format";
-import type { AppSettings, LiveState, PlanUsage, Source, Summary } from "../types";
+import type { Account, AppSettings, LiveState, PlanUsage, Source, Summary } from "../types";
 
 /**
  * 비용 표기 통화 구독 — 설정을 바꾸면 `settings-changed` 로 바로 반영된다.
@@ -62,6 +63,35 @@ export function useThresholds(): AlertThresholds {
     };
   }, []);
   return t;
+}
+
+/**
+ * 켜 둔 계정이 있는 벤더 구독 (null = 아직 모름).
+ *
+ * 펫 창은 계정 목록을 안 들고 있는데 로고 클릭으로 게이지 벤더를 바꾼다. 요약
+ * (`summary.sources`)으로는 대신할 수 없다 — 꺼 둔 벤더나 켜 뒀지만 데이터가 없는
+ * 벤더나 똑같이 `no_data` 로 오기 때문이다.
+ */
+export function useEnabledSources(): Source[] | null {
+  const [srcs, setSrcs] = useState<Source[] | null>(null);
+  useEffect(() => {
+    let alive = true;
+    const load = () => {
+      invoke<Account[]>("get_accounts")
+        .then((a) => {
+          if (alive) setSrcs(enabledSources(a));
+        })
+        .catch(() => {});
+    };
+    load();
+    // 체크를 바꾸거나 다시 검색하면 온다
+    const un = listen("accounts-changed", load);
+    return () => {
+      alive = false;
+      un.then((f) => f());
+    };
+  }, []);
+  return srcs;
 }
 
 /** 요약 데이터 구독: 초기 invoke + usage-updated 이벤트 */
