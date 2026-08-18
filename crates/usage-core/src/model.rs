@@ -14,6 +14,20 @@ pub enum Source {
 }
 
 impl Source {
+    /// 다루는 소스 전부 — 화면·설정이 늘어놓는 순서이기도 하다.
+    /// 목록을 곳곳에 복사해 두면 소스를 늘릴 때 한 곳이 조용히 빠진다.
+    pub const ALL: [Source; 3] = [Source::Claude, Source::Codex, Source::Antigravity];
+
+    /// 설정 파일·IPC 에 실리는 문자열. `Serialize` 와 **같은 값**이어야 한다
+    /// (`rename_all = "lowercase"`) — 프론트가 이 문자열로 벤더를 지목한다.
+    pub fn id(&self) -> &'static str {
+        match self {
+            Source::Claude => "claude",
+            Source::Codex => "codex",
+            Source::Antigravity => "antigravity",
+        }
+    }
+
     pub fn label(&self) -> &'static str {
         match self {
             Source::Claude => "Claude Code",

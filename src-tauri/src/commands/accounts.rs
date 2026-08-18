@@ -38,10 +38,18 @@ pub fn get_accounts(state: State<'_, AppState>) -> Vec<AccountView> {
 /// 계정의 집계 포함 여부를 지정한다. 트레이 체크 항목도 이 함수를 거쳐 한 규칙만 남긴다.
 #[tauri::command]
 pub fn set_account_enabled(app: AppHandle, setting_key: String, enabled: bool) {
+    // 계정 목록을 먼저 복사한다 — settings 와 accounts 두 락을 겹쳐 잡지 않는다
+    let accounts = { app.state::<AppState>().accounts.lock().unwrap().clone() };
     let updated = {
         let state = app.state::<AppState>();
         let mut s = state.settings.lock().unwrap();
         s.accounts_enabled.insert(setting_key, enabled);
+        // 게이지를 그 벤더에 고정해 뒀는데 계정이 다 꺼졌으면 되돌린다. 그대로 두면
+        // 게이지가 빈 링만 그리는데 화면 어디에도 이유가 없고, 설정 창의 선택 목록과
+        // 저장된 값도 어긋난다. 설정 창이 닫혀 있어도 성립해야 해서 여기서 한다.
+        if !gauge_vendor_is_live(&s.gauge_vendor, &accounts, &s.accounts_enabled) {
+            s.gauge_vendor = "auto".into();
+        }
         save_settings(&app, &s);
         s.clone()
     };
@@ -50,6 +58,21 @@ pub fn set_account_enabled(app: AppHandle, setting_key: String, enabled: bool) {
     let _ = app.emit("settings-changed", &updated);
     // 계정 목록 자체는 안 바뀌었지만 체크 상태가 바뀌었으므로 탭도 다시 그린다
     let _ = app.emit("accounts-changed", ());
+}
+
+/// 고정해 둔 게이지 벤더에 **켜 둔 계정이 아직 있는지**. `"auto"` 는 고정이 아니라 항상 참.
+/// 모르는 문자열도 참으로 둔다 — 판정이 안 되는 값을 이유로 사용자 설정을 지우지 않는다.
+fn gauge_vendor_is_live(
+    pinned: &str,
+    accounts: &[usage_core::accounts::Account],
+    overrides: &std::collections::HashMap<String, bool>,
+) -> bool {
+    let Some(src) = usage_core::Source::ALL.into_iter().find(|s| s.id() == pinned) else {
+        return true;
+    };
+    accounts
+        .iter()
+        .any(|a| a.source == src && crate::monitor::account_enabled(a, overrides))
 }
 
 /// 설정에 저장된 소스별 추가 홈 목록을 고른다. 세 군데(추가·제거·표시)가 같은 분기를
@@ -127,4 +150,55 @@ pub fn rescan_accounts(app: AppHandle) {
         use tauri::Emitter;
         let _ = app.emit("accounts-changed", ());
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashMap;
+    use usage_core::accounts::Account;
+    use usage_core::Source;
+
+    fn account(source: Source, standard: bool) -> Account {
+        Account {
+            source,
+            key: "k".into(),
+            label: "a@b.c".into(),
+            detail: String::new(),
+            plan: String::new(),
+            installs: vec![],
+            standard,
+        }
+    }
+
+    /// 고정한 벤더의 계정이 살아 있으면 그대로 둔다
+    #[test]
+    fn pinned_vendor_with_a_live_account_survives() {
+        let accounts = [account(Source::Codex, true)];
+        assert!(gauge_vendor_is_live("codex", &accounts, &HashMap::new()));
+    }
+
+    /// 사용자가 체크를 풀면(override=false) 고정이 풀려야 한다
+    #[test]
+    fn pinned_vendor_dies_when_its_only_account_is_switched_off() {
+        let accounts = [account(Source::Codex, true)];
+        let off = HashMap::from([(accounts[0].setting_key(), false)]);
+        assert!(!gauge_vendor_is_live("codex", &accounts, &off));
+    }
+
+    /// 계정이 아예 없는 벤더에 고정된 경우도 풀린다
+    #[test]
+    fn pinned_vendor_with_no_account_at_all_dies() {
+        let accounts = [account(Source::Claude, true)];
+        assert!(!gauge_vendor_is_live("antigravity", &accounts, &HashMap::new()));
+    }
+
+    /// "auto" 와 모르는 문자열은 건드리지 않는다 — 판정이 안 되는 값을 이유로
+    /// 사용자 설정을 지우면, 나중에 벤더가 늘었을 때 조용히 초기화된다
+    #[test]
+    fn auto_and_unknown_values_are_left_alone() {
+        let accounts: [Account; 0] = [];
+        assert!(gauge_vendor_is_live("auto", &accounts, &HashMap::new()));
+        assert!(gauge_vendor_is_live("gemini", &accounts, &HashMap::new()));
+    }
 }

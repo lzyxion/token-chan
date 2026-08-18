@@ -1,8 +1,24 @@
-import type { Source, Totals } from "./types";
+import type { Account, Source, Totals } from "./types";
 
 /** 다루는 소스 전부 — 화면에 늘어놓는 순서이기도 하다 (설정의 홈 목록·게이지 순환).
  *  목록을 화면마다 따로 들면 벤더를 추가할 때 한 곳이 조용히 빠진다. */
 export const SOURCES: Source[] = ["claude", "codex", "antigravity"];
+
+/**
+ * 게이지에 실을 수 있는 벤더 — 켜 둔 계정이 하나라도 있는 소스.
+ *
+ * 꺼 둔 계정의 벤더는 스캔 자체를 안 하므로(`monitor::enabled_roots`) 고를 수는 있어도
+ * 게이지가 빈 링만 그린다. `accounts` 가 아직 없으면(null) 판단을 미루고 null 을
+ * 돌려준다 — 호출부가 "전부 보여주기" 로 떨어지게 해서, 로딩 한순간에 항목이
+ * 사라졌다 나타나는 깜빡임을 막는다.
+ *
+ * 포함 여부(`Account.enabled`)는 백엔드가 규칙을 풀어서 준 값이다. 여기서 다시
+ * 계산하지 않는다 — 두 곳이 어긋나면 화면과 스캔 대상이 갈린다.
+ */
+export function enabledSources(accounts: Account[] | null): Source[] | null {
+  if (!accounts) return null;
+  return SOURCES.filter((src) => accounts.some((a) => a.source === src && a.enabled));
+}
 
 /** 소스 id → 화면 표기. 패널·설정·대사가 같은 이름을 써야 벤더를 헷갈리지 않는다. */
 export const SOURCE_LABEL: Record<Source, string> = {
