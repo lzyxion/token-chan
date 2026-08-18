@@ -50,8 +50,7 @@ export function useThresholds(): AlertThresholds {
     const apply = (s: AppSettings | null) => {
       if (!alive || !s) return;
       setT({
-        session: pct(s.alertThreshold, DEFAULT_THRESHOLDS.session),
-        weekly: pct(s.weeklyAlertThreshold, DEFAULT_THRESHOLDS.weekly),
+        plan: pct(s.alertThreshold, DEFAULT_THRESHOLDS.plan),
         context: pct(s.contextAlertThreshold, DEFAULT_THRESHOLDS.context),
       });
     };
