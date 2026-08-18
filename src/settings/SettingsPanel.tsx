@@ -199,7 +199,7 @@ export default function SettingsPanel() {
           />
         )}
 
-        {tab === "general" && <GeneralTab s={s} update={update} />}
+        {tab === "general" && <GeneralTab s={s} update={update} accounts={accounts} />}
 
         {tab === "alerts" && <AlertsTab s={s} update={update} />}
 
