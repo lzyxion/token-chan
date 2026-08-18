@@ -95,7 +95,8 @@ pub fn set_settings(app: AppHandle, state: State<'_, AppState>, mut new_settings
 /// 게이지 벤더 전환 — 펫의 로고 클릭용 빠른 경로 (설정 창을 안 거친다)
 #[tauri::command]
 pub fn set_gauge_vendor(app: AppHandle, vendor: String) {
-    if !["auto", "claude", "codex", "antigravity"].contains(&vendor.as_str()) {
+    // 아는 값만 받는다 — 목록은 `Source::ALL` 이 갖는다
+    if vendor != "auto" && !usage_core::Source::ALL.iter().any(|s| s.id() == vendor) {
         return;
     }
     let updated = {

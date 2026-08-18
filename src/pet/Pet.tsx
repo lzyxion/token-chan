@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { useCurrency, useLive, usePlans, useSummary } from "../hooks/useUsage";
+import { useCurrency, useEnabledSources, useLive, usePlans, useSummary } from "../hooks/useUsage";
 import { useActiveVendor } from "../hooks/useActiveVendor";
 import VendorIcon from "../components/VendorIcon";
 import {
@@ -80,6 +80,7 @@ function resolvePack(
 
 export default function Pet() {
   const live = useLive();
+  const pickableSources = useEnabledSources();
   const summary = useSummary();
   const plans = usePlans();
   const currency = useCurrency();
@@ -684,8 +685,9 @@ export default function Pet() {
   };
 
   // 로고 클릭 = 벤더 순환 (자동 → Claude → Codex → Antigravity → 자동).
-  // 설정 창을 열지 않고 게이지가 보는 벤더를 바꾼다.
-  const VENDOR_CYCLE: ("auto" | Source)[] = ["auto", ...SOURCES];
+  // 설정 창을 열지 않고 게이지가 보는 벤더를 바꾼다. 계정을 꺼 둔 벤더는 건너뛴다 —
+  // 고정해 봐야 빈 링만 남고, 설정 창의 목록과도 어긋난다.
+  const VENDOR_CYCLE: ("auto" | Source)[] = ["auto", ...(pickableSources ?? SOURCES)];
   const cycleVendor = () => {
     const i = VENDOR_CYCLE.indexOf(gaugeVendor);
     const next = VENDOR_CYCLE[(i + 1) % VENDOR_CYCLE.length];
