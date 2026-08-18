@@ -18,7 +18,7 @@
   border: 1px solid rgba(255, 255, 255, 0.09);
   border-radius: 14px;
   padding: 10px 14px 8px;
-  color: #e8eaf0;
+  color: var(--fg);
   font-size: 11.5px;
   /* 그림자는 창 안(.panel-root 패딩 8px)에 다 들어와야 한다. 넘치면 투명 창
      경계에서 뚝 잘려 카드 둘레에 네모난 얼룩으로 남는다 →
@@ -31,7 +31,7 @@
 
 .loading {
   margin: auto;
-  color: #8a93a5;
+  color: var(--fg-dim);
 }
 
 /* ── 헤더 (드래그 핸들 겸용) ── */
@@ -50,7 +50,7 @@
   font-size: 12.5px;
 }
 .date {
-  color: #8a93a5;
+  color: var(--fg-dim);
   font-size: 10px;
 }
 
@@ -61,7 +61,7 @@
   right: 8px;
   background: none;
   border: none;
-  color: #8a93a5;
+  color: var(--fg-dim);
   font-size: 13px;
   line-height: 1;
   cursor: pointer;
@@ -70,7 +70,7 @@
 }
 .panel-close:hover {
   background: rgba(255, 255, 255, 0.08);
-  color: #e8eaf0;
+  color: var(--fg);
 }
 
 /* 창을 줄이면 잘리는 대신 스크롤된다 (휠은 UsagePanel 의 onWheel 이 중재) */
@@ -115,7 +115,7 @@
   background: rgba(255, 255, 255, 0.04);
 }
 .total-label {
-  color: #8a93a5;
+  color: var(--fg-dim);
   font-size: 9.5px;
   flex: none;
 }
@@ -126,7 +126,7 @@
 }
 .total-cost {
   margin-left: auto;
-  color: #ffd479;
+  color: var(--accent);
   font-weight: 700;
   font-size: 10.5px;
   white-space: nowrap;
@@ -134,7 +134,7 @@
 /* 비용은 헤더가 아니라 토큰 총합 바로 옆 — 둘이 같은 것(오늘 사용량)을 말한다 */
 .grand-mini {
   width: 100%;
-  color: #8a93a5;
+  color: var(--fg-dim);
   font-size: 10px;
 }
 
@@ -145,7 +145,7 @@
   gap: 5px;
 }
 .chart-title {
-  color: #8a93a5;
+  color: var(--fg-dim);
   font-size: 9.5px;
 }
 
@@ -190,12 +190,12 @@
   background: rgba(53, 208, 127, 0.72);
 }
 .grass-cell.lv4 {
-  background: #35d07f;
+  background: var(--grass);
 }
 .grass-legend {
   display: flex;
   align-items: center;
-  color: #6c7488;
+  color: var(--fg-faint);
   font-size: 9px;
 }
 .grass-scale {
@@ -281,7 +281,7 @@
 }
 .weekbar-label {
   text-align: center;
-  color: #6c7488;
+  color: var(--fg-faint);
   font-size: 8.5px;
 }
 
@@ -305,24 +305,26 @@
   height: 100%;
   border-radius: 3px;
 }
-/* 게이지 색상은 펫 발밑 링(ringColor)과 동일 기준 */
+/* 소진율 3단계. 캐릭터 옆 게이지와 **같은 토큰**을 쓴다 — 경계값도 한 곳이다
+   (`format.ts` meterLevel). 색만 맞추고 경계가 갈리면 같은 사용률이 두 화면에서
+   다른 색으로 보인다. */
 .bar-fill.meter.ok {
-  background: #35d07f;
+  background: var(--ok);
 }
 .bar-fill.meter.warn {
-  background: #ffb45e;
+  background: var(--warn);
 }
 .bar-fill.meter.danger {
-  background: #ff5d47;
+  background: var(--danger);
 }
 .plan-pct.ok {
-  color: #35d07f;
+  color: var(--ok);
 }
 .plan-pct.warn {
-  color: #ffb45e;
+  color: var(--warn);
 }
 .plan-pct.danger {
-  color: #ff5d47;
+  color: var(--danger);
 }
 
 /* ── 벤더 ── */
@@ -354,7 +356,7 @@
   gap: 7px;
 }
 .vendor-model {
-  color: #8a93a5;
+  color: var(--fg-dim);
   font-size: 9.5px;
   /* 벤더 이름이 길어지면(Antigravity) 머리줄이 밀린다 — 가장 덜 중요한 모델명이
      먼저 줄어들게 해서 오늘 사용량이 잘려 나가지 않게 한다 */
@@ -403,12 +405,12 @@
   gap: 6px;
 }
 .vendor-key {
-  color: #8a93a5;
+  color: var(--fg-dim);
   font-size: 9.5px;
 }
 /* 리셋까지 남은 시간. 컨텍스트 행은 리셋이 없어 빈칸이지만 열은 유지된다 */
 .vendor-reset {
-  color: #6c7488;
+  color: var(--fg-faint);
   font-size: 9px;
   text-align: right;
   white-space: nowrap;
@@ -424,16 +426,16 @@
 /* 오늘 사용량 — 머리줄 오른쪽 끝. 카드에서 별도 줄을 없애 벤더 3개가 스크롤 없이 들어간다 */
 .vendor-today {
   margin-left: auto;
-  color: #8a93a5;
+  color: var(--fg-dim);
   font-size: 9.5px;
   white-space: nowrap;
 }
 .vendor-today b {
-  color: #e8eaf0;
+  color: var(--fg);
   font-weight: 700;
 }
 .source-label {
-  color: #c6ccd8;
+  color: var(--fg-soft);
 }
 .chip {
   margin-left: auto;
@@ -443,25 +445,25 @@
 }
 .chip.muted {
   background: rgba(255, 255, 255, 0.08);
-  color: #8a93a5;
+  color: var(--fg-dim);
 }
 .chip.warn {
   background: rgba(255, 180, 94, 0.16);
-  color: #ffb45e;
+  color: var(--warn);
 }
 
 
 /* ── 모델·세션 ── */
 
 .active-model {
-  color: #8a93a5;
+  color: var(--fg-dim);
   font-size: 10.5px;
 }
 .active-model b {
   color: #63b3e4;
 }
 .empty-hint {
-  color: #8a93a5;
+  color: var(--fg-dim);
   font-size: 10.5px;
   text-align: center;
   padding: 10px 0;
@@ -470,7 +472,7 @@
 
 .setup-hint {
   font-size: 9.5px;
-  color: #ffb45e;
+  color: var(--warn);
   background: rgba(255, 180, 94, 0.12);
   border-radius: 7px;
   padding: 4px 7px;
@@ -488,7 +490,7 @@
 .nav-btn {
   background: rgba(255, 255, 255, 0.08);
   border: 1px solid rgba(255, 255, 255, 0.12);
-  color: #c6ccd8;
+  color: var(--fg-soft);
   border-radius: 7px;
   padding: 1px 9px;
   font-size: 9.5px;
@@ -512,7 +514,7 @@
   padding: 0;
 }
 .dot-btn.on {
-  background: #ffd479;
+  background: var(--accent);
 }
 
 /* ── 최근 세션 (로그) ──
@@ -541,7 +543,7 @@
 }
 .session-label {
   grid-area: label;
-  color: #e8eaf0;
+  color: var(--fg);
   font-size: 10.5px;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -549,13 +551,13 @@
 }
 .session-ago {
   grid-area: ago;
-  color: #8a93a5;
+  color: var(--fg-dim);
   font-size: 9px;
   white-space: nowrap;
 }
 .session-meta {
   grid-area: meta;
-  color: #6c7488;
+  color: var(--fg-faint);
   font-size: 9px;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -563,7 +565,7 @@
 }
 .session-tokens {
   grid-area: tokens;
-  color: #8a93a5;
+  color: var(--fg-dim);
   font-size: 9px;
   text-align: right;
   white-space: nowrap;
@@ -617,7 +619,7 @@
   display: flex;
   flex-wrap: wrap;
   gap: 3px 10px;
-  color: #8a93a5;
+  color: var(--fg-dim);
   font-size: 9px;
 }
 .mix-item {
@@ -626,7 +628,7 @@
   gap: 4px;
 }
 .mix-item b {
-  color: #c6ccd8;
+  color: var(--fg-soft);
   font-weight: 700;
 }
 .mix-dot {

@@ -1,5 +1,9 @@
 import type { Source, Totals } from "./types";
 
+/** 다루는 소스 전부 — 화면에 늘어놓는 순서이기도 하다 (설정의 홈 목록·게이지 순환).
+ *  목록을 화면마다 따로 들면 벤더를 추가할 때 한 곳이 조용히 빠진다. */
+export const SOURCES: Source[] = ["claude", "codex", "antigravity"];
+
 /** 소스 id → 화면 표기. 패널·설정·대사가 같은 이름을 써야 벤더를 헷갈리지 않는다. */
 export const SOURCE_LABEL: Record<Source, string> = {
   claude: "Claude",
@@ -15,6 +19,33 @@ export const SOURCE_SHORT: Record<Source, string> = {
   ...SOURCE_LABEL,
   antigravity: "AGY",
 };
+
+/** 소진율 위험 단계 — CSS 클래스(`.meter.ok` 등)와 이름이 같다 */
+export type MeterLevel = "ok" | "warn" | "danger";
+
+/** 위험 단계 경계 (%). 캐릭터 옆 게이지와 사용량 패널이 **같은 값**을 써야 한다 —
+ *  색만 맞추고 경계가 갈리면 같은 사용률이 두 화면에서 다른 색으로 보인다. */
+export const METER_WARN_PCT = 60;
+export const METER_DANGER_PCT = 85;
+
+/** 소진율(%) → 위험 단계 */
+export function meterLevel(pct: number): MeterLevel {
+  if (pct >= METER_DANGER_PCT) return "danger";
+  if (pct >= METER_WARN_PCT) return "warn";
+  return "ok";
+}
+
+/**
+ * 소진율(%) → 색. 값이 아니라 **CSS 변수 참조**를 돌려준다 (`styles.css` `:root`).
+ *
+ * 게이지는 `conic-gradient` 를 인라인 style 로 그려야 해서 JS 가 색을 넘겨야 하는데,
+ * 여기서 hex 를 들고 있으면 같은 색이 CSS 와 TS 두 곳에 적힌다 — 실제로 그랬고,
+ * 주석으로 "같은 기준"이라고 약속해 두는 방식이었다. `var()` 를 넘기면 정의는
+ * CSS 한 곳에 남고 약속이 코드가 된다.
+ */
+export function meterColor(pct: number): string {
+  return `var(--${meterLevel(pct)})`;
+}
 
 /** 1234567 → "1.2M", 84500 → "84.5K" */
 export function fmtTokens(n: number): string {
