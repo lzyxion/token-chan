@@ -7,34 +7,6 @@ export default function AlertsTab({ s, update }: TabProps) {
     <>
         <div className="settings-group">
           <div className="settings-label">
-            위험 한도 · 공식 한도{" "}
-            <b className="warn-b">{Math.round(s.alertThreshold * 100)}%</b>
-          </div>
-          <div className="settings-row">
-            <span className="settings-min">10%</span>
-            <input
-              type="range"
-              min={10}
-              max={100}
-              step={5}
-              value={Math.round(s.alertThreshold * 100)}
-              onChange={(e) =>
-                update({
-                  alertThreshold: parseInt(e.currentTarget.value, 10) / 100,
-                })
-              }
-            />
-            <span className="settings-max">100%</span>
-          </div>
-          <div className="settings-hint">
-            5시간·주간·월간을 가리지 않고 공식 한도 미터 전부에 적용됩니다. 넘으면
-            펫이 경고 상태가 되고, 게이지와 패널 막대도 같은 지점에서 빨갛게
-            바뀝니다 (그 앞 구간, 한도의 75%부터는 노랑)
-          </div>
-        </div>
-
-        <div className="settings-group">
-          <div className="settings-label">
             위험 한도 · 컨텍스트{" "}
             <b className="warn-b">
               {Math.round((s.contextAlertThreshold ?? 0.9) * 100)}%
@@ -58,8 +30,33 @@ export default function AlertsTab({ s, update }: TabProps) {
             <span className="settings-max">100%</span>
           </div>
           <div className="settings-hint">
-            활성 벤더의 컨텍스트가 이만큼 차면 경고 — 곧 압축(compact)되거나
-            창이 바닥난다는 뜻입니다. 컨텍스트 게이지 색도 이 값을 따릅니다
+            활성 벤더의 컨텍스트가 이만큼 차면 경고 — 곧 압축(compact)됩니다
+          </div>
+        </div>
+
+        <div className="settings-group">
+          <div className="settings-label">
+            위험 한도 · 공식 한도{" "}
+            <b className="warn-b">{Math.round(s.alertThreshold * 100)}%</b>
+          </div>
+          <div className="settings-row">
+            <span className="settings-min">10%</span>
+            <input
+              type="range"
+              min={10}
+              max={100}
+              step={5}
+              value={Math.round(s.alertThreshold * 100)}
+              onChange={(e) =>
+                update({
+                  alertThreshold: parseInt(e.currentTarget.value, 10) / 100,
+                })
+              }
+            />
+            <span className="settings-max">100%</span>
+          </div>
+          <div className="settings-hint">
+            5시간·주간·월간에 모두 적용 — 넘으면 펫이 경고하고 게이지도 빨강 (한도의 75%부터 노랑)
           </div>
         </div>
 
