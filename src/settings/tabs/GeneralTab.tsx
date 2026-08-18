@@ -1,13 +1,34 @@
-import type { AppSettings, GaugeSide } from "../../types";
+import { useEffect } from "react";
+import type { Account, AppSettings, GaugeSide } from "../../types";
 import { SOURCE_LABEL, SOURCES } from "../../format";
 import type { TabProps } from "./types";
+
+interface Props extends TabProps {
+  /** 계정 목록 (null = 아직 못 읽음). 게이지에 실을 수 있는 벤더를 여기서 가린다 */
+  accounts: Account[] | null;
+}
 
 /** 일반 — 비용 표기·소진율 게이지·시스템 동작.
  *
  *  예전에는 이 내용이 `{tab === "general" && …}` 두 조각으로 갈려 있었고 그 사이에
  *  알림 탭 블록이 끼어 있었다. 동작은 맞지만 뒤쪽 조각은 찾지 못한다 — 탭 하나가
  *  파일 하나면 그 종류의 사고가 아예 생기지 않는다. */
-export default function GeneralTab({ s, update }: TabProps) {
+export default function GeneralTab({ s, update, accounts }: Props) {
+  // 계정을 꺼 둔 벤더는 스캔 자체를 안 하므로 게이지에 실을 게 없다 — 목록에서 뺀다.
+  // 아직 계정을 못 읽었으면(null) 전부 보여준다: 로딩 한순간에 항목이 사라졌다가
+  // 다시 나타나는 게 더 놀랍다.
+  const pickable = accounts
+    ? SOURCES.filter((src) => accounts.some((a) => a.source === src && a.enabled))
+    : SOURCES;
+
+  // 고정해 둔 벤더의 계정을 나중에 꺼 버렸다면 자동으로 되돌린다. 그대로 두면
+  // 게이지가 빈 링만 그리는데, 화면에는 이유가 어디에도 안 적힌다.
+  useEffect(() => {
+    const pinned = s.gaugeVendor;
+    if (!accounts || !pinned || pinned === "auto") return;
+    if (!pickable.includes(pinned)) update({ gaugeVendor: "auto" });
+  }, [accounts, s.gaugeVendor]);
+
   return (
     <>
         <div className="settings-group">
@@ -93,7 +114,7 @@ export default function GeneralTab({ s, update }: TabProps) {
                 }
               >
                 <option value="auto">자동 (작업 중인 벤더)</option>
-                {SOURCES.map((src) => (
+                {pickable.map((src) => (
                   <option key={src} value={src}>
                     {SOURCE_LABEL[src]} 고정
                   </option>
