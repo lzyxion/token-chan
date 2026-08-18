@@ -46,8 +46,8 @@
       {
         "label": "panel",
         "title": "토큰쨩 사용량",
-        "width": 320,
-        "height": 410,
+        "width": 280,
+        "height": 400,
         "visible": false,
         "transparent": true,
         "decorations": false,
@@ -60,8 +60,8 @@
       {
         "label": "settings",
         "title": "토큰쨩 설정",
-        "width": 320,
-        "height": 650,
+        "width": 280,
+        "height": 560,
         "visible": false,
         "transparent": true,
         "decorations": false,
