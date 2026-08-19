@@ -63,9 +63,14 @@ fn with_extra(auto: Vec<PathBuf>, extra: &[PathBuf], suffix: &[&str]) -> Vec<Pat
 /// | `wsl.exe -l -q` | 30초 |
 /// | `wsl.exe -l -q --running` | 14초 |
 ///
-/// Windows 가 배포판을 깨우려 들기 때문이다. 그래서 두 겹으로 막는다:
-/// **실행 중인 배포판만** 보고(`--running` — 사용량 보자고 남의 WSL 을 깨울 이유가 없다),
-/// 그마저도 [`WSL_PROBE_TIMEOUT`] 안에 안 끝나면 포기한다.
+/// Windows 가 배포판을 깨우려 들기 때문이다. 그래서 세 겹으로 막는다:
+///
+/// 1. **VM 이 이미 떠 있을 때만** 조회한다 ([`wsl_vm_running`]) — `wsl.exe` 는 인자가
+///    무엇이든 실행하는 순간 WSL 서비스를 깨우고, 환경에 따라 배포판까지 딸려 온다.
+///    사용량을 보자고 앱을 켰더니 WSL 이 켜지는 건 사용자가 시키지 않은 일이다.
+///    VM 이 꺼져 있으면 `--running` 의 답도 어차피 "없음" 이라 잃는 것도 없다.
+/// 2. **실행 중인 배포판만** 본다 (`--running` — 사용량 보자고 남의 배포판을 깨울 이유가 없다).
+/// 3. 그마저도 [`WSL_PROBE_TIMEOUT`] 안에 안 끝나면 포기한다.
 ///
 /// 포기한 결과는 캐시하지 **않는다** — 나중에 WSL 을 켜고 "다시 검색" 하면 잡히도록.
 /// 성공한 결과는 캐시하되 [`forget_wsl_guest_homes`] 로 버릴 수 있다.
@@ -74,6 +79,13 @@ fn wsl_guest_homes() -> Vec<PathBuf> {
     let cell = wsl_cache();
     if let Some(cached) = cell.lock().unwrap().as_ref() {
         return cached.clone();
+    }
+
+    // 꺼져 있으면 조회 자체를 하지 않는다. **이 결과는 캐시하지 않는다** — 앱을 켠 뒤에
+    // WSL 을 시작하는 일이 흔하고, 그때 다음 재발견에서 자연히 잡혀야 한다. 검사 비용은
+    // 프로세스 목록 조회 한 번이라 매번 해도 싸다.
+    if !wsl_vm_running() {
+        return vec![];
     }
 
     // 조회가 매달릴 수 있으므로 별도 스레드에 맡기고 기다리는 쪽에 시간 제한을 건다.
@@ -112,6 +124,108 @@ pub fn forget_wsl_guest_homes() {
     {
         *wsl_cache().lock().unwrap() = None;
     }
+}
+
+/// WSL 게스트 경로(`\\wsl.localhost\...`)를 **지금 읽어도 되는지**.
+///
+/// 스캔은 발견 때 정한 루트를 10초마다(라이브는 2초) 다시 읽는데, 그 사이 사용자가
+/// WSL 을 종료했다면 그 파일 접근 하나하나가 배포판을 깨우라는 요청이 된다 — 모듈
+/// 주석의 실측표대로 경로 확인 1회가 `wsl.exe` 호출보다도 비싸다(110초 vs 30초).
+/// 그래서 읽기 전에 이걸 묻고, 꺼져 있으면 그 루트는 이번 회차에서 뺀다.
+///
+/// **캐시는 "꺼짐" 쪽만 한다.** 처음엔 결과를 5초 재사용했는데, 그게 정확히 이 기능을
+/// 무력화했다 (실측):
+///
+/// ```text
+/// 12:10:53  wsl --shutdown        vmmemWSL 사라짐
+///    +2초   라이브 스레드가 캐시된 "켜짐" 을 믿고 WSL 경로를 읽음 → 배포판 부팅
+/// 12:11:03  WSL 부활, 이후 계속 켜진 채    ← 한 번 깨우면 되돌아오지 못한다
+/// ```
+/// (같은 순서를 앱 없이 하면 90초간 꺼진 채였다 — 앱이 깨운 것이 맞았다.)
+///
+/// 두 방향의 낡음은 값이 다르다. **"켜짐"이 낡으면 WSL 을 깨운다**(되돌릴 수 없다).
+/// **"꺼짐"이 낡으면 한 회차 스캔을 거를 뿐이다**(다음 회차에 따라잡는다). 그래서
+/// 켜짐은 캐시하지 않고 매번 확인하며, 꺼짐만 [`WSL_OFF_TTL`] 동안 재사용한다 —
+/// WSL 을 꺼 두고 쓰는 사용자에게 검사가 계속 도는 걸 막는다.
+pub fn wsl_reachable() -> bool {
+    #[cfg(windows)]
+    {
+        static OFF_UNTIL: std::sync::OnceLock<
+            std::sync::Mutex<Option<std::time::Instant>>,
+        > = std::sync::OnceLock::new();
+        let cell = OFF_UNTIL.get_or_init(|| std::sync::Mutex::new(None));
+        let mut until = cell.lock().unwrap();
+        if let Some(t) = *until {
+            if std::time::Instant::now() < t {
+                return false;
+            }
+        }
+        let ok = wsl_vm_running();
+        *until = (!ok).then(|| std::time::Instant::now() + WSL_OFF_TTL);
+        ok
+    }
+    // 윈도우가 아니면 WSL 경로 자체가 없다 — 판단할 것이 없다
+    #[cfg(not(windows))]
+    true
+}
+
+/// 이 경로가 WSL 게스트 안인지. 옛 표기(`\\wsl$\`)도 같이 본다 — 사용자가 설정에
+/// 직접 넣은 추가 홈은 그 형태일 수 있다.
+pub fn is_wsl_path(p: &std::path::Path) -> bool {
+    wsl_distro_of(p).is_some()
+}
+
+/// 이 경로가 어느 WSL 배포판 안인지 (`\\wsl.localhost\Ubuntu-24.04\home\me` → `Ubuntu-24.04`).
+/// WSL 경로가 아니면 `None` — 그래서 [`is_wsl_path`] 가 이걸 그대로 쓴다.
+///
+/// 이름을 뽑는 이유는 화면 때문이다. 계정 목록에서 "WSL: Ubuntu-24.04" 처럼 **어디에
+/// 사는 계정인지** 밝혀야, 그 계정을 켜는 것이 무슨 뜻인지 사용자가 알 수 있다.
+pub fn wsl_distro_of(p: &std::path::Path) -> Option<String> {
+    let s = p.to_string_lossy().replace('/', "\\");
+    let lower = s.to_ascii_lowercase();
+    let rest = [r"\\wsl.localhost\", r"\\wsl$\"]
+        .into_iter()
+        .find_map(|pre| lower.starts_with(pre).then(|| &s[pre.len()..]))?;
+    let name = rest.split('\\').next().unwrap_or_default();
+    (!name.is_empty()).then(|| name.to_string())
+}
+
+/// "WSL 꺼짐" 판정을 재사용하는 시간. 이 방향의 낡음은 스캔 한 회차를 거르게 할 뿐이라
+/// 안전하다 — 반대 방향("켜짐")은 캐시하지 않는다 ([`wsl_reachable`] 주석 참고).
+/// 검사 비용은 `tasklist` 한 번(실측 ~45ms)이고, WSL 루트가 있는 사용자에게만 든다.
+#[cfg(windows)]
+const WSL_OFF_TTL: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// WSL **가상 머신이 지금 떠 있는지**. 프로세스 목록 조회는 WSL 을 깨우지 않는다 —
+/// 이 검사가 `wsl.exe` 대신 존재하는 이유가 그것이다.
+///
+/// **서비스 상태를 보면 안 된다.** 처음엔 `sc query WSLService` 를 썼는데 그 서비스는
+/// 시작 유형이 `AUTO_START` 라 부팅과 함께 뜨고 정지 트리거도 없다 — 실측: 부팅 14초
+/// 뒤에 떠서 20시간째 `RUNNING`. `wsl --shutdown` 은 VM 만 끄고 서비스는 건드리지
+/// 않으므로, 그 값은 "WSL 이 켜져 있다"가 아니라 **사실상 상수**다. 그걸 신호로 쓰면
+/// 게이트가 늘 열려 있다.
+///
+/// 그래서 **`vmmemWSL` 하나만** 본다 — WSL VM 의 메모리 프로세스라, 이게 있으면 VM 이
+/// 떠 있고 없으면 꺼져 있다. 확장자 없는 이름이다.
+///
+/// **맨 `vmmem` 은 일부러 안 본다.** 그 이름은 Hyper-V 기반 VM 이 다 같이 쓴다 —
+/// Docker Desktop(Hyper-V 백엔드)·Windows Sandbox·안드로이드 에뮬레이터가 떠 있으면
+/// WSL 이 꺼져 있어도 참이 되고, 그러면 게이트가 열려 WSL 경로를 읽어 깨우게 된다.
+/// WSL2 가 아직 `vmmem` 이던 옛 빌드에서는 이 판정이 늘 거짓이라 WSL 안의 사용량이
+/// 안 잡힌다 — 화면에 "데이터 없음" 으로 보이므로 조용히 틀리지는 않는다.
+#[cfg(windows)]
+fn wsl_vm_running() -> bool {
+    use std::os::windows::process::CommandExt;
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
+    std::process::Command::new("tasklist.exe")
+        .args(["/FI", "IMAGENAME eq vmmemWSL", "/NH"])
+        .creation_flags(CREATE_NO_WINDOW)
+        .output()
+        // 없으면 "INFO: No tasks are running..." 이 온다 — 이미지 이름 자체를 찾는다
+        .is_ok_and(|out| {
+            String::from_utf8_lossy(&out.stdout).to_ascii_lowercase().contains("vmmemwsl")
+        })
 }
 
 #[cfg(windows)]
@@ -272,6 +386,50 @@ pub fn is_windows_mount(p: &Path) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 배포판 이름은 화면에 그대로 나가고(계정 배지), 기본 켜짐/꺼짐 판정도 이걸 쓴다.
+    #[test]
+    fn wsl_distro_name_is_extracted() {
+        let cases = [
+            (r"\\wsl.localhost\Ubuntu-24.04\home\me", Some("Ubuntu-24.04")),
+            (r"\\wsl$\Debian\root", Some("Debian")),
+            (r"\\WSL.LOCALHOST\Ubuntu\home\me\.claude", Some("Ubuntu")),
+            (r"C:\Users\me\.claude", None),
+            // 배포판 이름이 없는 껍데기 경로 — 여기서 빈 이름을 내보내면 배지가 "WSL: " 이 된다
+            (r"\\wsl.localhost\", None),
+        ];
+        for (p, want) in cases {
+            assert_eq!(
+                wsl_distro_of(std::path::Path::new(p)).as_deref(),
+                want,
+                "{p}"
+            );
+        }
+    }
+
+    /// WSL 게스트 경로 판정 — 이 판정이 틀리면 두 방향으로 다 나쁘다.
+    /// 못 알아보면 WSL 이 꺼진 뒤에도 스캔이 그 경로를 읽어 배포판을 깨우고,
+    /// 로컬 경로를 WSL 로 오인하면 멀쩡한 루트가 통째로 빠진다.
+    #[test]
+    fn wsl_paths_are_recognized_in_both_spellings() {
+        let wsl = [
+            r"\\wsl.localhost\Ubuntu\home\me",
+            r"\\WSL.LOCALHOST\Ubuntu\root", // 대소문자는 상관없다
+            r"\\wsl$\Ubuntu\home\me",       // 옛 표기 (설정에 직접 넣은 홈)
+        ];
+        for p in wsl {
+            assert!(is_wsl_path(std::path::Path::new(p)), "{p}");
+        }
+
+        let local = [
+            r"C:\Users\me\.claude",
+            r"\\nas\share\wsl.localhost\x", // 다른 UNC 안에 이름만 같은 폴더
+            "/home/me/.claude",
+        ];
+        for p in local {
+            assert!(!is_wsl_path(std::path::Path::new(p)), "{p}");
+        }
+    }
 
     /// Codex 만 환경변수를 보던 예외를 없앤 것에 대한 회귀 방지.
     /// 환경변수를 읽으면 앱을 어떻게 띄웠느냐에 따라 집계 범위가 달라진다.
