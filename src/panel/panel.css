@@ -422,17 +422,20 @@
   font-style: italic;
   opacity: 0.75;
 }
-/* 공식 한도를 안 주는 소스 — 빈칸으로 두면 로딩 중으로 읽힌다 */
-/* 오늘 사용량 — 머리줄 오른쪽 끝. 카드에서 별도 줄을 없애 벤더 3개가 스크롤 없이 들어간다 */
+/* 오늘 비용 — 머리줄 오른쪽 끝. 카드에서 별도 줄을 없애 벤더 3개가 스크롤 없이 들어간다.
+   토큰 수는 컨텍스트 줄 끝(.vendor-reset)으로 내려갔고 여기엔 **돈만** 남는다 —
+   머리줄에서 눈이 먼저 가야 하는 값이라 본문 색으로 띄운다. */
 .vendor-today {
   margin-left: auto;
-  color: var(--fg-dim);
+  color: var(--fg);
+  font-weight: 700;
   font-size: 9.5px;
   white-space: nowrap;
 }
+/* 컨텍스트 줄이 없는 벤더에서만 머리줄에 남는 토큰 수 — 돈보다 한 단계 죽인다 */
 .vendor-today b {
-  color: var(--fg);
-  font-weight: 700;
+  color: var(--fg-dim);
+  font-weight: 400;
 }
 .source-label {
   color: var(--fg-soft);
