@@ -12,8 +12,9 @@
 //! JSONL 이 아니고, `brain/<uuid>/.system_generated/logs/transcript.jsonl` 에는 토큰이
 //! 아예 없다(의미 단위 로그). **대신 거기에 턴 경계가 있다** — [`TurnWatcher`] 참고.
 //!
-//! 쓰는 테이블은 `gen_metadata` 하나뿐 — **요청 1건 = 1행**이고 `data` 가 protobuf blob 이다.
+//! 사용량은 `gen_metadata` 에 있다 — **요청 1건 = 1행**이고 `data` 가 protobuf blob 이다.
 //! 3턴 대화에 14행이 남았다: 에이전트가 한 턴에 툴 호출로 여러 번 요청하기 때문이다.
+//! `steps` 도 읽는다 (대화 제목·작업 위치, 그리고 아래 "시각").
 //!
 //! ## 필드 번호 (`.proto` 미배포 → 번호로 직접 읽는다)
 //!
@@ -24,13 +25,30 @@
 //!     1.4.3   출력 토큰  (= 1.4.9 + 1.4.10, 19행 전부 일치)
 //!     1.4.5   캐시 히트 프롬프트 토큰 (첫 요청엔 필드 자체가 없음 = 캐시 없음)
 //!     1.4.11  요청 id — 19행 모두 고유해 dedup 키로 쓴다
-//!   1.9.4.1  unix 초
+//!   1.9.4.1  unix 초 — **옛 버전에만 있다** (아래 "시각" 참고)
 //!   1.9.10   컨텍스트
 //!     1.9.10.1  현재 컨텍스트 토큰
 //!     1.9.10.3  구성 내역 (System Prompt / Tools / Chat Messages)
 //!     1.9.10.4  컨텍스트 창
 //!   1.19   모델명
+//!   1.20   key/value 목록 (`last_step_index`·`request_id`·`trajectory_id` 등)
 //! ```
+//!
+//! ## 시각 — 두 군데를 본다
+//!
+//! `1.9.4` 는 **사라질 수 있는 필드다.** 실측(2026-08-19, gemini-3.7-flash)에서 agy 가
+//! 이 필드를 아예 안 쓰기 시작했고, 그때 시각이 없다고 행을 버리면 **사용량이 통째로
+//! 0 이 된다** — 값은 멀쩡히 있는데 화면에서는 "안 썼다"로 보인다. 조용한 실패라 실제로
+//! 며칠 지나서야 발견됐다.
+//!
+//! 그래서 시각은 사슬로 찾는다:
+//!
+//! 1. `1.9.4` — 있으면 그 요청의 시각이다 (가장 정확)
+//! 2. `steps` 테이블 — `1.20` 의 `last_step_index` 가 가리키는 행의 `metadata.1`
+//!    (Timestamp {1:초, 2:나노}). 옛 포맷에서 둘을 대조하니 **0~6초** 차이였다
+//!    (스텝은 시작 시각, `1.9.4` 는 응답 시각으로 보인다). 일 단위 집계엔 영향 없다.
+//! 3. 그래도 없으면 **그 대화에서 마지막으로 본 시각**을 물려받는다 (모델명을 물려받는
+//!    것과 같은 규칙). 대화 하나가 통째로 날짜를 잃는 것보다 낫다.
 //!
 //! ## 컨텍스트 — 직접 제공된다
 //!
@@ -239,6 +257,37 @@ fn first_step_meta(conn: &Connection) -> (String, String) {
     (title, workspace)
 }
 
+/// protobuf Timestamp(`{1:초, 2:나노}`) → 시각. `1.9.4` 와 `steps.metadata.1` 이 같은 모양이다.
+fn timestamp_of(t: &Message) -> Option<DateTime<Utc>> {
+    Utc.timestamp_opt(t.varint(1)? as i64, t.u64(2) as u32).single()
+}
+
+/// 스텝 번호 → 그 스텝의 시각.
+///
+/// `gen_metadata` 에 시각이 없는 버전에서 쓰는 대체 출처다. 테이블이나 컬럼이 없으면
+/// 빈 표를 준다 — 스키마가 또 바뀌어도 사용량 집계가 통째로 멈추면 안 된다.
+fn step_times(conn: &Connection) -> HashMap<u64, DateTime<Utc>> {
+    let mut out = HashMap::new();
+    let Ok(mut stmt) = conn.prepare("select idx, metadata from steps order by idx") else {
+        return out;
+    };
+    let Ok(rows) = stmt.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, Vec<u8>>(1)?))) else {
+        return out;
+    };
+    for row in rows.flatten() {
+        let (idx, blob) = row;
+        if let Some(ts) = Message::new(&blob).msg(1).as_ref().and_then(timestamp_of) {
+            out.insert(idx as u64, ts);
+        }
+    }
+    out
+}
+
+/// `1.20` 의 key/value 목록에서 값 하나를 꺼낸다 (`last_step_index` 등).
+fn meta_value<'a>(rec: &Message<'a>, key: &str) -> Option<&'a str> {
+    rec.repeated(20).find(|kv| kv.str(1) == Some(key)).and_then(|kv| kv.str(2))
+}
+
 /// `.db` + `-wal` 의 (mtime, size) 를 합친 변경 감지용 서명
 fn db_stamp(path: &Path) -> Option<(SystemTime, u64, SystemTime, u64)> {
     let m = std::fs::metadata(path).ok()?;
@@ -271,8 +320,13 @@ fn parse_conversation(path: &Path) -> Option<(Vec<ParsedEvent>, RawContext, Opti
     let mut ctx = RawContext { session: session.clone(), ..Default::default() };
     let (title, workspace) = first_step_meta(&conn);
 
+    // gen_metadata 에 시각이 없는 버전을 위한 대체 출처 (모듈 문서 "시각" 참고)
+    let step_at = step_times(&conn);
+
     let mut out = vec![];
     let (mut last_at, mut last_model, mut tokens) = (None, String::new(), 0u64);
+    // 시각을 못 찾은 행이 물려받을 값 — 그 대화에서 마지막으로 본 시각
+    let mut carried_ts: Option<DateTime<Utc>> = None;
     // 대화 끝에 **모델도 사용량도 없이 컨텍스트만 있는 행**이 붙는다 (실측 idx 4:
     // 1.19 없음 / 1.4 전부 0 / 1.9.10.1 = 28,980). 그 행이 컨텍스트 대표가 되므로
     // 모델을 그때그때 읽으면 "미상"으로 떨어진다 → 마지막으로 본 모델을 물려준다.
@@ -284,13 +338,20 @@ fn parse_conversation(path: &Path) -> Option<(Vec<ParsedEvent>, RawContext, Opti
         let Some(rec) = root.msg(1) else { continue };
         let Some(usage) = rec.msg(4) else { continue };
 
-        let Some(ts) = rec.path(&[9, 4]).and_then(|t| {
-            let secs = t.varint(1)?;
-            let nanos = t.u64(2) as u32;
-            Utc.timestamp_opt(secs as i64, nanos).single()
-        }) else {
+        // 시각은 사슬로 찾는다 — 한 곳만 보면 그 필드가 사라진 날 사용량이 통째로 0 이 된다
+        let Some(ts) = rec
+            .path(&[9, 4])
+            .as_ref()
+            .and_then(timestamp_of)
+            .or_else(|| {
+                let i: u64 = meta_value(&rec, "last_step_index")?.parse().ok()?;
+                step_at.get(&i).copied()
+            })
+            .or(carried_ts)
+        else {
             continue;
         };
+        carried_ts = Some(ts);
         if let Some(m) = rec.str(19).filter(|m| !m.is_empty()) {
             known_model = Some(m.to_string());
         }
@@ -657,6 +718,126 @@ mod tests {
         }
         drop(conn);
         (dir, home)
+    }
+
+    /// 2026-08-19 실측 포맷(gemini-3.7-flash): `gen_metadata` 에 **시각이 없고**
+    /// `1.20` 의 `last_step_index` 가 `steps` 행을 가리킨다.
+    fn blob_without_time(r: &Row, step_idx: u64, model: &str) -> Vec<u8> {
+        let mut usage = [field_varint(2, r.input), field_varint(3, r.output)].concat();
+        if r.cached > 0 {
+            usage.extend(field_varint(5, r.cached));
+        }
+        usage.extend(field_bytes(11, r.req_id.as_bytes()));
+
+        // 1.9 에 컨텍스트만 남고 1.9.4(시각)가 통째로 빠진 모양
+        let ctx = [field_varint(1, r.ctx_tokens), field_varint(4, r.window)].concat();
+        let gen9 = field_bytes(10, &ctx);
+
+        let kv = |k: &str, v: &str| {
+            field_bytes(20, &[field_bytes(1, k.as_bytes()), field_bytes(2, v.as_bytes())].concat())
+        };
+        let rec = [
+            field_bytes(4, &usage),
+            field_bytes(9, &gen9),
+            field_bytes(19, model.as_bytes()),
+            kv("request_id", r.req_id),
+            kv("last_step_index", &step_idx.to_string()),
+        ]
+        .concat();
+        field_bytes(1, &rec)
+    }
+
+    /// `steps.metadata` 의 시각 (`1` = Timestamp{1:초, 2:나노})
+    fn step_meta(secs: u64) -> Vec<u8> {
+        field_bytes(1, &[field_varint(1, secs), field_varint(2, 500_000_000)].concat())
+    }
+
+    /// 신형 포맷 홈 — gen_metadata 에 시각이 없고 steps 가 시각을 갖는다.
+    /// `steps` 는 요청 1건마다 2행씩 늘어난다 (실측: gen idx 0·1·2 → step 1·3·5)
+    fn home_new_format(rows: &[Row]) -> (tempfile::TempDir, PathBuf) {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path().join("antigravity-cli");
+        std::fs::create_dir_all(home.join("conversations")).unwrap();
+        let conn =
+            Connection::open(home.join("conversations/b4b753a2-3f11-4304-b079-34864f3917bd.db"))
+                .unwrap();
+        conn.execute(
+            "create table gen_metadata (idx integer primary key, data blob, size integer default 0)",
+            [],
+        )
+        .unwrap();
+        conn.execute("create table steps (idx integer primary key, metadata blob)", []).unwrap();
+        for (i, r) in rows.iter().enumerate() {
+            let step = (i as u64) * 2 + 1;
+            conn.execute(
+                "insert into gen_metadata (idx, data) values (?1, ?2)",
+                rusqlite::params![r.idx, blob_without_time(r, step, "gemini-3.7-flash")],
+            )
+            .unwrap();
+            conn.execute(
+                "insert into steps (idx, metadata) values (?1, ?2)",
+                rusqlite::params![step as i64, step_meta(r.secs)],
+            )
+            .unwrap();
+        }
+        drop(conn);
+        (dir, home)
+    }
+
+    /// 시각 필드(`1.9.4`)가 사라진 버전에서도 사용량이 잡혀야 한다.
+    ///
+    /// 실제로 이걸 놓쳐서 gemini-3.7-flash 사용량이 **통째로 0** 이었다. 값은 멀쩡히
+    /// 있는데 시각이 없다고 행을 버려서, 화면에는 "안 썼다"로 보이는 조용한 실패였다.
+    #[test]
+    fn rows_without_a_timestamp_borrow_it_from_the_step() {
+        let (_d, home) = home_new_format(&sample());
+        let mut a = AntigravityAdapter::new(vec![home]);
+        let out = a.scan(DateTime::UNIX_EPOCH);
+
+        assert_eq!(out.status, SourceStatus::Ok);
+        assert_eq!(out.events.len(), 3, "시각이 없다고 행을 버리면 안 된다");
+        assert_eq!(out.events[0].model, "gemini-3.7-flash");
+        assert_eq!(out.events[0].input, 9167);
+        // steps 가 준 시각이 그대로 실린다 (0.5초는 나노 필드)
+        assert_eq!(out.events[0].ts.timestamp(), sample()[0].secs as i64);
+        assert_eq!(out.events[2].ts.timestamp(), sample()[2].secs as i64);
+    }
+
+    /// steps 까지 없으면 **직전 행의 시각**을 물려받는다 — 대화 하나가 통째로
+    /// 날짜를 잃는 것보다 낫다. 첫 행은 물려받을 값이 없어 빠진다.
+    #[test]
+    fn without_steps_the_time_is_carried_from_the_previous_row() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path().join("antigravity-cli");
+        std::fs::create_dir_all(home.join("conversations")).unwrap();
+        let conn = Connection::open(home.join("conversations/aaa.db")).unwrap();
+        conn.execute(
+            "create table gen_metadata (idx integer primary key, data blob, size integer default 0)",
+            [],
+        )
+        .unwrap();
+        let rows = sample();
+        // 첫 행만 옛 포맷(시각 있음), 나머지는 시각이 없다
+        conn.execute(
+            "insert into gen_metadata (idx, data) values (?1, ?2)",
+            rusqlite::params![rows[0].idx, blob(&rows[0])],
+        )
+        .unwrap();
+        for r in &rows[1..] {
+            conn.execute(
+                "insert into gen_metadata (idx, data) values (?1, ?2)",
+                rusqlite::params![r.idx, blob_without_time(r, 99, "gemini-3.7-flash")],
+            )
+            .unwrap();
+        }
+        drop(conn);
+
+        let mut a = AntigravityAdapter::new(vec![home]);
+        let out = a.scan(DateTime::UNIX_EPOCH);
+        assert_eq!(out.events.len(), 3);
+        // 2·3번째는 첫 행의 시각을 물려받는다
+        assert_eq!(out.events[1].ts, out.events[0].ts);
+        assert_eq!(out.events[2].ts, out.events[0].ts);
     }
 
     fn home_with(rows: &[Row]) -> (tempfile::TempDir, PathBuf) {
