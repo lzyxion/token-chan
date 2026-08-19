@@ -1,4 +1,4 @@
-import type { Account, GaugeStyle, Source, Totals } from "./types";
+import type { Account, GaugeFill, GaugeStyle, Source, Totals } from "./types";
 
 /** 다루는 소스 전부 — 화면에 늘어놓는 순서이기도 하다 (설정의 홈 목록·게이지 순환).
  *  목록을 화면마다 따로 들면 벤더를 추가할 때 한 곳이 조용히 빠진다. */
@@ -7,6 +7,51 @@ export const SOURCES: Source[] = ["claude", "codex", "antigravity"];
 /** 고를 수 있는 게이지 모양 — 백엔드 `settings::GAUGE_STYLES` 와 **같은 목록·같은 순서**.
  *  첫 항목이 기본값이다. */
 export const GAUGE_STYLES: GaugeStyle[] = ["ring", "bar", "orb"];
+
+/** 고를 수 있는 채움 방향 — 백엔드 `settings::GAUGE_FILLS` 와 **같은 목록·같은 순서**.
+ *  첫 항목이 기본값이다. */
+export const GAUGE_FILLS: GaugeFill[] = ["auto", "used", "left"];
+
+/** 모양의 기본 채움 방향 — 링은 사용률(패널 막대와 같은 방향), 바·물방울은 남은 양
+ *  (RPG 체력바의 은유). `auto` 가 가리키는 값이다. */
+export function defaultFill(style: GaugeStyle): Exclude<GaugeFill, "auto"> {
+  return style === "ring" ? "used" : "left";
+}
+
+/** 채움 방향 → 설정 화면 표기 */
+export const GAUGE_FILL_LABEL: Record<GaugeFill, string> = {
+  auto: "기본값",
+  used: "사용량",
+  left: "잔여량",
+};
+
+/** 모르는 값을 `auto` 로 떨어뜨린다 (`gaugeStyleOf` 와 같은 이유) */
+export function gaugeFillOf(v: unknown): GaugeFill {
+  return GAUGE_FILLS.includes(v as GaugeFill) ? (v as GaugeFill) : GAUGE_FILLS[0];
+}
+
+/**
+ * 채움이 **남은 양**을 가리키는가 (아니면 사용률). `pref` 는 설정값(`gaugeFill`)이고,
+ * `auto` 면 모양의 기본값을 따른다 (`defaultFill`).
+ *
+ * 모양마다 기본이 다른 이유는 은유가 다르기 때문이다. 링은 사용률이 찬다 — 패널의
+ * 막대와 같은 방향이라 두 화면이 같은 그림을 준다. 바·물방울은 반대로 남은 양이
+ * 찬다: 가득 = 리셋 직후, 비면 소진. RPG 체력바의 은유이고, 물방울도 "남은 물" 이
+ * 직관적이라 같은 편에 선다.
+ *
+ * `auto` 를 값 하나로 따로 두는 이유는 **사용자가 고른 값을 지키기 위해서**다. 모양을
+ * 바꿀 때마다 방향을 그 모양의 기본으로 되돌리는 방법도 있지만, 그러면 "나는 어떤
+ * 모양이든 사용량으로 본다" 는 선택이 모양을 갈아탈 때마다 지워진다. 따라가야 할
+ * 사람은 `auto` 에 머물고, 정한 사람은 정한 값에 머문다.
+ *
+ * 뒤집을 수 있게 두는 이유: 어느 쪽이 읽히는지는 사람마다 갈리고, 두 방향 다 틀린
+ * 그림이 아니다. 다만 **색은 어느 쪽이든 사용률 기준**이라(`meterLevel`) 가득 찬
+ * 게이지가 빨가면 소진, 초록이면 여유다 — 방향을 잊어도 색이 뜻을 잡아 준다.
+ */
+export function fillsRemaining(style: GaugeStyle, pref: unknown = "auto"): boolean {
+  const p = gaugeFillOf(pref);
+  return (p === "auto" ? defaultFill(style) : p) === "left";
+}
 
 /** 게이지 모양 → 설정 화면 표기 */
 export const GAUGE_STYLE_LABEL: Record<GaugeStyle, string> = {

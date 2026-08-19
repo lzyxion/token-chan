@@ -17,12 +17,27 @@ pub struct CharacterRule {
 ///
 /// - `ring` 도넛 — 각도로 말한다. 채움이 **사용률**
 /// - `bar` RPG HP 바 — 길이로 말한다. 채움이 **남은 양** (링과 반대)
-/// - `orb` 물방울 — 수위로 말한다. 채움이 **사용률** (링과 같은 방향)
+/// - `orb` 물방울 — 수위로 말한다. 채움이 **남은 양** (HP 바와 같은 편)
 ///
 /// 목록을 여기 두는 이유: 예전엔 검증이 `if style != "bar" { "ring" }` 이라 모양을
 /// 하나 늘릴 때마다 조건문을 고쳐야 했고, 빠뜨리면 저장은 되는데 다음 실행에 조용히
 /// 기본 모양으로 되돌아갔다.
 pub const GAUGE_STYLES: [&str; 3] = ["ring", "bar", "orb"];
+
+/// 게이지 채움이 가리키는 것. **첫 항목이 기본값**이다.
+///
+/// - `auto` 모양의 기본을 따른다 (위 목록의 설명대로 링은 사용률, 바·물방울은 남은 양)
+/// - `used` 사용률이 찬다 — 어느 모양이든
+/// - `left` 남은 양이 찬다 — 어느 모양이든
+///
+/// 모양이 방향을 정하게 두면 "물방울은 좋은데 차오르는 쪽이 좋다" 를 표현할 수 없다.
+/// 두 방향 다 틀린 그림이 아니고 어느 쪽이 읽히는지는 사람마다 갈려서 갈라 둔다.
+///
+/// `auto` 를 값 하나로 따로 두는 이유는 **고른 값을 지키기 위해서**다. 모양을 바꿀 때마다
+/// 방향을 그 모양의 기본으로 되돌리는 방법도 있지만, 그러면 "어떤 모양이든 사용량으로
+/// 본다" 는 선택이 모양을 갈아탈 때마다 지워진다. 따라갈 사람은 `auto` 에, 정한 사람은
+/// 정한 값에 머문다. 이 키가 없던 설정 파일이 원래 방향을 유지하는 것도 같은 이유다.
+pub const GAUGE_FILLS: [&str; 3] = ["auto", "used", "left"];
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
@@ -91,6 +106,8 @@ pub struct Settings {
     pub gauge_side: String,
     /// 게이지 모양 — 값은 [`GAUGE_STYLES`] 중 하나
     pub gauge_style: String,
+    /// 게이지 채움 방향 — 값은 [`GAUGE_FILLS`] 중 하나 (`auto` = 모양의 기본)
+    pub gauge_fill: String,
     /// 상황별 사용자 문구 — 키("enter.working"·"poke"·"resetNotify" 등) → 문구 목록.
     /// 비어 있으면 내장 기본 문구. `{변수}` 는 표시 시점에 값으로 치환된다.
     /// 캐릭터별 말투는 여기가 아니라 팩 폴더의 `speech.json` 에 있다 (`pack_speech`).
@@ -162,6 +179,7 @@ impl Default for Settings {
             gauge_labels: false,
             gauge_side: "right".into(),
             gauge_style: "ring".into(),
+            gauge_fill: "auto".into(),
             speech_lines: Default::default(),
             extra_claude_homes: vec![],
             extra_codex_homes: vec![],
@@ -311,6 +329,14 @@ mod tests {
     fn old_show_mini_label_key_migrates() {
         let s: super::Settings = serde_json::from_str(r#"{"showMiniLabel": true}"#).unwrap();
         assert!(s.gauge_labels);
+    }
+
+    /// 채움 방향 설정이 없던 시절의 파일은 `auto` 로 읽혀 **그 모양의 원래 방향**을
+    /// 유지해야 한다 — 한 방향으로 못 박으면 물방울을 쓰던 사람의 게이지가 조용히 뒤집힌다
+    #[test]
+    fn a_file_without_the_fill_key_follows_its_shape() {
+        let s: Settings = serde_json::from_str(r#"{"gaugeStyle": "orb"}"#).unwrap();
+        assert_eq!(s.gauge_fill, "auto");
     }
 
     fn sample() -> Settings {
