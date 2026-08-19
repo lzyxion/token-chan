@@ -9,7 +9,7 @@
 use std::path::PathBuf;
 use std::time::Duration;
 
-use chrono::{Local, Utc};
+use chrono::{DateTime, Local, Utc};
 use tauri::{AppHandle, Emitter, Manager};
 use usage_core::live::read_live_state;
 use usage_core::pricing::PriceTable;
@@ -365,7 +365,13 @@ fn spawn_usage_thread(app: AppHandle) {
                 }
             }
             first = false;
-            let since = Utc::now() - chrono::Duration::days(retention_days as i64);
+            // 0 = 기간 제한 없음. 뺄셈으로 두면 "지금 이후"가 되어 아무것도 안 읽는다 —
+            // 가장 넓은 설정이 가장 좁게 도는 정반대 결과라, 여기서 갈라 준다.
+            let since = if retention_days == 0 {
+                DateTime::<Utc>::UNIX_EPOCH
+            } else {
+                Utc::now() - chrono::Duration::days(retention_days as i64)
+            };
 
             let mut events: Vec<UsageEvent> = vec![];
             let mut statuses = vec![];

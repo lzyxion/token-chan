@@ -139,6 +139,35 @@
 }
 
 /* 차트 묶음 */
+/* 조회 기간 줄 — 통계 탭의 기간 합계와 잔디가 모두 이 값을 따른다.
+   설정 창의 select 와 같은 생김새를 쓰되(같은 조작이라 같아야 한다) 라벨은
+   차트 제목(`.chart-title`)과 맞춘다 — 이 줄이 아래 차트들의 머리말이라서다. */
+.period-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.period-label {
+  color: var(--fg-dim);
+  font-size: 9.5px;
+  flex: none;
+}
+.period-select {
+  flex: 1;
+  min-width: 0;
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--fg);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 8px;
+  padding: 4px 7px;
+  font-size: 11px;
+  outline: none;
+  cursor: pointer;
+}
+.period-select option {
+  background: #1c1f26;
+}
+
 .chart-block {
   display: flex;
   flex-direction: column;
