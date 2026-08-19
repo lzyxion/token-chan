@@ -12,8 +12,8 @@ import type { Source } from "../types";
  * id 가 새어 나가지 않고, 원본 멀티컬러도 그대로 살아난다.
  *
  * 대신 바깥 CSS 가 내부 path 에 닿지 않아 **마크 색은 못 바꾼다** — 파일에 적힌 색이
- * 그대로 나온다. 배경·테두리는 요소 자체 속성이라 CSS 로 줄 수 있어서, 검정 마크
- * (codex 는 원본에 `fill` 이 없어 검정)는 흰 원판을 깔아 어두운 배경에서 살린다.
+ * 그대로 나온다. 그래서 어두운 배경에 맞추는 일은 CSS 가 아니라 **파일 쪽에서** 한다
+ * (codex 마크는 가운데를 뚫어 배경이 비치게 다시 그렸다).
  */
 const files = import.meta.glob("../assets/vendors/*.svg", {
   eager: true,
