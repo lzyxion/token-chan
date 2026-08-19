@@ -79,6 +79,34 @@ export default function AccountTab({ s, accounts, plans, rescanning, setRescanni
                     />
                     <VendorIcon source={a.source} size={14} />
                     <span className="account-name">{a.label}</span>
+                    {/* 배지 순서 = 화면 왼→오. 플랜(티어)을 **맨 마지막**에 두어 모든 줄에서
+                        같은 자리(오른쪽 끝)에 오게 한다 — 줄마다 티어 위치가 들쭉날쭉하면
+                        여러 계정의 플랜을 훑어볼 수 없다. 나머지 배지는 그 왼쪽에 쌓인다. */}
+
+                    {/* 어디에 사는 계정인지 — WSL 일 때만 붙인다. Windows 는 기본값이라
+                        모든 줄에 배지를 달면 소음이 된다. 켜는 것의 대가를 여기서 밝힌다 */}
+                    {a.wsl_distro && (
+                      <span
+                        className="account-badge warn"
+                        title={
+                          `${a.wsl_distro} 안의 계정입니다. 켜면 사용량을 읽으려고 이 배포판의 ` +
+                          `파일을 몇 초마다 열어야 해서, wsl --shutdown 으로 꺼도 곧 다시 켜집니다. ` +
+                          `그래서 기본적으로 집계에서 빠집니다 — WSL 을 잠재워 두려면 꺼 두세요.`
+                        }
+                      >
+                        WSL: {a.wsl_distro}
+                      </span>
+                    )}
+                    {/* 표준 위치에서 안 나온 계정은 오래된 백업일 수 있어 조용히
+                        합산되면 안 된다 — 왜 기본이 꺼짐인지 여기서 알려 준다 */}
+                    {!a.standard && (
+                      <span
+                        className="account-badge warn"
+                        title="표준 위치가 아니라 마커 스캔으로만 발견됐습니다. 오래된 백업일 수 있어 기본적으로 집계에서 빠집니다."
+                      >
+                        스캔으로 발견
+                      </span>
+                    )}
                     {planText && (
                       <span
                         className={`account-badge plan${ambiguous ? " dim" : ""}`}
@@ -92,18 +120,12 @@ export default function AccountTab({ s, accounts, plans, rescanning, setRescanni
                                 : "Antigravity 는 플랜 구분이 없습니다."
                         }
                       >
+                        {/* "?" 는 값이 아니라 **출처에 대한 표시**다 — 이 줄의 계정이
+                            자기 플랜을 못 밝혔고(계정 파일을 못 읽음), 소스 단위 플랜을
+                            빌려 왔는데 그 소스에 계정이 여럿이라 누구 것인지 못 가린다는 뜻.
+                            빌려 온 값을 아무 표시 없이 적으면 그 계정의 플랜이라는 거짓말이 된다. */}
                         {planText}
                         {ambiguous ? " ?" : ""}
-                      </span>
-                    )}
-                    {/* 표준 위치에서 안 나온 계정은 오래된 백업일 수 있어 조용히
-                        합산되면 안 된다 — 왜 기본이 꺼짐인지 여기서 알려 준다 */}
-                    {!a.standard && (
-                      <span
-                        className="account-badge warn"
-                        title="표준 위치가 아니라 마커 스캔으로만 발견됐습니다. 오래된 백업일 수 있어 기본적으로 집계에서 빠집니다."
-                      >
-                        스캔으로 발견
                       </span>
                     )}
                   </label>
