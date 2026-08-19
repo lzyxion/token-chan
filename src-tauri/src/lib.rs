@@ -201,6 +201,7 @@ pub fn run() {
             commands::open_settings,
             commands::get_accounts,
             commands::set_account_enabled,
+            commands::set_retention_days,
             commands::add_home,
             commands::remove_home,
             commands::rescan_accounts,

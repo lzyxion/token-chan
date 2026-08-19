@@ -1,9 +1,17 @@
 import { useEffect, useRef, useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import ResizeGrips from "../components/ResizeGrips";
 import VendorIcon from "../components/VendorIcon";
 import { ModelMix, recordedDays, UsageHeatmap, WeekBars } from "./UsageCharts";
-import { useCurrency, useLive, usePlans, useSummary, useThresholds } from "../hooks/useUsage";
+import {
+  useCurrency,
+  useLive,
+  usePlans,
+  useRetentionDays,
+  useSummary,
+  useThresholds,
+} from "../hooks/useUsage";
 import { useWindowPersist } from "../hooks/useWindowPersist";
 import {
   fmtAgo,
@@ -12,6 +20,9 @@ import {
   fmtTokens,
   meterLevel,
   resetIsStale,
+  retentionLabel,
+  RETENTION_OPTIONS,
+  showsHeatmap,
   shortModel,
   SOURCE_LABEL,
   totalOf,
@@ -203,6 +214,13 @@ export default function UsagePanel() {
   const plans = usePlans();
   const currency = useCurrency();
   const thresholds = useThresholds();
+  const retention = useRetentionDays();
+  // 설정 파일은 사람이 고치는 JSON 이라 목록에 없는 값(예: 45일)이 들어 있을 수 있다.
+  // 그때 목록만 그리면 select 가 엉뚱한 항목을 가리키고, 다른 걸 고르는 순간 그 값이
+  // 조용히 사라진다 — 있는 그대로 한 칸을 내어 준다.
+  const options: number[] = (RETENTION_OPTIONS as readonly number[]).includes(retention)
+    ? [...RETENTION_OPTIONS]
+    : [...RETENTION_OPTIONS, retention].sort((a, b) => (a === 0 ? 1 : b === 0 ? -1 : a - b));
   const [page, setPage] = useState(0);
   const bodyRef = useRef<HTMLDivElement | null>(null);
 
@@ -339,10 +357,33 @@ export default function UsagePanel() {
                 {fmtTokens(summary.today.cache_write + summary.today.cache_read)}
               </div>
 
-              <div className="chart-block">
-                <div className="chart-title">일별 사용량</div>
-                <UsageHeatmap daily={summary.daily} firstEvent={summary.first_event_ts} currency={currency} />
+              {/* 조회 기간 = 스캔 범위라 위 기간 합계와 아래 잔디가 함께 움직인다.
+                  설정 창이 아니라 여기 두는 이유: 값을 바꾼 결과가 이 화면에서 바로
+                  보인다. 주간 막대는 이름 그대로 항상 최근 7일이라 영향받지 않는다. */}
+              <div className="period-row">
+                <span className="period-label">조회 기간</span>
+                <select
+                  className="period-select"
+                  value={retention}
+                  onChange={(e) =>
+                    void invoke("set_retention_days", { days: Number(e.currentTarget.value) })
+                  }
+                >
+                  {options.map((d) => (
+                    <option key={d} value={d}>
+                      {retentionLabel(d)}
+                    </option>
+                  ))}
+                </select>
               </div>
+
+              {/* 짧은 기간에선 격자를 접는다 — 남는 칸이 "안 썼다"는 거짓말이 된다 */}
+              {showsHeatmap(retention) && (
+                <div className="chart-block">
+                  <div className="chart-title">일별 사용량</div>
+                  <UsageHeatmap daily={summary.daily} firstEvent={summary.first_event_ts} currency={currency} />
+                </div>
+              )}
 
               <div className="chart-block">
                 <div className="chart-title">최근 7일</div>

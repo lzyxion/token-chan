@@ -130,9 +130,15 @@ pub const WEEK_DAYS: usize = 7;
 /// 주 단위로 떨어뜨리는 이유는 격자가 7행이라서다 — 어중간하면 마지막 열이 잘린다.
 /// 하한 4주: 그보다 짧으면 흐름이 안 보인다. 상한 26주: 패널 폭(약 274px)에서
 /// 그 이상은 칸이 실오라기가 된다.
+///
+/// `0` 은 **기간 제한 없음**이라 상한을 준다 — "전부"라도 격자가 담을 수 있는 건
+/// 26주까지고, 그보다 오래된 사용량은 격자가 아니라 합계에만 실린다.
 pub fn daily_window(retention_days: u32) -> usize {
     const MIN_WEEKS: u32 = 4;
     const MAX_WEEKS: u32 = 26;
+    if retention_days == 0 {
+        return (MAX_WEEKS * 7) as usize;
+    }
     ((retention_days / 7).clamp(MIN_WEEKS, MAX_WEEKS) * 7) as usize
 }
 
@@ -285,6 +291,9 @@ mod tests {
         assert_eq!(daily_window(1), 28, "하한 4주");
         // 길게 늘려도 패널 폭에 들어가는 만큼만
         assert_eq!(daily_window(365), 182, "상한 26주");
+        // 0 = 기간 제한 없음. 하한(4주)으로 떨어지면 "전체"를 골랐는데 격자가
+        // 가장 짧아지는 정반대 결과가 된다
+        assert_eq!(daily_window(0), 182, "제한 없음도 상한 26주");
         // 항상 주 단위로 떨어진다 (격자가 7행이라 어중간하면 마지막 열이 잘린다)
         for d in [1u32, 13, 45, 88, 200, 1000] {
             assert_eq!(daily_window(d) % 7, 0, "retention={d}");
