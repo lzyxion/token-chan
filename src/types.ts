@@ -196,6 +196,9 @@ export interface Account {
   setting_key: string;
   /** 지금 집계에 포함되는가 (백엔드가 규칙을 풀어서 준다) */
   enabled: boolean;
+  /** WSL 안에 사는 계정이면 그 배포판 이름 (예: "Ubuntu-24.04"), 아니면 null.
+   *  켜면 사용량을 읽는 동안 그 배포판이 잠들지 못해서 기본이 꺼짐이다. */
+  wsl_distro: string | null;
 }
 
 export type PetState =
