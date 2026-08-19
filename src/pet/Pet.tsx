@@ -12,6 +12,8 @@ import {
   fmtTokens,
   resetIsStale,
   shortModel,
+  GAUGE_STYLES,
+  gaugeStyleOf,
   meterColor,
   meterLevel,
   SOURCE_LABEL,
@@ -99,7 +101,7 @@ export default function Pet() {
   const [disabledStates, setDisabledStates] = useState<string[]>([]);
   const [gaugeLabels, setGaugeLabels] = useState(false);
   const [gaugeSide, setGaugeSide] = useState<GaugeSide>("right");
-  const [gaugeStyle, setGaugeStyle] = useState<GaugeStyle>("ring");
+  const [gaugeStyle, setGaugeStyle] = useState<GaugeStyle>(GAUGE_STYLES[0]);
   const [speechLines, setSpeechLines] = useState<Record<string, string[]>>({});
   /** 활성 팩의 speech.json (없으면 null → 기본 문구) — 대사는 캐릭터의 속성 */
   const [packSpeech, setPackSpeech] = useState<Record<string, string[]> | null>(null);
@@ -126,7 +128,7 @@ export default function Pet() {
       setDisabledStates(s.disabledStates ?? []);
       setGaugeLabels(s.gaugeLabels ?? false);
       setGaugeSide(s.gaugeSide ?? "right");
-      setGaugeStyle(s.gaugeStyle === "bar" ? "bar" : "ring");
+      setGaugeStyle(gaugeStyleOf(s.gaugeStyle));
       setGaugeVendor(s.gaugeVendor ?? "auto");
       setSpeechLines(s.speechLines ?? {});
       // 설정 변경 시 팩 파일이 바뀌었을 수 있으므로 이미지 캐시 무효화
@@ -625,6 +627,55 @@ export default function Pet() {
    *  · bar — RPG HP 바. 채움이 **남은 양**이다 (가득 = 리셋 직후, 빈 바 = 소진).
    *    색은 링과 같은 위험 단계(사용률 기준)를 쓰므로 바닥난 HP 가 빨갛게 물든다.
    */
+  /**
+   * 값을 그리는 부분만. 셋 다 같은 자리·같은 위험 색을 쓰고 **말하는 방식**만 다르다:
+   * 각도(링) · 길이(바) · 수위(물방울).
+   *
+   * `pct` 가 null 이면 **값이 없다**는 뜻이라 셋 다 `.empty` 로 떨어진다 — 점선만 남겨
+   * "0%" 와 구분한다.
+   */
+  const gaugeShape = (pct: number | null, danger: number) => {
+    const crit = pct != null && meterLevel(pct, danger) === "danger";
+    if (gaugeStyle === "bar") {
+      return (
+        <div className={`gauge-bar ${pct == null ? "empty" : ""}`}>
+          {pct != null && (
+            <div
+              className={`gauge-bar-fill${crit ? " crit" : ""}`}
+              style={{ width: `${100 - pct}%`, backgroundColor: meterColor(pct, danger) }}
+            />
+          )}
+        </div>
+      );
+    }
+    if (gaugeStyle === "orb") {
+      // 수위는 높이로 준다 (배경 그라디언트가 아니라) — 그래야 바처럼 부드럽게
+      // 차오른다. background-image 는 transition 이 안 걸린다.
+      return (
+        <div className={`gauge-orb ${pct == null ? "empty" : ""}`}>
+          {pct != null && (
+            <div
+              className="gauge-orb-fill"
+              style={{ height: `${pct}%`, backgroundColor: meterColor(pct, danger) }}
+            />
+          )}
+        </div>
+      );
+    }
+    return (
+      <div
+        className={`gauge-ring ${pct == null ? "empty" : ""}`}
+        style={
+          pct == null
+            ? undefined
+            : {
+                background: `conic-gradient(${meterColor(pct, danger)} ${pct}%, rgba(255,255,255,0.14) 0)`,
+              }
+        }
+      />
+    );
+  };
+
   const ringRow = (
     key: string,
     pct: number | null,
@@ -633,27 +684,7 @@ export default function Pet() {
     danger: number,
   ) => (
     <div className="gauge-row" key={key}>
-      {gaugeStyle === "bar" ? (
-        <div className={`gauge-bar ${pct == null ? "empty" : ""}`}>
-          {pct != null && (
-            <div
-              className={`gauge-bar-fill${meterLevel(pct, danger) === "danger" ? " crit" : ""}`}
-              style={{ width: `${100 - pct}%`, backgroundColor: meterColor(pct, danger) }}
-            />
-          )}
-        </div>
-      ) : (
-        <div
-          className={`gauge-ring ${pct == null ? "empty" : ""}`}
-          style={
-            pct == null
-              ? undefined
-              : {
-                  background: `conic-gradient(${meterColor(pct, danger)} ${pct}%, rgba(255,255,255,0.14) 0)`,
-                }
-          }
-        />
-      )}
+      {gaugeShape(pct, danger)}
       <span className="gauge-label">{label}</span>
     </div>
   );

@@ -1,8 +1,30 @@
-import type { Account, Source, Totals } from "./types";
+import type { Account, GaugeStyle, Source, Totals } from "./types";
 
 /** 다루는 소스 전부 — 화면에 늘어놓는 순서이기도 하다 (설정의 홈 목록·게이지 순환).
  *  목록을 화면마다 따로 들면 벤더를 추가할 때 한 곳이 조용히 빠진다. */
 export const SOURCES: Source[] = ["claude", "codex", "antigravity"];
+
+/** 고를 수 있는 게이지 모양 — 백엔드 `settings::GAUGE_STYLES` 와 **같은 목록·같은 순서**.
+ *  첫 항목이 기본값이다. */
+export const GAUGE_STYLES: GaugeStyle[] = ["ring", "bar", "orb"];
+
+/** 게이지 모양 → 설정 화면 표기 */
+export const GAUGE_STYLE_LABEL: Record<GaugeStyle, string> = {
+  ring: "도넛 링",
+  bar: "HP 바 (RPG)",
+  orb: "물방울",
+};
+
+/**
+ * 모르는 값을 기본 모양으로 떨어뜨린다. 설정 파일은 사람이 고치는 JSON 이고, 옛
+ * 버전에서 저장된 모양이 남아 있을 수도 있다 — 백엔드도 같은 규칙으로 거른다.
+ *
+ * 예전엔 호출부마다 `x === "bar" ? "bar" : "ring"` 이었다. 모양을 하나 늘렸을 때
+ * 저장·검증은 통과하는데 **화면만 조용히 기본 모양으로 되돌아가** 원인을 못 찾는다.
+ */
+export function gaugeStyleOf(v: unknown): GaugeStyle {
+  return GAUGE_STYLES.includes(v as GaugeStyle) ? (v as GaugeStyle) : GAUGE_STYLES[0];
+}
 
 /**
  * 게이지에 실을 수 있는 벤더 — 켜 둔 계정이 하나라도 있는 소스.

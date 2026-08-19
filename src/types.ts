@@ -268,8 +268,8 @@ export interface PackConfig {
 /** 도넛 게이지 위치 — off면 표시하지 않음 */
 export type GaugeSide = "right" | "left" | "off";
 
-/** 게이지 모양 — 도넛 링 또는 RPG HP 바 */
-export type GaugeStyle = "ring" | "bar";
+/** 게이지 모양 — 백엔드 `settings::GAUGE_STYLES` 와 같은 값이어야 한다 */
+export type GaugeStyle = "ring" | "bar" | "orb";
 
 /** 모델 접두사(콤마 구분) → 캐릭터 팩 매핑 규칙 (최장 접두사 우선) */
 export interface CharacterRule {
