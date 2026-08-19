@@ -40,11 +40,15 @@ function MeterRow({
   computed,
   title,
   danger,
+  aside,
 }: {
   label: string;
   pct: number;
   /** 이 미터의 위험 한도 (%) — 설정(알림 탭)에서 온다 */
   danger: number;
+  /** 리셋이 **없는** 줄(컨텍스트)의 마지막 칸에 대신 넣을 값.
+   *  같은 `span` 을 쓰므로 리셋 시간과 글꼴·정렬이 저절로 같아진다 */
+  aside?: string;
   resetAt?: Date | null;
   /** 리셋 시각이 이미 지났다 = 캐시가 굳었고 계산으로도 못 메웠다 */
   stale?: boolean;
@@ -63,7 +67,11 @@ function MeterRow({
           공식이 아니라는 건 밝혀야 한다. 리셋을 못 구하면 "낡음" 으로 이유를 적는다:
           그냥 비우면 왜 사라졌는지 알 수 없고, "0분" 은 지금 막 리셋된다는 거짓말이다. */}
       <span className={`vendor-reset${stale ? " stale" : ""}`}>
-        {resetAt ? `${computed ? "~" : ""}${fmtRemaining(resetAt)}` : stale ? "낡음" : ""}
+        {resetAt
+          ? `${computed ? "~" : ""}${fmtRemaining(resetAt)}`
+          : stale
+            ? "낡음"
+            : (aside ?? "")}
       </span>
     </div>
   );
@@ -112,6 +120,11 @@ function VendorCard({
   const total = totalOf(s.today);
   const chip = statusChip(s.status);
   const pct = context ? Math.round(context.used_pct) : null;
+  const showsContext = pct != null && context != null;
+  // 오늘 한 번도 안 쓴 벤더(연결 안 된 소스 포함)는 토큰 수를 적지 않는다 — "0" 은
+  // 비용 옆에서 또 하나의 0 이 되어 무엇이 0 인지만 흐린다. 안 썼다는 사실은
+  // 비용 0 이 이미 말하고, 연결 여부는 상태 칩이 말한다.
+  const usedToday = total > 0;
   const meters = plan?.meters ?? [];
   return (
     <div className={`vendor-card ${active ? "active" : ""}`}>
@@ -124,15 +137,23 @@ function VendorCard({
         {context?.model && <span className="vendor-model">{shortModel(context.model)}</span>}
         {busy && <span className="chip busy-chip">작업 중</span>}
         {chip}
+        {/* 오늘 토큰은 컨텍스트 줄 끝으로 내려갔다 — 컨텍스트 줄이 없는 벤더에서만
+            머리줄에 남는다 (내려보낼 자리가 없다) */}
         <span className="vendor-today">
-          <b>{fmtTokens(total)}</b> {fmtCost(s.today_cost, s.cost_partial, currency)}
+          {!showsContext && usedToday && (
+            <>
+              <b>{fmtTokens(total)}</b>{" "}
+            </>
+          )}
+          {fmtCost(s.today_cost, s.cost_partial, currency)}
         </span>
       </div>
-      {pct != null && context && (
+      {showsContext && (
         <MeterRow
           label="컨텍스트"
           pct={pct}
           danger={thresholds.context}
+          aside={usedToday ? fmtTokens(total) : undefined}
           title={`${context.tokens.toLocaleString()} / ${context.window.toLocaleString()} 토큰${
             context.interim ? " (정리 중)" : ""
           }`}
