@@ -1,5 +1,5 @@
 {
-  "note": "USD per 1M tokens. in=input, out=output, cw=cache write(5m TTL), cr=cache read. ctx=컨텍스트 창(토큰, 선택) — 컨텍스트 게이지의 분모. 모델 ID는 최장 접두사 매칭 (예: claude-sonnet-4-5-20250929 → claude-sonnet-4-5). 설정의 priceOverridePath JSON으로 덮어쓰기 가능. OpenAI/Gemini 단가는 스냅샷 추정치이므로 필요 시 오버라이드 권장. ctx 가 없는 모델은 200k 로 가정하되, 실제 관측치가 그걸 넘으면 자동으로 상위 구간으로 승격된다(context.rs).",
+  "note": "USD per 1M tokens. in=input, out=output, cw=cache write(5m TTL), cr=cache read. ctx=컨텍스트 창(토큰, 선택) — 컨텍스트 게이지의 분모. 모델 ID는 최장 접두사 매칭 (예: claude-sonnet-4-5-20250929 → claude-sonnet-4-5). 설정의 priceOverridePath JSON으로 덮어쓰기 가능. 단가는 2026-08-19 공식 페이지(platform.claude.com/docs/about-claude/pricing · developers.openai.com/api/docs/pricing · ai.google.dev/gemini-api/docs/pricing)에서 대조한 값이다. 두 가지는 이 표로 표현할 수 없어 알고 쓴다: (1) Gemini 3.x 는 2026-12-31 까지 도입가라 2027-01-01 에 정확히 2배가 된다(3.7-flash: in 1.50 / out 7.50 / cr 0.15). (2) OpenAI 5.6 계열은 긴 컨텍스트 구간의 단가가 따로 있는데(sol 기준 in 10 / out 45) 여기 적은 건 짧은 구간 값이라 긴 대화의 비용은 낮게 잡힌다. 필요하면 오버라이드로 조정. ctx 가 없는 모델은 200k 로 가정하되, 실제 관측치가 그걸 넘으면 자동으로 상위 구간으로 승격된다(context.rs).",
   "models": {
     "claude-fable-5": { "in": 10.0, "out": 50.0, "cw": 12.5, "cr": 1.0, "ctx": 1000000 },
     "claude-mythos-5": { "in": 10.0, "out": 50.0, "cw": 12.5, "cr": 1.0, "ctx": 1000000 },
@@ -10,7 +10,7 @@
     "claude-opus-4-5": { "in": 5.0, "out": 25.0, "cw": 6.25, "cr": 0.5 },
     "claude-opus-4-1": { "in": 15.0, "out": 75.0, "cw": 18.75, "cr": 1.5 },
     "claude-opus-4-2": { "in": 15.0, "out": 75.0, "cw": 18.75, "cr": 1.5 },
-    "claude-sonnet-5": { "in": 3.0, "out": 15.0, "cw": 3.75, "cr": 0.3, "ctx": 1000000 },
+    "claude-sonnet-5": { "in": 2.0, "out": 10.0, "cw": 2.5, "cr": 0.2, "ctx": 1000000 },
     "claude-sonnet-4-6": { "in": 3.0, "out": 15.0, "cw": 3.75, "cr": 0.3, "ctx": 1000000 },
     "claude-sonnet-4-5": { "in": 3.0, "out": 15.0, "cw": 3.75, "cr": 0.3 },
     "claude-sonnet-4-2": { "in": 3.0, "out": 15.0, "cw": 3.75, "cr": 0.3 },
@@ -21,10 +21,11 @@
     "claude-3-5-haiku": { "in": 0.8, "out": 4.0, "cw": 1.0, "cr": 0.08 },
     "claude-3-haiku": { "in": 0.25, "out": 1.25, "cw": 0.3, "cr": 0.03 },
 
-    "gpt-5.6-sol": { "in": 5.0, "out": 30.0, "cw": 6.25, "cr": 0.5, "ctx": 1050000 },
-    "gpt-5.6-terra": { "in": 2.5, "out": 15.0, "cw": 3.125, "cr": 0.25, "ctx": 1050000 },
-    "gpt-5.6-luna": { "in": 1.0, "out": 6.0, "cw": 1.25, "cr": 0.1, "ctx": 1050000 },
-    "gpt-5.6": { "in": 5.0, "out": 30.0, "cw": 6.25, "cr": 0.5, "ctx": 1050000 },
+    "gpt-5.6-sol": { "in": 5.0, "out": 30.0, "cw": 0.0, "cr": 0.5, "ctx": 1050000 },
+    "gpt-5.6-terra": { "in": 2.0, "out": 12.0, "cw": 0.0, "cr": 0.2, "ctx": 1050000 },
+    "gpt-5.6-luna": { "in": 0.2, "out": 1.2, "cw": 0.0, "cr": 0.02, "ctx": 1050000 },
+    "gpt-5.6": { "in": 5.0, "out": 30.0, "cw": 0.0, "cr": 0.5, "ctx": 1050000 },
+    "gpt-5.3-codex": { "in": 1.75, "out": 14.0, "cw": 0.0, "cr": 0.175 },
     "gpt-5.1-codex": { "in": 1.25, "out": 10.0, "cw": 0.0, "cr": 0.125 },
     "gpt-5.1": { "in": 1.25, "out": 10.0, "cw": 0.0, "cr": 0.125 },
     "gpt-5-codex": { "in": 1.25, "out": 10.0, "cw": 0.0, "cr": 0.125 },
@@ -37,7 +38,8 @@
     "o3": { "in": 2.0, "out": 8.0, "cw": 0.0, "cr": 0.5 },
     "o4-mini": { "in": 1.1, "out": 4.4, "cw": 0.0, "cr": 0.275 },
 
-    "gemini-3.6-flash": { "in": 0.3, "out": 2.5, "cw": 0.0, "cr": 0.075, "ctx": 256000 },
+    "gemini-3.7-flash": { "in": 0.75, "out": 3.75, "cw": 0.0, "cr": 0.075, "ctx": 256000 },
+    "gemini-3.6-flash": { "in": 0.75, "out": 3.75, "cw": 0.0, "cr": 0.075, "ctx": 256000 },
     "gemini-2.5-pro": { "in": 1.25, "out": 10.0, "cw": 0.0, "cr": 0.31 },
     "gemini-2.5-flash-lite": { "in": 0.1, "out": 0.4, "cw": 0.0, "cr": 0.025 },
     "gemini-2.5-flash": { "in": 0.3, "out": 2.5, "cw": 0.0, "cr": 0.075 },
