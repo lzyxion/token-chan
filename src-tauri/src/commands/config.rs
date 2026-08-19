@@ -58,8 +58,8 @@ pub fn set_settings(app: AppHandle, state: State<'_, AppState>, mut new_settings
         new_settings.currency = "usd".into();
     }
     // 통화와 같은 이유 — 사람이 고치는 JSON 이라 모르는 값이면 기본 모양으로
-    if new_settings.gauge_style != "bar" {
-        new_settings.gauge_style = "ring".into();
+    if !settings::GAUGE_STYLES.contains(&new_settings.gauge_style.as_str()) {
+        new_settings.gauge_style = settings::GAUGE_STYLES[0].into();
     }
     // 0 이나 음수면 비용이 전부 0/음수로 보인다. 상한은 자릿수 실수(1400 → 1400000) 방지.
     if !new_settings.usd_to_krw.is_finite() || new_settings.usd_to_krw <= 0.0 {

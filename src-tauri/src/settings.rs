@@ -13,6 +13,17 @@ pub struct CharacterRule {
     pub pack: String,
 }
 
+/// 고를 수 있는 소진율 게이지 모양. **첫 항목이 기본값**이다.
+///
+/// - `ring` 도넛 — 각도로 말한다. 채움이 **사용률**
+/// - `bar` RPG HP 바 — 길이로 말한다. 채움이 **남은 양** (링과 반대)
+/// - `orb` 물방울 — 수위로 말한다. 채움이 **사용률** (링과 같은 방향)
+///
+/// 목록을 여기 두는 이유: 예전엔 검증이 `if style != "bar" { "ring" }` 이라 모양을
+/// 하나 늘릴 때마다 조건문을 고쳐야 했고, 빠뜨리면 저장은 되는데 다음 실행에 조용히
+/// 기본 모양으로 되돌아갔다.
+pub const GAUGE_STYLES: [&str; 3] = ["ring", "bar", "orb"];
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Settings {
@@ -78,7 +89,7 @@ pub struct Settings {
     pub gauge_labels: bool,
     /// 도넛 게이지 위치 — "right" | "left" | "off"
     pub gauge_side: String,
-    /// 게이지 모양 — "ring"(도넛) | "bar"(RPG HP 바 — 채움이 남은 양)
+    /// 게이지 모양 — 값은 [`GAUGE_STYLES`] 중 하나
     pub gauge_style: String,
     /// 상황별 사용자 문구 — 키("enter.working"·"poke"·"resetNotify" 등) → 문구 목록.
     /// 비어 있으면 내장 기본 문구. `{변수}` 는 표시 시점에 값으로 치환된다.
