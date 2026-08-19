@@ -1,5 +1,12 @@
 import type { Account, AppSettings, GaugeSide } from "../../types";
-import { enabledSources, SOURCE_LABEL, SOURCES } from "../../format";
+import {
+  enabledSources,
+  GAUGE_STYLE_LABEL,
+  GAUGE_STYLES,
+  gaugeStyleOf,
+  SOURCE_LABEL,
+  SOURCES,
+} from "../../format";
 import type { TabProps } from "./types";
 
 interface Props extends TabProps {
@@ -76,13 +83,16 @@ export default function GeneralTab({ s, update, accounts }: Props) {
               <span className="settings-sublabel">모양</span>
               <select
                 className="settings-select"
-                value={s.gaugeStyle ?? "ring"}
+                value={gaugeStyleOf(s.gaugeStyle)}
                 onChange={(e) =>
                   update({ gaugeStyle: e.currentTarget.value as AppSettings["gaugeStyle"] })
                 }
               >
-                <option value="ring">도넛 링</option>
-                <option value="bar">HP 바 (RPG)</option>
+                {GAUGE_STYLES.map((g) => (
+                  <option key={g} value={g}>
+                    {GAUGE_STYLE_LABEL[g]}
+                  </option>
+                ))}
               </select>
             </div>
           )}
