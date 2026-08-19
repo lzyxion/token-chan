@@ -12,6 +12,13 @@ jobs:
   # (windows 2배, macOS 10배). 실측: 이 잡 25초 vs 번들 잡들 합쳐 ~46분 차감.
   test:
     runs-on: ubuntu-latest
+    # 기본 타임아웃은 **6시간**이다. 정상 런이 4~9분인데 아래 apt 스텝이 매달리면
+    # 그 6시간이 그대로 차감된다 (실측 2026-08-19: 한 런이 4시간을 태웠다).
+    #
+    # 30분인 이유: 이 장치는 속도를 강제하는 게 아니라 폭주를 자르는 것이다. 미러가
+    # 흔들리는 날에는 apt 가 재시도를 돌며 11분 40초까지 늘어났고(정상 3분 40초),
+    # 그런 런은 **성공해야 한다**. 여유를 좁게 잡으면 멀쩡한 빌드가 빨개진다.
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -33,10 +40,20 @@ jobs:
       - uses: swatinem/rust-cache@v2
       # `--workspace` 는 src-tauri 크레이트까지 컴파일하므로 리눅스에서는 Tauri 시스템
       # 의존성이 필요하다. 목록은 README 개발 안내와 같다.
+      #
+      # 타임아웃·재시도를 주는 이유: 러너는 `azure.archive.ubuntu.com` 을 우선 미러로
+      # 쓰는데 그게 죽으면 apt 가 대체 미러로 넘어간다. 거기서 응답이 끊기면 apt 는
+      # 기본값에 타임아웃도 재시도도 없어서 **실패하지 않고 그냥 매달린다.**
+      # 실측 2026-08-19: `Get: noble-security InRelease` 를 마지막으로 2시간 9분 침묵.
+      # 같은 날 통과한 런의 이 스텝이 3분 40초였으니 장애 구간은 짧았고, 재시도만
+      # 있었으면 넘어갔을 것이다.
       - name: Tauri 시스템 의존성
         run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
+          # Retries 만으로는 안 된다 — 매달린 연결은 실패로 끝나지 않아 재시도에
+          # 닿지도 못한다. 끊는 건 타임아웃 쪽이다.
+          apt_opts="-o Acquire::Retries=3 -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20"
+          sudo apt-get update $apt_opts
+          sudo apt-get install -y --no-install-recommends $apt_opts \
             libwebkit2gtk-4.1-dev libxdo-dev libssl-dev \
             libayatana-appindicator3-dev librsvg2-dev
       # `-p usage-core` 였을 때는 src-tauri 테스트가 어디서도 안 돌았다.
