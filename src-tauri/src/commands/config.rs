@@ -113,6 +113,23 @@ pub fn set_gauge_vendor(app: AppHandle, vendor: String) {
     let _ = app.emit("settings-changed", &updated);
 }
 
+/// 조회 기간 전환 — 사용량 패널의 통계 탭용 빠른 경로 (설정 창을 안 거친다).
+///
+/// 이 값이 곧 스캔 범위라 다음 회차부터 반영된다. `0` 은 제한 없음이고, 상한을 두는
+/// 이유는 그 위가 `0` 과 같은 뜻이면서 날짜 계산만 극단으로 밀기 때문이다.
+#[tauri::command]
+pub fn set_retention_days(app: AppHandle, days: u32) {
+    let updated = {
+        let state = app.state::<AppState>();
+        let mut s = state.settings.lock().unwrap();
+        s.retention_days = days.min(3650);
+        save_settings(&app, &s);
+        s.clone()
+    };
+    use tauri::Emitter;
+    let _ = app.emit("settings-changed", &updated);
+}
+
 /// 클릭 통과 모드 켜기/끄기 (트레이·펫 우클릭 메뉴 공용 진입점).
 /// 설정 저장 + 창 적용 + 트레이 체크 표시·설정 패널 동기화까지 한 번에 처리한다.
 pub fn set_click_through(app: &AppHandle, on: bool) {

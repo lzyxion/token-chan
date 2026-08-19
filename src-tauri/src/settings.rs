@@ -44,7 +44,11 @@ pub const GAUGE_FILLS: [&str; 3] = ["auto", "used", "left"];
 pub struct Settings {
     /// 펫 창 위치 (물리 픽셀)
     pub pet_pos: Option<(i32, i32)>,
-    /// 사용량 보존/스캔 기간 (일)
+    /// 사용량 스캔 기간 (일). **`0` 은 제한 없음**(=전체).
+    ///
+    /// 보관이 아니라 **읽는 범위**다 — 집계는 매 회차 CLI 파일에서 다시 만들므로 줄여도
+    /// 지워지는 게 없고, 다시 늘리면 그대로 돌아온다. 줄이면 스캔이 가벼워진다.
+    /// 잔디 격자 길이도 여기서 유도한다 (`aggregate::daily_window`).
     pub retention_days: u32,
     /// 공식 한도 소진율 경고 임계값 (0..1).
     ///

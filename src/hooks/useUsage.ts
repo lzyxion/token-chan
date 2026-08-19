@@ -4,6 +4,7 @@ import { listen } from "@tauri-apps/api/event";
 import {
   enabledSources,
   DEFAULT_CURRENCY,
+  DEFAULT_RETENTION_DAYS,
   DEFAULT_THRESHOLDS,
   type AlertThresholds,
   type Currency,
@@ -63,6 +64,32 @@ export function useThresholds(): AlertThresholds {
     };
   }, []);
   return t;
+}
+
+/**
+ * 조회 기간 구독 (일, `0` = 전체).
+ *
+ * 통계 화면이 이 값을 **읽고 또 쓴다** — 기간을 바꾸면 `set_retention_days` 가
+ * 저장하고 `settings-changed` 로 돌아오므로, 화면은 자기가 보낸 값을 기억하지 않고
+ * 돌아온 값만 그린다. 설정 파일을 직접 고쳐도 같은 길로 반영된다.
+ */
+export function useRetentionDays(): number {
+  const [days, setDays] = useState(DEFAULT_RETENTION_DAYS);
+  useEffect(() => {
+    let alive = true;
+    const apply = (s: AppSettings | null) => {
+      if (!alive || !s) return;
+      // 0 은 "전체" 라 의미 있는 값 — truthy 로 거르면 전체를 고를 수 없다
+      setDays(s.retentionDays ?? DEFAULT_RETENTION_DAYS);
+    };
+    invoke<AppSettings>("get_settings").then(apply).catch(() => {});
+    const un = listen<AppSettings>("settings-changed", (e) => apply(e.payload));
+    return () => {
+      alive = false;
+      un.then((f) => f());
+    };
+  }, []);
+  return days;
 }
 
 /**

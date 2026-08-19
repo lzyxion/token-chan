@@ -87,6 +87,35 @@ export function enabledSources(accounts: Account[] | null): Source[] | null {
   return SOURCES.filter((src) => accounts.some((a) => a.source === src && a.enabled));
 }
 
+/**
+ * 고를 수 있는 조회 기간 (일). `0` 은 제한 없음 — 백엔드도 같은 뜻으로 읽는다
+ * (`settings::Settings::retention_days`).
+ *
+ * 보관 기간이 아니라 **읽는 범위**다. 집계는 매 회차 CLI 파일에서 다시 만들기 때문에
+ * 줄여도 지워지는 게 없고 다시 늘리면 돌아온다 — 그래서 마음 놓고 줄일 수 있고,
+ * 줄이면 스캔이 가벼워진다.
+ */
+export const RETENTION_OPTIONS = [7, 30, 90, 0] as const;
+
+/** 설정을 아직 못 읽었을 때 (백엔드 `Settings::default` 와 같은 값) */
+export const DEFAULT_RETENTION_DAYS = 90;
+
+/** 조회 기간 → 화면 표기 */
+export function retentionLabel(days: number): string {
+  return days === 0 ? "전체" : `최근 ${days}일`;
+}
+
+/**
+ * 잔디 격자를 그릴 만한 기간인가.
+ *
+ * 격자는 7행(요일) × N열(주)이라 4주가 하한이다(`aggregate::daily_window`). 그보다 짧은
+ * 기간을 고르면 남는 칸이 **데이터가 있을 수 없는 빈칸**으로 남아 "안 썼다"는 거짓말이
+ * 된다. 짧은 기간에선 바로 아래 주간 막대가 같은 걸 더 잘 보여주므로 격자를 접는다.
+ */
+export function showsHeatmap(retentionDays: number): boolean {
+  return retentionDays === 0 || retentionDays >= 28;
+}
+
 /** 소스 id → 화면 표기. 패널·설정·대사가 같은 이름을 써야 벤더를 헷갈리지 않는다. */
 export const SOURCE_LABEL: Record<Source, string> = {
   claude: "Claude",
