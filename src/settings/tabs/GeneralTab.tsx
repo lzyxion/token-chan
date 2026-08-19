@@ -1,6 +1,11 @@
 import type { Account, AppSettings, GaugeSide } from "../../types";
 import {
+  defaultFill,
   enabledSources,
+  fillsRemaining,
+  GAUGE_FILL_LABEL,
+  GAUGE_FILLS,
+  gaugeFillOf,
   GAUGE_STYLE_LABEL,
   GAUGE_STYLES,
   gaugeStyleOf,
@@ -24,6 +29,21 @@ export default function GeneralTab({ s, update, accounts }: Props) {
   // 고정해 둔 벤더가 꺼졌을 때 "자동" 으로 되돌리는 건 백엔드가 한다
   // (`set_account_enabled`) — 이 탭이 열려 있지 않을 때도 성립해야 한다.
   const pickable = enabledSources(accounts) ?? SOURCES;
+
+  // 채움 방향은 반쯤 찬 게이지만 봐서는 구분되지 않고, "기본값" 이 무엇으로 풀리는지도
+  // 화면 어디에도 없다. 그래서 고른 값을 되풀이하지 않고 **지금 적용되는 방향**을
+  // 밝히고, 그게 뜻하는 그림을 덧붙인다.
+  const style = gaugeStyleOf(s.gaugeStyle);
+  const remaining = fillsRemaining(style, s.gaugeFill);
+  const fillHint =
+    (gaugeFillOf(s.gaugeFill) === "auto"
+      ? // 모양 이름의 괄호 설명("HP 바 (RPG)")은 문장 안에서 걸린다
+        `${GAUGE_STYLE_LABEL[style].replace(/\s*\(.+\)$/, "")}의 기본값은 ` +
+        `${GAUGE_FILL_LABEL[defaultFill(style)]}입니다`
+      : `채움이 ${GAUGE_FILL_LABEL[remaining ? "left" : "used"]}입니다`) +
+    (remaining
+      ? " — 가득 = 리셋 직후, 비면 소진"
+      : " — 비었을 때가 리셋 직후, 가득 차면 소진");
 
   return (
     <>
@@ -96,12 +116,25 @@ export default function GeneralTab({ s, update, accounts }: Props) {
               </select>
             </div>
           )}
-          {/* HP 바는 채움이 "남은 양"이다 — 링(사용률 채움)과 반대라 여기서 못 박는다 */}
-          {s.gaugeSide !== "off" && s.gaugeStyle === "bar" && (
-            <div className="settings-hint">
-              바는 남은 양입니다 — 가득 = 리셋 직후, 빈 바 = 소진
+          {s.gaugeSide !== "off" && (
+            <div className="settings-row">
+              <span className="settings-sublabel">채움</span>
+              <select
+                className="settings-select"
+                value={gaugeFillOf(s.gaugeFill)}
+                onChange={(e) =>
+                  update({ gaugeFill: e.currentTarget.value as AppSettings["gaugeFill"] })
+                }
+              >
+                {GAUGE_FILLS.map((f) => (
+                  <option key={f} value={f}>
+                    {GAUGE_FILL_LABEL[f]}
+                  </option>
+                ))}
+              </select>
             </div>
           )}
+          {s.gaugeSide !== "off" && <div className="settings-hint">{fillHint}</div>}
           {s.gaugeSide !== "off" && (
             <div className="settings-row">
               <span className="settings-sublabel">보여줄 벤더</span>

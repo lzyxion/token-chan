@@ -12,8 +12,11 @@ import {
   fmtTokens,
   resetIsStale,
   shortModel,
+  GAUGE_FILLS,
+  gaugeFillOf,
   GAUGE_STYLES,
   gaugeStyleOf,
+  fillsRemaining,
   meterColor,
   meterLevel,
   SOURCE_LABEL,
@@ -25,6 +28,7 @@ import type {
   AppSettings,
   CharacterImages,
   CharacterRule,
+  GaugeFill,
   GaugeSide,
   GaugeStyle,
   LiveSessionView,
@@ -102,6 +106,8 @@ export default function Pet() {
   const [gaugeLabels, setGaugeLabels] = useState(false);
   const [gaugeSide, setGaugeSide] = useState<GaugeSide>("right");
   const [gaugeStyle, setGaugeStyle] = useState<GaugeStyle>(GAUGE_STYLES[0]);
+  /** 채움이 사용량인지 남은 양인지 — "auto" 면 모양의 기본값 */
+  const [gaugeFill, setGaugeFill] = useState<GaugeFill>(GAUGE_FILLS[0]);
   const [speechLines, setSpeechLines] = useState<Record<string, string[]>>({});
   /** 활성 팩의 speech.json (없으면 null → 기본 문구) — 대사는 캐릭터의 속성 */
   const [packSpeech, setPackSpeech] = useState<Record<string, string[]> | null>(null);
@@ -129,6 +135,7 @@ export default function Pet() {
       setGaugeLabels(s.gaugeLabels ?? false);
       setGaugeSide(s.gaugeSide ?? "right");
       setGaugeStyle(gaugeStyleOf(s.gaugeStyle));
+      setGaugeFill(gaugeFillOf(s.gaugeFill));
       setGaugeVendor(s.gaugeVendor ?? "auto");
       setSpeechLines(s.speechLines ?? {});
       // 설정 변경 시 팩 파일이 바뀌었을 수 있으므로 이미지 캐시 무효화
@@ -622,10 +629,10 @@ export default function Pet() {
    * 게이지 한 줄. `pct`가 null 이면 **값이 없다**는 뜻이라 0%처럼 보이면 안 된다 —
    * 점선 테두리로 "아직 모름"과 "0%"를 구분한다 (컨텍스트가 아직 안 잡힌 경우).
    *
-   * 모양이 둘이다 (설정 → 게이지 모양):
-   *  · ring — 도넛. 채움이 **사용률**이다 (패널 막대와 같은 방향)
-   *  · bar — RPG HP 바. 채움이 **남은 양**이다 (가득 = 리셋 직후, 빈 바 = 소진).
-   *    색은 링과 같은 위험 단계(사용률 기준)를 쓰므로 바닥난 HP 가 빨갛게 물든다.
+   * 모양이 셋이다 (설정 → 게이지 모양) — ring(도넛) · bar(HP 바) · orb(물방울).
+   * 채움이 **사용률**인지 **남은 양**인지는 모양의 기본값을 따르되(링은 사용률, 바·물방울은
+   * 남은 양) 설정에서 뒤집을 수 있다 — `fillsRemaining` 하나가 그 규칙을 안다.
+   * 색은 어느 쪽이든 위험 단계(사용률 기준)라 바닥난 HP 가 빨갛게 물든다.
    */
   /**
    * 값을 그리는 부분만. 셋 다 같은 자리·같은 위험 색을 쓰고 **말하는 방식**만 다르다:
@@ -636,13 +643,16 @@ export default function Pet() {
    */
   const gaugeShape = (pct: number | null, danger: number) => {
     const crit = pct != null && meterLevel(pct, danger) === "danger";
+    // 채우는 양 — 사용률이거나 남은 양이다. 어느 쪽인지는 모양의 기본값과
+    // 설정(`gaugeFill`)이 정한다 (`fillsRemaining`). 색은 어느 쪽이든 사용률 기준.
+    const fill = pct == null ? 0 : fillsRemaining(gaugeStyle, gaugeFill) ? 100 - pct : pct;
     if (gaugeStyle === "bar") {
       return (
         <div className={`gauge-bar ${pct == null ? "empty" : ""}`}>
           {pct != null && (
             <div
               className={`gauge-bar-fill${crit ? " crit" : ""}`}
-              style={{ width: `${100 - pct}%`, backgroundColor: meterColor(pct, danger) }}
+              style={{ width: `${fill}%`, backgroundColor: meterColor(pct, danger) }}
             />
           )}
         </div>
@@ -656,7 +666,7 @@ export default function Pet() {
           {pct != null && (
             <div
               className="gauge-orb-fill"
-              style={{ height: `${pct}%`, backgroundColor: meterColor(pct, danger) }}
+              style={{ height: `${fill}%`, backgroundColor: meterColor(pct, danger) }}
             />
           )}
         </div>
@@ -669,7 +679,7 @@ export default function Pet() {
           pct == null
             ? undefined
             : {
-                background: `conic-gradient(${meterColor(pct, danger)} ${pct}%, rgba(255,255,255,0.14) 0)`,
+                background: `conic-gradient(${meterColor(pct, danger)} ${fill}%, rgba(255,255,255,0.14) 0)`,
               }
         }
       />

@@ -61,6 +61,9 @@ pub fn set_settings(app: AppHandle, state: State<'_, AppState>, mut new_settings
     if !settings::GAUGE_STYLES.contains(&new_settings.gauge_style.as_str()) {
         new_settings.gauge_style = settings::GAUGE_STYLES[0].into();
     }
+    if !settings::GAUGE_FILLS.contains(&new_settings.gauge_fill.as_str()) {
+        new_settings.gauge_fill = settings::GAUGE_FILLS[0].into();
+    }
     // 0 이나 음수면 비용이 전부 0/음수로 보인다. 상한은 자릿수 실수(1400 → 1400000) 방지.
     if !new_settings.usd_to_krw.is_finite() || new_settings.usd_to_krw <= 0.0 {
         new_settings.usd_to_krw = old.usd_to_krw;
