@@ -69,7 +69,13 @@ pub fn account_enabled(
     a: &usage_core::accounts::Account,
     overrides: &std::collections::HashMap<String, bool>,
 ) -> bool {
-    overrides.get(&a.setting_key()).copied().unwrap_or(a.standard)
+    // WSL 안의 계정은 **명시적으로 켤 때만** 집계한다. 그 계정을 스캔한다는 건 가상
+    // 머신의 파일시스템을 2초·10초마다 두드린다는 뜻이고, 그러면 사용자가 `wsl
+    // --shutdown` 을 해도 다음 스캔이 바로 다시 깨운다 (실측: 앱 켜짐 10초 만에 부활,
+    // 앱 꺼짐 90초). 게이트로는 못 막는다 — "검사 → 읽기" 사이에 VM 이 사라지면
+    // 그대로 깨우고, 한 번 깨우면 고착된다. 그래서 켤지 말지를 사용자가 정한다.
+    let default_on = a.standard && a.wsl_distro().is_none();
+    overrides.get(&a.setting_key()).copied().unwrap_or(default_on)
 }
 
 /// 활성 계정의 설치본에서 뽑은 스캔 루트들
@@ -83,6 +89,35 @@ pub struct EnabledRoots {
     /// Claude 홈 자체 — 공식 한도(`.claude.json`)가 트랜스크립트 루트가 아니라
     /// 홈에 있어서 따로 들고 간다
     pub claude_homes: Vec<PathBuf>,
+}
+
+impl EnabledRoots {
+    /// WSL 게스트 안의 루트를 전부 뺀다.
+    ///
+    /// 계정 발견은 앱을 켤 때 한 번이지만 **스캔은 계속 돈다**(사용량 10초·라이브 2초).
+    /// 그 사이 사용자가 WSL 을 종료하면 남아 있는 `\\wsl.localhost\...` 루트를 읽는
+    /// 것만으로 배포판이 다시 깨어난다 — 앱을 켤 때 `wsl.exe` 를 안 부르게 막아 놓고
+    /// 스캔이 10초마다 깨우면 막은 의미가 없다.
+    ///
+    /// 뺀 자리는 그 소스가 "데이터 없음"으로 보인다. WSL 을 다시 켜면 다음 회차에
+    /// 루트가 돌아오고 어댑터도 다시 만들어진다.
+    fn drop_wsl(&mut self) {
+        for list in [
+            &mut self.claude,
+            &mut self.codex,
+            &mut self.antigravity,
+            &mut self.sessions,
+            &mut self.claude_homes,
+        ] {
+            list.retain(|p| !usage_core::roots::is_wsl_path(p));
+        }
+    }
+
+    fn has_wsl(&self) -> bool {
+        [&self.claude, &self.codex, &self.antigravity, &self.sessions, &self.claude_homes]
+            .into_iter()
+            .any(|l| l.iter().any(|p| usage_core::roots::is_wsl_path(p)))
+    }
 }
 
 /// 소스의 스캔 루트. 스레드들이 소스 불문 루프를 돌 때 이 매핑 하나만 소스를 안다.
@@ -125,6 +160,10 @@ fn enabled_roots(app: &AppHandle) -> EnabledRoots {
                 Source::Antigravity => r.antigravity.push(i.transcript_root()),
             }
         }
+    }
+    // WSL 루트가 하나도 없으면 상태를 묻지 않는다 — 대부분의 사용자가 여기 해당한다
+    if r.has_wsl() && !usage_core::roots::wsl_reachable() {
+        r.drop_wsl();
     }
     r
 }
@@ -460,4 +499,51 @@ fn spawn_live_thread(app: AppHandle) {
             std::thread::sleep(LIVE_INTERVAL);
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashMap;
+    use usage_core::accounts::{Account, Install};
+
+    fn account(home: &str, standard: bool) -> Account {
+        Account {
+            source: Source::Claude,
+            key: home.into(),
+            label: "me@x.com".into(),
+            detail: String::new(),
+            plan: String::new(),
+            installs: vec![Install {
+                source: Source::Claude,
+                home: PathBuf::from(home),
+                discovered: false,
+            }],
+            standard,
+        }
+    }
+
+    /// WSL 안의 계정은 표준 위치에서 발견돼도 기본은 꺼짐이다 — 켜면 그 배포판이
+    /// 잠들지 못하므로, 대가가 있는 선택은 사용자가 한다.
+    #[test]
+    fn wsl_accounts_are_off_until_the_user_says_otherwise() {
+        let wsl = account(r"\\wsl.localhost\Ubuntu-24.04\home\me", true);
+        let local = account(r"C:\Users\me", true);
+        let empty = HashMap::new();
+
+        assert!(!account_enabled(&wsl, &empty), "WSL 계정은 기본 꺼짐");
+        assert!(account_enabled(&local, &empty), "로컬 표준 계정은 기본 켜짐");
+    }
+
+    /// 사용자가 켜면 켜진다 — 기본값 규칙이 사용자 지정을 덮으면 안 된다
+    #[test]
+    fn an_explicit_choice_wins_over_the_default() {
+        let wsl = account(r"\\wsl.localhost\Ubuntu-24.04\home\me", true);
+        let on = HashMap::from([(wsl.setting_key(), true)]);
+        assert!(account_enabled(&wsl, &on));
+
+        let local = account(r"C:\Users\me", true);
+        let off = HashMap::from([(local.setting_key(), false)]);
+        assert!(!account_enabled(&local, &off));
+    }
 }

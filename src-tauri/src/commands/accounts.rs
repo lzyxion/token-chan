@@ -18,6 +18,9 @@ pub struct AccountView {
     /// 토글할 때 그대로 돌려보내는 키
     setting_key: String,
     enabled: bool,
+    /// WSL 안에 사는 계정이면 그 배포판 이름 — 화면이 위치를 밝히고 왜 기본이 꺼짐인지
+    /// 설명하는 데 쓴다. 판정 규칙은 백엔드에만 둔다 (`Account::wsl_distro`).
+    wsl_distro: Option<String>,
 }
 
 #[tauri::command]
@@ -30,6 +33,7 @@ pub fn get_accounts(state: State<'_, AppState>) -> Vec<AccountView> {
         .map(|a| AccountView {
             setting_key: a.setting_key(),
             enabled: crate::monitor::account_enabled(&a, &overrides),
+            wsl_distro: a.wsl_distro(),
             account: a,
         })
         .collect()

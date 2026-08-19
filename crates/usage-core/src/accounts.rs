@@ -84,6 +84,15 @@ impl Account {
     pub fn setting_key(&self) -> String {
         format!("{:?}:{}", self.source, self.key).to_lowercase()
     }
+
+    /// 이 계정이 WSL 게스트 안에 산다면 그 배포판 이름.
+    ///
+    /// 이 계정을 켜면 사용량을 읽는 동안 **그 배포판이 잠들지 못한다** — 가상 머신의
+    /// 파일시스템을 2초·10초마다 두드리는 일이라 어쩔 수 없다. 그래서 기본은 꺼짐이고
+    /// (`account_enabled`), 화면은 이 이름으로 "어디에 사는 계정인지" 를 밝힌다.
+    pub fn wsl_distro(&self) -> Option<String> {
+        self.installs.iter().find_map(|i| crate::roots::wsl_distro_of(&i.home))
+    }
 }
 
 impl Install {
