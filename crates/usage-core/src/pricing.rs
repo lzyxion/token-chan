@@ -130,21 +130,39 @@ mod tests {
         assert!(t.lookup("totally-unknown-model").is_none());
     }
 
+    /// 2026-08-19 공식 페이지 대조값. 셋 다 2026-07-30 인하가 반영돼 있고
+    /// (Luna −80%, Terra −20%, Sol 동결) 캐시 **쓰기**는 과금하지 않아 cw 가 0 이다 —
+    /// 예전엔 Anthropic 의 1.25배 규칙을 그대로 적어 두어 없는 요금을 만들어 냈다.
     #[test]
     fn gpt_5_6_prices_and_alias_match_the_official_tiers() {
         let t = PriceTable::builtin();
         let cases = [
-            ("gpt-5.6-sol", 5.0, 30.0, 6.25, 0.5),
-            ("gpt-5.6-terra", 2.5, 15.0, 3.125, 0.25),
-            ("gpt-5.6-luna", 1.0, 6.0, 1.25, 0.1),
+            ("gpt-5.6-sol", 5.0, 30.0, 0.0, 0.5),
+            ("gpt-5.6-terra", 2.0, 12.0, 0.0, 0.2),
+            ("gpt-5.6-luna", 0.2, 1.2, 0.0, 0.02),
             // 공식 별칭 `gpt-5.6` 은 Sol 로 라우팅된다.
-            ("gpt-5.6", 5.0, 30.0, 6.25, 0.5),
+            ("gpt-5.6", 5.0, 30.0, 0.0, 0.5),
         ];
         for (model, input, output, cache_write, cache_read) in cases {
             let p = t.lookup(model).unwrap();
             assert_eq!((p.input, p.output, p.cw, p.cr), (input, output, cache_write, cache_read));
             assert_eq!(p.ctx, Some(1_050_000));
         }
+    }
+
+    /// 실제로 관측되는 모델은 표에 있어야 한다 — 없으면 토큰만 세고 비용은 0 이 된다.
+    /// (agy 가 gemini-3.7-flash 로 넘어갔을 때 실제로 겪었다)
+    #[test]
+    fn models_seen_in_the_wild_have_prices() {
+        let t = PriceTable::builtin();
+        for m in ["gemini-3.7-flash", "gemini-3.6-flash", "gpt-5.6-terra", "gpt-5.3-codex"] {
+            assert!(t.lookup(m).is_some(), "{m} 단가 없음");
+        }
+        // 3.6 과 3.7 은 같은 단가다 (공식 표에서 같은 줄). 예전엔 3.6 에 2.5-flash 값이
+        // 들어가 있어 agy 비용이 2.5배 낮게 잡혔다.
+        let (a, b) = (t.lookup("gemini-3.6-flash").unwrap(), t.lookup("gemini-3.7-flash").unwrap());
+        assert_eq!((a.input, a.output, a.cr), (b.input, b.output, b.cr));
+        assert_eq!((a.input, a.output), (0.75, 3.75));
     }
 
     #[test]
