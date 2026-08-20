@@ -274,28 +274,83 @@ pub fn end_pet_drag(app: AppHandle) {
     *app.state::<AppState>().drag_grab.lock().unwrap() = None;
 }
 
+/// 창 폭이 바뀔 때 창을 얼마나 옆으로 밀지 (물리 px).
+///
+/// 캐릭터가 창 안 어디에 있는지 알면(`centers` = 직전·지금의 가로 중심, 논리 px)
+/// **캐릭터**를 붙잡는다. 창 중앙을 붙잡으면 게이지 열이 붙는 순간 — 창은 오른쪽으로만
+/// 넓어지는데 창을 폭 증가분의 절반만큼 왼쪽으로 당기게 되어 — 캐릭터가 그만큼 슬쩍
+/// 움직인다 (시작 직후 그래프가 뜰 때 캐릭터가 미세하게 밀리던 이유).
+/// 아직 캐릭터 위치를 모르는 첫 맞춤에서만 창 중앙으로 물러선다.
+fn fit_shift_x(old_w: i32, new_w: i32, centers: Option<(f64, f64)>, sf: f64) -> i32 {
+    match centers {
+        Some((prev, now)) => ((now - prev) * sf).round() as i32,
+        None => (new_w - old_w) / 2,
+    }
+}
+
 /// 펫 웹뷰가 실측한 콘텐츠 크기에 창을 딱 맞춘다 (논리 px).
 /// 투명한 여백이 남으면 화면 가장자리에 붙여도 캐릭터가 떠 보이고, 그 여백이
 /// 클릭을 삼키기까지 한다 → 콘텐츠만큼만 남긴다.
-/// 발 위치(하단 중앙)를 기준으로 보정 이동해 캐릭터는 제자리에 머문다.
+///
+/// 창이 커지고 작아져도 **캐릭터는 화면에서 제자리**여야 한다: 가로는 캐릭터 중심
+/// (`center_x`, [`fit_shift_x`]), 세로는 발밑을 붙잡는다.
 #[tauri::command]
-pub fn fit_pet_window(app: AppHandle, width: f64, height: f64) {
+pub fn fit_pet_window(app: AppHandle, width: f64, height: f64, center_x: Option<f64>) {
     let Some(pet) = app.get_webview_window("pet") else {
         return;
     };
-    let (Ok(old_pos), Ok(old_size), Ok(sf)) =
-        (pet.outer_position(), pet.outer_size(), pet.scale_factor())
-    else {
+    let (Ok(old_pos), Ok(old_size)) = (pet.outer_position(), pet.outer_size()) else {
         return;
     };
+    let sf = crate::window::scale_factor(&pet);
     let new_w = (width.max(40.0) * sf).round() as i32;
     let new_h = (height.max(40.0) * sf).round() as i32;
+    // 직전 중심과 견주려면 여기서 갱신해야 한다 — `set_anchor` 는 이 호출 **뒤에**
+    // 같은 값을 보내온다(둘 다 한 프레임에서 잰다). 순서가 뒤집혀도 두 값이 같아져
+    // 보정이 0이 될 뿐, 창이 엉뚱한 데로 가지는 않는다.
+    let prev = center_x.and_then(|c| app.state::<AppState>().center_x.lock().unwrap().replace(c));
+    let dx = fit_shift_x(
+        old_size.width as i32,
+        new_w,
+        center_x.zip(prev).map(|(now, prev)| (prev, now)),
+        sf,
+    );
     // 1px 떨림으로 리사이즈가 반복되지 않게 여유를 둔다
-    if (old_size.width as i32 - new_w).abs() <= 2 && (old_size.height as i32 - new_h).abs() <= 2 {
+    if (old_size.width as i32 - new_w).abs() <= 2
+        && (old_size.height as i32 - new_h).abs() <= 2
+        && dx.abs() <= 2
+    {
         return;
     }
     let _ = pet.set_size(tauri::PhysicalSize::new(new_w.max(1) as u32, new_h.max(1) as u32));
-    let x = old_pos.x - (new_w - old_size.width as i32) / 2;
+    let x = old_pos.x - dx;
     let y = old_pos.y - (new_h - old_size.height as i32);
     let _ = pet.set_position(tauri::PhysicalPosition::new(x, y));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 게이지 열이 오른쪽에 붙으면 창만 오른쪽으로 넓어진다 — 캐릭터는 그대로이므로
+    /// 창도 움직이면 안 된다. (예전엔 폭 증가분의 절반만큼 왼쪽으로 밀렸다)
+    #[test]
+    fn window_stays_put_when_a_gauge_column_appears() {
+        assert_eq!(fit_shift_x(389, 453, Some((60.0, 60.0)), 1.75), 0);
+    }
+
+    /// 게이지 열이 왼쪽에 붙으면 캐릭터가 창 안에서 그만큼 오른쪽으로 밀린다 →
+    /// 창을 같은 만큼 왼쪽으로 옮겨야 캐릭터가 화면에서 제자리다.
+    #[test]
+    fn window_follows_the_character_when_the_column_is_on_the_left() {
+        assert_eq!(fit_shift_x(200, 240, Some((60.0, 100.0)), 1.0), 40);
+        // 배율이 다른 화면에서는 논리 이동량을 물리 px 로 환산해야 한다
+        assert_eq!(fit_shift_x(350, 420, Some((60.0, 100.0)), 1.75), 70);
+    }
+
+    /// 캐릭터 위치를 아직 모르는 첫 맞춤에서만 창 중앙을 붙잡는다.
+    #[test]
+    fn first_fit_falls_back_to_the_window_centre() {
+        assert_eq!(fit_shift_x(187, 389, None, 1.75), 101);
+    }
 }

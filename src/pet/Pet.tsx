@@ -330,11 +330,18 @@ export default function Pet() {
   // 게이지 열 때문에 캐릭터가 창 중앙이 아니므로 중심 x도 함께 보고한다.
   // 발밑 여백(footroom)도 같이 — 말풍선이 아래로 뒤집힐 때 그림자·무대 패딩만큼
   // 파고들어야 위로 띄울 때와 간격이 같아진다.
-  const reportAnchor = () => {
+  // 캐릭터(팩 이미지 포함)의 실측 사각형 — 앵커 보고와 창 맞춤이 **같은 기준**을 쓰도록
+  // 한 곳에서 잰다. 둘이 다른 걸 재면 말풍선 꼬리와 창 보정이 서로 어긋난다.
+  const charRect = () => {
     const el = charRef.current;
-    if (!el) return;
+    if (!el) return null;
     const img = el.querySelector("img");
-    const rect = (img ?? el).getBoundingClientRect();
+    return (img ?? el).getBoundingClientRect();
+  };
+
+  const reportAnchor = () => {
+    const rect = charRect();
+    if (!rect) return;
     void invoke("set_anchor", {
       headroom: Math.max(0, Math.round(rect.top)),
       footroom: Math.max(0, Math.round(window.innerHeight - rect.bottom)),
@@ -349,9 +356,13 @@ export default function Pet() {
     if (!el) return;
     const r = el.getBoundingClientRect();
     const overhang = (ABOVE_HEAD_STATES.has(state) ? PROP_OVERHANG : IDLE_OVERHANG) * scale;
+    // 캐릭터 중심도 함께 — 게이지 열이 붙어 창 폭이 변해도 백엔드가 창이 아니라
+    // **캐릭터**를 붙잡을 수 있게 (없으면 창 중앙 기준으로 물러선다)
+    const c = charRect();
     void invoke("fit_pet_window", {
       width: Math.ceil(r.width) + 2,
       height: Math.ceil(r.height + overhang),
+      centerX: c ? Math.round(c.left + c.width / 2) : null,
     });
   };
 
