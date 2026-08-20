@@ -32,24 +32,36 @@ pub fn set_anchor(app: AppHandle, headroom: f64, footroom: f64, center_x: f64) {
     reposition_bubble(&app);
 }
 
-/// 지금 펫 위치를 기준으로 말풍선이 놓일 좌표와 꼬리 방향을 계산한다.
+/// 말풍선을 놓을 자리 — 좌표·꼬리 방향과 **갈 화면 배율로 잰 창 크기**.
+struct BubbleSpot {
+    /// 창 좌상단 (물리 px)
+    x: i32,
+    y: i32,
+    /// 꼬리 방향 ("bottom" = 말풍선이 위, 꼬리가 아래로 펫을 가리킴)
+    tail: &'static str,
+    /// 창 크기 (물리 px) — 갈 화면 배율로 잰 값
+    size: (u32, u32),
+}
+
+/// 지금 펫 위치를 기준으로 말풍선이 놓일 자리를 계산한다.
 /// 펫이 숨겨져 있으면(말할 주체가 없다) 좌표를 못 읽으면 None.
 ///
 /// 표시 시점(`show_speech`)과 펫이 움직일 때(`reposition_bubble`)가 같은 계산을 써야
 /// 드래그 도중에도 꼬리가 머리에서 떨어지지 않는다.
-fn bubble_placement(app: &AppHandle) -> Option<(i32, i32, &'static str)> {
-    let (pet, bubble) = (
-        app.get_webview_window("pet")?,
-        app.get_webview_window("bubble")?,
-    );
+///
+/// 말풍선 크기를 **지금 창에서 읽지 않고 다시 재는** 이유: 말풍선은 펫을 따라 화면을
+/// 넘나드는데, 창을 옮기면 Windows 가 크기를 배율만큼 다시 잡는다. 옮기기 전 크기로
+/// 자리를 계산하면 꼬리가 머리에서 그 차이만큼 어긋난다.
+fn bubble_placement(app: &AppHandle) -> Option<BubbleSpot> {
+    let pet = app.get_webview_window("pet")?;
     if !pet.is_visible().unwrap_or(false) {
         return None;
     }
-    let (Ok(pos), Ok(size), Ok(bsize)) =
-        (pet.outer_position(), pet.outer_size(), bubble.outer_size())
-    else {
+    let (Ok(pos), Ok(size)) = (pet.outer_position(), pet.outer_size()) else {
         return None;
     };
+    let sf = crate::window::scale_factor(&pet);
+    let bsize = crate::window::scaled((settings::BUBBLE_BASE_W, settings::BUBBLE_BASE_H), sf);
 
     // 머리 위 여백만큼 겹치되 8px(논리)은 남겨 꼬리가 머리에 닿지 않게
     let (headroom, footroom, center_x) = {
@@ -59,7 +71,6 @@ fn bubble_placement(app: &AppHandle) -> Option<(i32, i32, &'static str)> {
         let c = *s.center_x.lock().unwrap();
         (h, f, c)
     };
-    let sf = pet.scale_factor().unwrap_or(1.0);
     // 창 안 여백(논리 px)을 물리 px 겹침으로 — 8px은 남기고, 창 높이의 60%를 넘지 않게
     let bite = |room: f64| {
         ((((room - 8.0).max(0.0)) * sf) as i32).min(size.height as i32 * 6 / 10)
@@ -73,8 +84,8 @@ fn bubble_placement(app: &AppHandle) -> Option<(i32, i32, &'static str)> {
     // 가로는 화면 안으로 가두지 않는다 — 펫을 화면 밖에 걸쳐 두는 건 의도된 배치이고
     // (start_pet_drag 참고), 말풍선만 경계에서 멈추면 꼬리가 머리에서 떨어져 나간다.
     // 펫과 함께 잘려 나가더라도 항상 붙어 있는 쪽을 택한다.
-    let x = anchor_x - (bsize.width as i32) / 2;
-    let mut y = pos.y - bsize.height as i32 + overlap;
+    let x = anchor_x - (bsize.0 as i32) / 2;
+    let mut y = pos.y - bsize.1 as i32 + overlap;
     let mut tail = "bottom"; // 말풍선이 위에 → 꼬리는 아래로 펫을 가리킴
 
     // 세로는 다르다: 위가 막히면 아래로 뒤집어도 여전히 머리에 붙어 있으므로 가둠이 아니다
@@ -88,7 +99,13 @@ fn bubble_placement(app: &AppHandle) -> Option<(i32, i32, &'static str)> {
             tail = "top";
         }
     }
-    Some((x, y, tail))
+    Some(BubbleSpot { x, y, tail, size: bsize })
+}
+
+/// 말풍선을 그 자리에 앉힌다 — **자리 → 크기** 순서 (`crate::window` 모듈 주석).
+fn place_bubble(bubble: &tauri::WebviewWindow, spot: &BubbleSpot) {
+    let _ = bubble.set_position(PhysicalPosition::new(spot.x, spot.y));
+    let _ = bubble.set_size(tauri::PhysicalSize::new(spot.size.0, spot.size.1));
 }
 
 /// 펫이 움직이거나 크기가 바뀌면 떠 있는 말풍선을 따라 옮긴다.
@@ -101,10 +118,11 @@ pub fn reposition_bubble(app: &AppHandle) {
     if !bubble.is_visible().unwrap_or(false) {
         return;
     }
-    let Some((x, y, tail)) = bubble_placement(app) else {
+    let Some(spot) = bubble_placement(app) else {
         return;
     };
-    let _ = bubble.set_position(PhysicalPosition::new(x, y));
+    place_bubble(&bubble, &spot);
+    let tail = spot.tail;
 
     // 꼬리 방향이 실제로 뒤집힐 때만 알린다 — 드래그 프레임마다 이벤트를 쏘면
     // 말풍선이 쉴 새 없이 다시 그려진다
@@ -132,14 +150,15 @@ pub fn show_speech(app: AppHandle, text: String) {
     let Some(bubble) = app.get_webview_window("bubble") else {
         return;
     };
-    let Some((x, y, tail)) = bubble_placement(&app) else {
+    let Some(spot) = bubble_placement(&app) else {
         return;
     };
+    let tail = spot.tail;
     *app.state::<AppState>().speech_tail.lock().unwrap() = tail;
 
     use tauri::Emitter;
     let _ = app.emit("speech", serde_json::json!({ "text": text, "tail": tail }));
-    let _ = bubble.set_position(PhysicalPosition::new(x, y));
+    place_bubble(&bubble, &spot);
     let _ = bubble.show();
     // 대사는 꼬리가 머리에 닿도록 펫 창과 일부러 겹친다. 펫도 always-on-top 이라
     // 그냥 두면 겹친 부분이 펫에 가리므로 표시할 때마다 최상위로 다시 올린다.
@@ -168,7 +187,7 @@ pub fn show_speech(app: AppHandle, text: String) {
 /// 펫 창 리사이즈 (하단 중앙 = 발 위치 고정: 크기 변화만큼 위/좌로 보정 이동)
 pub(crate) fn resize_pet(app: &AppHandle, scale: f64) {
     if let Some(pet) = app.get_webview_window("pet") {
-        let sf = pet.scale_factor().unwrap_or(1.0);
+        let sf = crate::window::scale_factor(&pet);
         let old_pos = pet.outer_position().ok();
         let old_size = pet.outer_size().ok();
         let new_w = (settings::PET_BASE_W * scale * sf).round() as i32;
