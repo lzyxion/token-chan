@@ -256,6 +256,12 @@ pub fn load_pack_config(pack: &str) -> PackConfig {
 pub const PET_BASE_W: f64 = 220.0;
 pub const PET_BASE_H: f64 = 140.0;
 
+/// 말풍선 창 크기 (논리 px). 펫과 달리 실측으로 다시 맞추지 않는다 — 카드가 창 폭을
+/// 그대로 쓰므로(`bubble.css` 의 `width: 100%`) 이 값이 곧 말풍선 너비다.
+/// `tauri.conf.json` 의 bubble 창과 같아야 한다 (`window::tests::table_matches_conf`).
+pub const BUBBLE_BASE_W: f64 = 236.0;
+pub const BUBBLE_BASE_H: f64 = 96.0;
+
 pub fn config_path() -> Option<PathBuf> {
     dirs::config_dir().map(|d| d.join("token-chan").join("settings.json"))
 }

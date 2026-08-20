@@ -94,7 +94,7 @@ pub fn resize_window(app: AppHandle) {
     let Ok(cursor) = app.cursor_position() else {
         return;
     };
-    let sf = win.scale_factor().unwrap_or(1.0);
+    let sf = window::scale_factor(&win);
     let (min_w, min_h) = ((r.min.0 * sf) as i32, (r.min.1 * sf) as i32);
 
     let (dx, dy) = (cursor.x - r.cursor.0, cursor.y - r.cursor.1);

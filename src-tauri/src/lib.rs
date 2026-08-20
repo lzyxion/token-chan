@@ -6,7 +6,7 @@ mod window;
 
 use std::sync::Mutex;
 
-use tauri::{Manager, PhysicalPosition};
+use tauri::Manager;
 
 /// 창 리사이즈 진행 상태 — 시작 시점의 커서와 창 사각형, 그리고 잡은 변.
 /// 사용량 패널·설정 창이 같은 흐름을 공유하고 `label` 로 구분한다.
@@ -115,40 +115,10 @@ pub fn run() {
             eprintln!("[boot] setup start");
 
             if let Some(pet) = app.get_webview_window("pet") {
-                // 저장된 캐릭터 크기 적용
-                if (loaded.pet_scale - 1.0).abs() > f64::EPSILON {
-                    let _ = pet.set_size(tauri::LogicalSize::new(
-                        settings::PET_BASE_W * loaded.pet_scale,
-                        settings::PET_BASE_H * loaded.pet_scale,
-                    ));
-                }
-                match loaded.pet_pos {
-                    Some((x, y)) => {
-                        let _ = pet.set_position(PhysicalPosition::new(x, y));
-                        // 화면 밖으로 걸쳐 두는 건 의도된 배치일 수 있으므로 되돌리지 않는다.
-                        // 다만 모니터 구성이 바뀌어 어느 화면에도 안 걸리면 창을 영영
-                        // 못 찾으므로, 그때만 첫 모니터 안으로 복구한다.
-                        if !window::position_on_screen(&pet, x, y) {
-                            if let Some(m) =
-                                pet.available_monitors().ok().and_then(|ms| ms.into_iter().next())
-                            {
-                                let mp = m.position();
-                                let _ =
-                                    pet.set_position(PhysicalPosition::new(mp.x + 40, mp.y + 40));
-                            }
-                        }
-                    }
-                    None => {
-                        // 첫 실행: 주 모니터 우하단 근처에 배치
-                        if let Ok(Some(mon)) = pet.primary_monitor() {
-                            let msize = mon.size();
-                            let mpos = mon.position();
-                            let x = mpos.x + msize.width as i32 - 220;
-                            let y = mpos.y + msize.height as i32 - 280;
-                            let _ = pet.set_position(PhysicalPosition::new(x, y));
-                        }
-                    }
-                }
+                // 저장해 둔 자리에 저장해 둔 크기로 — 자리와 크기는 한 몸이라
+                // (배율이 다른 화면으로 가면 같은 캐릭터도 물리 px 이 달라진다)
+                // 계산은 `window` 가 통째로 한다.
+                window::restore_pet(&pet, loaded.pet_pos, loaded.pet_scale);
             }
 
             // 주의: bubble 의 set_ignore_cursor_events 는 여기서 호출하면 안 된다.
