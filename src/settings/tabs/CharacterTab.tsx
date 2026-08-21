@@ -9,8 +9,8 @@ interface Props extends TabProps {
   observedModels: string[];
   /** 크기 슬라이더 전용 빠른 경로 (드래그 중 실시간 리사이즈) */
   onScaleChange: (pct: number) => void;
-  /** 스튜디오에서 팩을 만들고 돌아왔을 때 목록을 다시 읽는다 */
-  refreshPacks: () => void;
+  /** ↻ — 팩 목록을 다시 읽고, 폴더를 손으로 고쳤을 수 있으니 펫·스튜디오에도 알린다 */
+  onRefresh: () => void;
 }
 
 /** 캐릭터 — 팩 선택·모델별 규칙·크기·말풍선 */
@@ -20,7 +20,7 @@ export default function CharacterTab({
   packs,
   observedModels,
   onScaleChange,
-  refreshPacks,
+  onRefresh,
 }: Props) {
   // 규칙 편집은 이 탭 밖에서 쓰이지 않는다 — `s` 와 `update` 만 있으면 되므로
   // 껍데기가 아니라 여기 둔다.
@@ -54,7 +54,7 @@ export default function CharacterTab({
                 update({ characterPack: e.currentTarget.value || null })
               }
             >
-              <option value="">기본 (젤리 슬라임)</option>
+              <option value="">기본 (토큰짱)</option>
               {packs.map((p) => (
                 <option key={p} value={p}>
                   {p}
@@ -63,8 +63,8 @@ export default function CharacterTab({
             </select>
             <button
               className="settings-btn"
-              onClick={refreshPacks}
-              title="팩 목록 새로고침"
+              onClick={onRefresh}
+              title="팩 목록 새로고침 — 폴더에서 직접 바꾼 내용도 펫에 바로 반영"
             >
               ↻
             </button>

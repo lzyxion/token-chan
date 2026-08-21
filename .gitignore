@@ -2,8 +2,8 @@ node_modules
 dist
 target
 
-# 문서 (커밋 제외 요청)
-docs/
+# 기존 작업 문서
+/demo/
 
 # 캐릭터 이미지 (개인 에셋 — 실제 위치는 %APPDATA%지만 안전장치)
 characters/

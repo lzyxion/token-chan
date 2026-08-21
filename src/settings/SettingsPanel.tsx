@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
+import { emit, listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import type { Account, AppSettings, Summary } from "../types";
 import { usePlans } from "../hooks/useUsage";
@@ -51,6 +51,14 @@ export default function SettingsPanel() {
     invoke<Summary | null>("get_summary")
       .then((sum) => setObservedModels(sum?.observed_models ?? []))
       .catch(() => {});
+  };
+
+  /** ↻ — 목록을 다시 읽고 **다른 창에도** 알린다. 캐릭터 폴더를 손으로 고친 경우엔
+   *  앱이 알 길이 없어 아무 이벤트도 안 나므로, 이 클릭이 유일한 신호다.
+   *  보낸 쪽(자기 자신)은 이미 여기서 읽었으므로 payload 로 걸러낸다. */
+  const refreshAll = () => {
+    refreshPacks();
+    void emit("characters-refreshed", "settings");
   };
 
   // 검색이 끝났다는 신호는 `accounts-changed` 하나뿐이라, 그게 안 오면 버튼이 영영
@@ -106,12 +114,17 @@ export default function SettingsPanel() {
         setSaveErrorDismissed(false);
       }
     });
+    // 스튜디오 ↻ — 폴더에서 팩을 넣거나 뺐을 수 있으니 선택 목록도 다시 읽는다
+    const unChars = listen<string>("characters-refreshed", (e) => {
+      if (alive && e.payload !== "settings") refreshPacks();
+    });
     return () => {
       alive = false;
       un.then((f) => f());
       unAcct.then((f) => f());
       unTab.then((f) => f());
       unSave.then((f) => f());
+      unChars.then((f) => f());
     };
   }, []);
 
@@ -195,7 +208,7 @@ export default function SettingsPanel() {
             packs={packs}
             observedModels={observedModels}
             onScaleChange={onScaleChange}
-            refreshPacks={refreshPacks}
+            onRefresh={refreshAll}
           />
         )}
 

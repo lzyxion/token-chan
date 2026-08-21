@@ -109,6 +109,8 @@ export default function Pet() {
   /** 채움이 사용량인지 남은 양인지 — "auto" 면 모양의 기본값 */
   const [gaugeFill, setGaugeFill] = useState<GaugeFill>(GAUGE_FILLS[0]);
   const [speechLines, setSpeechLines] = useState<Record<string, string[]>>({});
+  /** 테스트 미리보기를 유지할 시간 = 말풍선이 떠 있는 시간 (설정값, 리스너에서만 써서 ref) */
+  const previewMsRef = useRef(4000);
   /** 활성 팩의 speech.json (없으면 null → 기본 문구) — 대사는 캐릭터의 속성 */
   const [packSpeech, setPackSpeech] = useState<Record<string, string[]> | null>(null);
   /** 활성 팩의 pack.json 끈 상태 목록 (기본 캐릭터면 null → 전역 disabledStates) */
@@ -138,6 +140,7 @@ export default function Pet() {
       setGaugeFill(gaugeFillOf(s.gaugeFill));
       setGaugeVendor(s.gaugeVendor ?? "auto");
       setSpeechLines(s.speechLines ?? {});
+      previewMsRef.current = s.speechDurationMs || 4000;
       // 설정 변경 시 팩 파일이 바뀌었을 수 있으므로 이미지 캐시 무효화
       packCacheRef.current.clear();
     };
@@ -160,25 +163,44 @@ export default function Pet() {
   );
   useEffect(() => {
     let alive = true;
-    if (!activePack) {
-      setPackImages(null);
-      return;
-    }
-    const cached = packCacheRef.current.get(activePack);
-    if (cached !== undefined) {
-      setPackImages(cached);
-      return;
-    }
-    invoke<CharacterImages | null>("get_character_images", { pack: activePack })
-      .then((imgs) => {
-        packCacheRef.current.set(activePack, imgs);
-        if (alive) setPackImages(imgs);
-      })
-      .catch(() => {
-        if (alive) setPackImages(null);
-      });
+    const load = () => {
+      if (!activePack) {
+        setPackImages(null);
+        return;
+      }
+      const cached = packCacheRef.current.get(activePack);
+      if (cached !== undefined) {
+        setPackImages(cached);
+        return;
+      }
+      invoke<CharacterImages | null>("get_character_images", { pack: activePack })
+        .then((imgs) => {
+          packCacheRef.current.set(activePack, imgs);
+          if (alive) setPackImages(imgs);
+        })
+        .catch(() => {
+          if (alive) setPackImages(null);
+        });
+    };
+    load();
+    // 스튜디오에서 그림을 갈아끼우면 **그 자리에서** 바뀐다 — 대사(speech)·상태 설정
+    // (pack.json)은 이미 그렇게 하고 있는데 이미지만 캐시에 옛 그림이 남아, 설정에서
+    // 캐릭터를 다른 걸로 바꿨다 되돌려야(= activePack 이 두 번 바뀌어야) 보였다.
+    // 활성 팩이 아니어도 캐시는 버린다 — 테스트 미리보기가 그 팩을 그릴 수 있다.
+    const un = listen<string>("character-images-changed", (e) => {
+      packCacheRef.current.delete(e.payload);
+      if (e.payload === activePack) load();
+    });
+    // 스튜디오 ↻ — 폴더에서 직접 바꾼 경우엔 어느 팩이 바뀌었는지 알 길이 없다.
+    // 캐시를 통째로 버리고 지금 쓰는 팩만 다시 읽는다.
+    const unAll = listen("characters-refreshed", () => {
+      packCacheRef.current.clear();
+      load();
+    });
     return () => {
       alive = false;
+      un.then((f) => f());
+      unAll.then((f) => f());
     };
   }, [activePack]);
 
@@ -217,10 +239,13 @@ export default function Pet() {
     const unConfig = listen<string>("character-config-changed", (e) => {
       if (e.payload === activePack) load();
     });
+    // 스튜디오 ↻ — speech.json·pack.json 도 폴더에서 직접 고칠 수 있다
+    const unAll = listen("characters-refreshed", load);
     return () => {
       alive = false;
       unSpeech.then((f) => f());
       unConfig.then((f) => f());
+      unAll.then((f) => f());
     };
   }, [activePack]);
 
@@ -246,15 +271,37 @@ export default function Pet() {
     [resetAt],
   );
 
-  // 블록 초기화 감지: 공식 리셋 시각이 바뀌면 새 창이 열린 것 → 5분간 refreshed
+  // 블록 초기화 감지 — **같은 벤더의 같은 창이 실제로 새로 열렸을 때만.**
+  //
+  // 리셋 시각 문자열이 달라진 것만으로는 초기화가 아니다. 값은 바뀌었는데 아무것도
+  // 리셋되지 않은 경우가 둘 있다:
+  //   · 게이지가 보는 벤더가 바뀐 것 (Claude ↔ Codex) — 다른 계정의 다른 시계다.
+  //     두 CLI 를 번갈아 쓰는 게 이 앱의 전제라 흔하고, 그때마다 가만히 있던 펫이
+  //     5분씩 "초기화" 로 서 있었다.
+  //   · 굳은 공식 캐시 자리에 계산값이 끼워졌다 빠지는 것 (plan.rs `swap_stale_reset`).
+  //     계산한 창이 닫히면 다시 지난 공식 값으로 되돌아간다 — 뒤로 가는 변화다.
+  //
+  // 진짜 새 창은 **직전 창이 끝났고 새 시각은 아직 오지 않은** 때뿐이다. 창이 갈리는
+  // 것과 무관한 미터가 첫 자리에 오는 경우(주간 창만 남는 판)도 label 로 걸러낸다.
   const [refreshedUntil, setRefreshedUntil] = useState(0);
-  const prevResetsRef = useRef<string | null>(null);
+  const prevResetsRef = useRef<{ source: Source; label: string; at: string } | null>(null);
+  const firstMeter = plan?.meters?.[0] ?? null;
   useEffect(() => {
-    if (resets && prevResetsRef.current && resets !== prevResetsRef.current) {
-      setRefreshedUntil(Date.now() + 5 * 60 * 1000);
-    }
-    if (resets) prevResetsRef.current = resets;
-  }, [resets]);
+    const source = active?.source;
+    if (!source || !firstMeter?.resets_at) return;
+    const prev = prevResetsRef.current;
+    prevResetsRef.current = { source, label: firstMeter.label, at: firstMeter.resets_at };
+    if (!prev || prev.source !== source || prev.label !== firstMeter.label) return;
+    const before = Date.parse(prev.at);
+    const after = Date.parse(firstMeter.resets_at);
+    const now = Date.now();
+    if (Number.isNaN(before) || Number.isNaN(after)) return;
+    // 직전 창이 끝났어야 하고(before ≤ now), 새 창은 아직 열려 있어야 한다(now < after).
+    // 낡은 값을 뒤늦게 고쳐 받은 것(뒤로 가는 변화)은 자동으로 걸러진다.
+    if (before > now || now >= after) return;
+    setRefreshedUntil(now + 5 * 60 * 1000);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [active?.source, firstMeter?.label, firstMeter?.resets_at]);
 
   // 클릭 반응이 유지되는 시각 (0 = 반응 아님)
   const [pokeUntil, setPokeUntil] = useState(0);
@@ -326,6 +373,18 @@ export default function Pet() {
     effectiveDisabled,
   ]);
 
+  /** 스튜디오 ▶ 테스트가 잠깐 덮어쓰는 겉모습 — 그 상태의 포즈와, **편집 중인 팩의**
+   *  이미지. 말풍선만 띄우면 그 상황의 절반만 보이고, 정작 그 상태에 붙인 그림이
+   *  맞는지는 실제로 그 상태가 될 때까지 확인할 수가 없다.
+   *  판정(상태 전이 대사·완료 알림)은 아래 `state` 그대로 두고 **보이는 것만** 바꾼다 —
+   *  테스트가 진짜 전이인 척하면 되돌아올 때 엉뚱한 대사가 따라붙는다. */
+  const [preview, setPreview] = useState<{
+    state: PetState;
+    images: CharacterImages | null;
+  } | null>(null);
+  const shownState = preview?.state ?? state;
+  const shownImages = preview ? preview.images : activeImages;
+
   // 캐릭터(팩 이미지 포함)의 실측 위치 — 말풍선을 머리 위·가로 중심에 맞추는 기준값.
   // 게이지 열 때문에 캐릭터가 창 중앙이 아니므로 중심 x도 함께 보고한다.
   // 발밑 여백(footroom)도 같이 — 말풍선이 아래로 뒤집힐 때 그림자·무대 패딩만큼
@@ -355,7 +414,7 @@ export default function Pet() {
     const el = stageRef.current;
     if (!el) return;
     const r = el.getBoundingClientRect();
-    const overhang = (ABOVE_HEAD_STATES.has(state) ? PROP_OVERHANG : IDLE_OVERHANG) * scale;
+    const overhang = (ABOVE_HEAD_STATES.has(shownState) ? PROP_OVERHANG : IDLE_OVERHANG) * scale;
     // 캐릭터 중심도 함께 — 게이지 열이 붙어 창 폭이 변해도 백엔드가 창이 아니라
     // **캐릭터**를 붙잡을 수 있게 (없으면 창 중앙 기준으로 물러선다)
     const c = charRect();
@@ -390,8 +449,8 @@ export default function Pet() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
     scale,
-    packImages,
-    state,
+    shownImages,
+    shownState,
     gaugeSide,
     gaugeStyle,
     sessionPct != null,
@@ -424,21 +483,50 @@ export default function Pet() {
     [speechLines, packSpeech],
   );
 
-  // 스튜디오 ▶ 테스트 — 문구를 실제 경로(변수 치환 → 말풍선) 그대로 말해본다.
+  /** 팩 하나의 상태별 이미지 — 활성 팩과 같은 캐시를 쓰고, 팩이 없거나(기본 캐릭터)
+   *  읽지 못하면 내장 기본 팩. 테스트 미리보기가 **지금 편집 중인 캐릭터**를 그릴 때 쓴다. */
+  const loadPackImages = async (pack: string | null): Promise<CharacterImages | null> => {
+    if (!pack) return DEFAULT_PACK_IMAGES;
+    const cached = packCacheRef.current.get(pack);
+    if (cached !== undefined) return cached ?? DEFAULT_PACK_IMAGES;
+    const imgs = await invoke<CharacterImages | null>("get_character_images", { pack }).catch(
+      () => null,
+    );
+    if (imgs) packCacheRef.current.set(pack, imgs);
+    return imgs ?? DEFAULT_PACK_IMAGES;
+  };
+
+  // 스튜디오 ▶ 테스트 — 그 상황을 실제 경로(변수 치환 → 말풍선) 그대로 재현한다:
+  // 문구를 말하면서 **그 상태의 포즈로, 그 캐릭터의 그림으로** 잠깐 서 있는다.
   // 리스너는 한 번만 걸고 최신 값은 ref 로 본다 (speechVars 가 렌더마다 새 클로저라서).
   const speechVarsRef = useRef<
     (extra?: Record<string, string | null>) => Record<string, string | null>
   >(() => ({}));
+  const previewTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   useEffect(() => {
-    const un = listen<string>("test-speech", (e) => {
-      // 완료 대사의 변수는 사건이 있어야 값이 생기므로 테스트에선 표본값을 넣는다 —
-      // `{제목}` 이 중괄호째 나오면 문구가 맞게 짜였는지 확인할 수가 없다
-      const vars = speechVarsRef.current({ 제목: "token-chan", 걸린시간: "3분 12초" });
-      // 값을 모르는 변수 때문에 전부 생략되면 원문이라도 보여준다 — 테스트니까
-      const text = interpolate(e.payload, vars) ?? e.payload.split("|").join("\n");
-      void invoke("show_speech", { text });
-    });
+    const un = listen<{ text: string; state: PetState | null; pack: string | null }>(
+      "test-speech",
+      (e) => {
+        const { text: tpl, state: st, pack } = e.payload;
+        // 완료 대사의 변수는 사건이 있어야 값이 생기므로 테스트에선 표본값을 넣는다 —
+        // `{제목}` 이 중괄호째 나오면 문구가 맞게 짜였는지 확인할 수가 없다
+        const vars = speechVarsRef.current({ 제목: "token-chan", 걸린시간: "3분 12초" });
+        // 값을 모르는 변수 때문에 전부 생략되면 원문이라도 보여준다 — 테스트니까
+        const text = interpolate(tpl, vars) ?? tpl.split("|").join("\n");
+        void invoke("show_speech", { text });
+        // 어느 상태에도 안 붙은 대사(리셋 임박)는 포즈를 그대로 둔다
+        if (!st) return;
+        void loadPackImages(pack).then((images) => {
+          clearTimeout(previewTimerRef.current);
+          setPreview({ state: st, images });
+          // 말풍선과 같이 들어왔다 같이 나간다 — 대사는 사라졌는데 포즈만 남으면
+          // 그게 테스트였는지 진짜 그 상태가 된 것인지 구분할 수가 없다
+          previewTimerRef.current = setTimeout(() => setPreview(null), previewMsRef.current);
+        });
+      },
+    );
     return () => {
+      clearTimeout(previewTimerRef.current);
       un.then((f) => f());
     };
   }, []);
@@ -848,7 +936,7 @@ export default function Pet() {
 
   return (
     <div
-      className={`pet ${state}`}
+      className={`pet ${shownState}`}
       style={{ "--fatigue": String(fatigue) } as React.CSSProperties}
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
@@ -862,10 +950,10 @@ export default function Pet() {
         {/* 캐릭터는 이미지 팩 한 가지 방식뿐 — 사용자 팩(상태 폴백은 백엔드 처리) 또는 내장 기본 팩.
             상태 모션(숨쉬기·흔들림·폴짝)과 소품은 .pet.<state> .cat 셀렉터로 그림 위에 얹힌다. */}
         <div className="cat pack" ref={charRef}>
-          {activeImages && (
+          {shownImages && (
             /* 이미지 로드 전에는 높이가 0 → 로드 완료 후 여백 재측정 */
             <img
-              src={activeImages[state] ?? activeImages.idle}
+              src={shownImages[shownState] ?? shownImages.idle}
               alt=""
               draggable={false}
               onLoad={reportAnchor}

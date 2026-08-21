@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { emit, listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
@@ -48,6 +48,15 @@ const STATES: {
 /** 상태에 안 딸린 대사 — 리셋 임박은 시각 기준이라 어떤 상태에서도 나올 수 있다 */
 const EXTRA_SPEECH: [string, string][] = [["resetNotify", "리셋 임박 (변수: {분}·{시각}만)"]];
 
+/** 대사 상황 → 그때 펫이 서 있는 상태. `enter.X` 는 X 로 들어가는 순간이고
+ *  `leave.X` 는 이미 빠져나온 뒤라 idle 이다. 상태 이름 그대로인 상황(done·poke)은
+ *  자기 상태, 어느 상태에도 안 붙은 상황(resetNotify)은 포즈를 바꾸지 않는다(null). */
+const stateOfSpeech = (key: string): string | null => {
+  if (key.startsWith("enter.")) return key.slice(6);
+  if (key.startsWith("leave.")) return "idle";
+  return STATES.some((st) => st.key === key) ? key : null;
+};
+
 /** 캐릭터 스튜디오 — 좌: 캐릭터 목록 / 우: 선택된 캐릭터의 상태·이미지·대사.
  *  "기본 캐릭터"(내장 팩)도 같은 자리에서 관리한다: 상태 사용은 전역 설정,
  *  대사는 기본 문구(settings.speechLines), 이미지는 내장이라 편집 불가. */
@@ -74,6 +83,20 @@ export default function CharacterStudio() {
     invoke<string[]>("list_character_packs")
       .then(setValidPacks)
       .catch(() => setValidPacks([]));
+  };
+
+  /** 선택된 팩을 다시 읽는 함수 — ↻ 가 이펙트 밖에서도 부를 수 있게 ref 로 잡아 둔다 */
+  const loadSelectedRef = useRef<() => void>(() => {});
+
+  /** ↻ — 폴더에서 직접 바꾼 내용을 다시 읽는다. 목록만이 아니라 **선택된 팩의 파일과
+   *  펫까지** 같이 — 폴더 편집은 앱을 거치지 않아 아무 이벤트도 안 나므로, 사용자가
+   *  "바꿨다" 고 알려 주는 이 순간이 유일하게 정확한 신호다 (파일 감시자나 주기적
+   *  재읽기보다 싸고 정확하다). 펫은 `characters-refreshed` 를 듣고 캐시를 버린다.
+   *  보낸 쪽(자기 자신)은 이미 여기서 읽었으므로 payload 로 걸러낸다. */
+  const refreshAll = () => {
+    refreshLists();
+    loadSelectedRef.current();
+    void emit("characters-refreshed", "studio");
   };
 
   useEffect(() => {
@@ -167,13 +190,21 @@ export default function CharacterStudio() {
         .catch(() => {});
     };
     load();
+    loadSelectedRef.current = load;
     const un = listen<string>("character-images-changed", (e) => {
       refreshLists(); // idle 이 생기면 미완성 표시가 풀린다
       if (e.payload === selected) load();
     });
+    // 설정 창의 ↻ — 여기서 쏜 신호는 이미 처리했으니 건너뛴다
+    const unAll = listen<string>("characters-refreshed", (e) => {
+      if (e.payload === "studio") return;
+      refreshLists();
+      load();
+    });
     return () => {
       alive = false;
       un.then((f) => f());
+      unAll.then((f) => f());
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selected]);
@@ -247,6 +278,8 @@ export default function CharacterStudio() {
   };
 
   /** ▶ 테스트 — 펫이 실제 경로(변수 치환 포함)로 그 문구를 말하게 한다.
+   *  대사만으로는 그 상황의 절반만 보이므로 **포즈와 캐릭터도 같이** 보낸다 —
+   *  지금 편집 중인 팩(selected)의 그 상태 이미지로, 말풍선이 떠 있는 동안.
    *  리셋 임박의 {분}·{시각}은 백엔드가 채우는 값이라 여기서 견본으로 채워 보낸다. */
   const testSpeech = (key: string, template: string) => {
     let t = template;
@@ -260,7 +293,11 @@ export default function CharacterStudio() {
           `${String(at.getHours()).padStart(2, "0")}:${String(at.getMinutes()).padStart(2, "0")}`,
         );
     }
-    void emit("test-speech", t);
+    void emit("test-speech", {
+      text: t,
+      state: stateOfSpeech(key),
+      pack: selected || null,
+    });
   };
 
   /** 이름 변경 커밋 — 백엔드가 폴더와 설정 참조(선택 팩·규칙)를 함께 고친다 */
@@ -315,7 +352,7 @@ export default function CharacterStudio() {
             >
               <div className="studio-pack-info">
                 기본 캐릭터
-                <span className="studio-pack-sub">내장 · 젤리 슬라임</span>
+                <span className="studio-pack-sub">내장 · 토큰짱</span>
               </div>
             </div>
             {dirs.map((d) =>
@@ -399,8 +436,8 @@ export default function CharacterStudio() {
                 </button>
                 <button
                   className="settings-btn"
-                  onClick={refreshLists}
-                  title="폴더에서 직접 바꾼 내용 다시 읽기"
+                  onClick={refreshAll}
+                  title="폴더에서 직접 바꾼 내용 다시 읽기 (펫에도 바로 반영)"
                 >
                   ↻
                 </button>

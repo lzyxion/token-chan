@@ -73,6 +73,10 @@ export function SpeechField({
             <button
               className="speech-test"
               title="펫이 이 대사를 실제로 말해봅니다 (무작위 한 줄)"
+              /* 칩과 같은 이유로 mousedown 을 막는다 — 다른 칸을 편집 중에 누르면
+                 그 칸이 포커스를 잃으며 변수 칩이 접히고, 그만큼 아래 내용이 위로
+                 밀려 커서 밑에서 버튼이 빠져나간다(= 클릭이 안 먹는다) */
+              onMouseDown={(e) => e.preventDefault()}
               onClick={() =>
                 onTest(key, pool[Math.floor(Math.random() * pool.length)])
               }
