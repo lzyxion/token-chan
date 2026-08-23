@@ -69,12 +69,17 @@ pub struct DailyRow {
     pub cost: f64,
 }
 
-/// 하루에 모델 하나가 쓴 양. 비용은 담지 않는다 — 막대는 토큰 비중만 그린다.
+/// 하루에 모델 하나가 쓴 양.
+///
+/// 토큰과 비용을 **둘 다** 담는다. 막대의 기준을 토글로 바꾸는데, 높이만 비용으로
+/// 바꾸고 조각은 토큰으로 쌓으면 한 그래프 안에서 기준이 섞여 더 나쁘다.
 #[derive(Clone, Debug, Serialize)]
 pub struct DayModel {
     pub model: String,
     pub source: Source,
     pub tokens: u64,
+    #[serde(default)]
+    pub cost: f64,
 }
 
 /// 하루치 모델 내역
@@ -193,7 +198,7 @@ pub fn build_summary(
     // 주간 막대용 (날짜, 소스, 모델) → 토큰. 보존기간이 7일보다 짧으면 그만큼만 본다.
     let week_len = days.min(WEEK_DAYS);
     let week_start = today - Duration::days(week_len.max(1) as i64 - 1);
-    let mut per_day_model: std::collections::BTreeMap<(NaiveDate, Source, String), u64> =
+    let mut per_day_model: std::collections::BTreeMap<(NaiveDate, Source, String), (u64, f64)> =
         Default::default();
 
     for ev in events {
@@ -218,7 +223,9 @@ pub fn build_summary(
         day.1 += cost.unwrap_or(0.0);
 
         if week_len > 0 && d >= week_start && d <= today {
-            *per_day_model.entry((d, ev.source, ev.model.clone())).or_default() += ev.total();
+            let e = per_day_model.entry((d, ev.source, ev.model.clone())).or_default();
+            e.0 += ev.total();
+            e.1 += cost.unwrap_or(0.0);
         }
 
         if d == today {
@@ -295,8 +302,8 @@ pub fn build_summary(
 
     // 주간 막대용 모델 내역 — `daily` 꼬리와 같은 날짜·같은 순서여야 프론트가 붙일 수 있다
     let mut by_date: std::collections::BTreeMap<NaiveDate, Vec<DayModel>> = Default::default();
-    for ((d, source, model), tokens) in per_day_model {
-        by_date.entry(d).or_default().push(DayModel { model, source, tokens });
+    for ((d, source, model), (tokens, cost)) in per_day_model {
+        by_date.entry(d).or_default().push(DayModel { model, source, tokens, cost });
     }
     let mut week_models = vec![];
     for i in (0..week_len).rev() {

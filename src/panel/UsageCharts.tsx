@@ -1,4 +1,12 @@
-import { fmtCost, fmtTokens, shortModel, totalOf, type Currency } from "../format";
+import {
+  basisOf,
+  fmtBasis,
+  fmtCost,
+  fmtTokens,
+  shortModel,
+  type Basis,
+  type Currency,
+} from "../format";
 import type { DailyModels, DailyRow, DayModel, ModelRow } from "../types";
 
 /** 주간 막대가 덮는 일수 — 백엔드 `aggregate::WEEK_DAYS` 와 같아야 날짜가 맞물린다 */
@@ -54,15 +62,18 @@ export function UsageHeatmap({
   daily,
   firstEvent,
   currency,
+  basis,
 }: {
   daily: DailyRow[];
   /** 가장 오래된 이벤트 시각. 이전 날짜는 "안 씀"이 아니라 **기록이 없던 날**이다. */
   firstEvent: string | null;
   currency: Currency;
+  basis: Basis;
 }) {
   if (daily.length === 0) return null;
   const days = daily;
-  const max = Math.max(...days.map((d) => totalOf(d.totals)));
+  const val = (d: DailyRow) => basisOf(basis, d.totals, d.cost);
+  const max = Math.max(...days.map(val));
 
   // 기록이 시작된 날. 이전 칸을 0 과 같은 모양으로 그리면 CLI 를 깔기도 전 날짜까지
   // "그날 안 썼음"으로 보인다 — 격자 모양은 그대로 두고 칸 모양만 다르게 한다.
@@ -92,7 +103,7 @@ export function UsageHeatmap({
       >
         {cells.map((d, i) => {
           if (!d) return <span className="grass-cell empty" key={`pad${i}`} />;
-          const total = totalOf(d.totals);
+          const total = val(d);
           if (started != null && localDate(d.date).getTime() < started) {
             return (
               <span className="grass-cell nodata" key={d.date} title={`${d.date} · 기록 없음`} />
@@ -139,18 +150,31 @@ const MIX_MAX = 4;
  * 낮춰 뒀다 — 원래 Codex 색(`#10a37f`)이 잔디 초록과 거의 같아서, 같은 페이지에서
  * 초록이 "양"이었다가 "Codex"가 되는 혼선이 있었다.
  */
-export function ModelMix({ models }: { models: ModelRow[] }) {
-  const sorted = [...models].sort((a, b) => totalOf(b.totals) - totalOf(a.totals));
-  const total = sorted.reduce((s, m) => s + totalOf(m.totals), 0);
+export function ModelMix({
+  models,
+  basis,
+  currency,
+}: {
+  models: ModelRow[];
+  basis: Basis;
+  currency: Currency;
+}) {
+  // 비용 기준일 때 단가 미등록 모델은 0 이라 막대에서 사라진다. 조용히 빼면 "안 썼다"로
+  // 읽히므로 세어 두고 아래에 밝힌다 — 토큰 기준에서는 멀쩡히 보이던 모델이다.
+  const usable = basis === "cost" ? models.filter((m) => m.cost_known) : models;
+  const hidden = models.length - usable.length;
+  const val = (m: ModelRow) => basisOf(basis, m.totals, m.cost);
+  const sorted = [...usable].sort((a, b) => val(b) - val(a));
+  const total = sorted.reduce((s, m) => s + val(m), 0);
   if (total === 0) return null;
 
   const parts = sorted.slice(0, MIX_MAX).map((m) => ({
     key: `${m.source}-${m.model}`,
     label: shortModel(m.model),
     tone: m.source as string,
-    tokens: totalOf(m.totals),
+    tokens: val(m),
   }));
-  const rest = sorted.slice(MIX_MAX).reduce((s, m) => s + totalOf(m.totals), 0);
+  const rest = sorted.slice(MIX_MAX).reduce((s, m) => s + val(m), 0);
   if (rest > 0) {
     parts.push({ key: "rest", label: "기타", tone: "rest", tokens: rest });
   }
@@ -165,7 +189,7 @@ export function ModelMix({ models }: { models: ModelRow[] }) {
             key={p.key}
             className={`mix-seg ${p.tone}`}
             style={{ flexGrow: p.tokens }}
-            title={`${p.label} · ${fmtTokens(p.tokens)} (${pct(p.tokens)}%)`}
+            title={`${p.label} · ${fmtBasis(basis, p.tokens, currency)} (${pct(p.tokens)}%)`}
           />
         ))}
       </div>
@@ -173,10 +197,11 @@ export function ModelMix({ models }: { models: ModelRow[] }) {
         {parts.map((p) => (
           <span className="mix-item" key={p.key}>
             <span className={`mix-dot ${p.tone}`} />
-            {p.label} <b>{fmtTokens(p.tokens)}</b> {pct(p.tokens)}%
+            {p.label} <b>{fmtBasis(basis, p.tokens, currency)}</b> {pct(p.tokens)}%
           </span>
         ))}
       </div>
+      {hidden > 0 && <div className="mix-note">단가 미등록 {hidden}개 제외</div>}
     </div>
   );
 }
@@ -194,14 +219,20 @@ export function WeekBars({
   daily,
   weekModels,
   currency,
+  basis,
 }: {
   daily: DailyRow[];
   weekModels: DailyModels[];
   currency: Currency;
+  basis: Basis;
 }) {
   const days = daily.slice(-WEEK_DAYS);
   if (days.length === 0) return null;
-  const max = Math.max(...days.map((d) => totalOf(d.totals)), 1);
+  // 막대 높이와 조각이 **같은 기준**이어야 한다 — 높이만 비용으로 바꾸고 조각을 토큰으로
+  // 쌓으면 한 그래프 안에서 기준이 섞여, 토큰만 그리던 때보다 나빠진다.
+  const dayVal = (d: DailyRow) => basisOf(basis, d.totals, d.cost);
+  const segVal = (m: DayModel) => (basis === "tokens" ? m.tokens : m.cost);
+  const max = Math.max(...days.map(dayVal), 1);
   const labels = ["일", "월", "화", "수", "목", "금", "토"];
 
   const byDate = new Map(weekModels.map((w) => [w.date, w.models]));
@@ -212,8 +243,13 @@ export function WeekBars({
   for (const w of weekModels) {
     for (const m of w.models) {
       const cur = weekTotals.get(keyOf(m));
-      if (cur) cur.tokens += m.tokens;
-      else weekTotals.set(keyOf(m), { label: shortModel(m.model), source: m.source, tokens: m.tokens });
+      if (cur) cur.tokens += segVal(m);
+      else
+        weekTotals.set(keyOf(m), {
+          label: shortModel(m.model),
+          source: m.source,
+          tokens: segVal(m),
+        });
     }
   }
   const ranked = [...weekTotals.entries()].sort((a, b) => b[1].tokens - a[1].tokens);
@@ -241,7 +277,7 @@ export function WeekBars({
     <div className="weekbars-wrap">
       <div className="weekbars">
         {days.map((d) => {
-          const total = totalOf(d.totals);
+          const total = dayVal(d);
           // 조각도 순위 순으로 쌓아야 날마다 같은 층에 같은 모델이 온다.
           // 안 쓴 모델은 조각이 없을 뿐 순서는 유지된다.
           const models = (byDate.get(d.date) ?? []).slice();
@@ -250,11 +286,11 @@ export function WeekBars({
               ...l,
               tokens:
                 l.key === "rest"
-                  ? models.filter((m) => !toneOf.has(keyOf(m))).reduce((s, m) => s + m.tokens, 0)
-                  : models.filter((m) => keyOf(m) === l.key).reduce((s, m) => s + m.tokens, 0),
+                  ? models.filter((m) => !toneOf.has(keyOf(m))).reduce((s, m) => s + segVal(m), 0)
+                  : models.filter((m) => keyOf(m) === l.key).reduce((s, m) => s + segVal(m), 0),
             }))
             .filter((s) => s.tokens > 0);
-          const detail = segs.map((s) => `${s.label} ${fmtTokens(s.tokens)}`).join("\n");
+          const detail = segs.map((s) => `${s.label} ${fmtBasis(basis, s.tokens, currency)}`).join("\n");
           return (
             <div
               className="weekbar"
@@ -285,7 +321,7 @@ export function WeekBars({
           {legend.map((l) => (
             <span className="mix-item" key={l.key}>
               <span className={`mix-dot ${l.tone}`} />
-              {l.label} <b>{fmtTokens(l.tokens)}</b>
+              {l.label} <b>{fmtBasis(basis, l.tokens, currency)}</b>
             </span>
           ))}
         </div>

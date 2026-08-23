@@ -1,4 +1,4 @@
-import type { Account, GaugeFill, GaugeStyle, Source, Totals } from "./types";
+import type { Account, CostParts, GaugeFill, GaugeStyle, Source, Totals } from "./types";
 
 /** 다루는 소스 전부 — 화면에 늘어놓는 순서이기도 하다 (설정의 홈 목록·게이지 순환).
  *  목록을 화면마다 따로 들면 벤더를 추가할 때 한 곳이 조용히 빠진다. */
@@ -202,6 +202,56 @@ export function fmtTokens(n: number): string {
 
 export function totalOf(t: Totals): number {
   return t.input + t.output + t.cache_write + t.cache_read;
+}
+
+/**
+ * 차트가 무엇을 크기로 삼는가 — **페이지 단위**로 고른다.
+ *
+ * 토큰 합계는 비용을 예측하지 못한다 (실측: 캐시 읽기가 토큰의 98.6% 인데 비용은
+ * 73.5%, 출력은 토큰 0.3% 인데 비용 11.6%). 기준을 안 밝히고 토큰만 그리면 잔디도
+ * 막대도 파이도 사실상 캐시 읽기 하나의 모양이 된다.
+ *
+ * 차트마다 토글을 두지 않는 이유: 잔디와 막대가 서로 다른 기준으로 그려지면 나란히
+ * 놓고 비교할 수 없고, 지금 뭘 보는지도 헷갈린다.
+ */
+export type Basis = "tokens" | "cost";
+
+/** 기준에 맞는 값 하나를 꺼낸다. 차트들이 이 함수만 통하면 기준이 어긋날 수 없다. */
+export function basisOf(basis: Basis, totals: Totals, cost: number): number {
+  return basis === "tokens" ? totalOf(totals) : cost;
+}
+
+/**
+ * 백엔드가 아직 옛 버전이면 `*_parts` 가 통째로 없다 (`week_models ?? []` 와 같은 상황 —
+ * 개발 중 프론트만 먼저 갱신되거나, 업데이트 도중 한쪽만 새 것일 때). 0 으로 그리면
+ * 숫자가 틀릴 뿐이지만, 없는 객체를 파고들면 화면이 통째로 죽는다.
+ */
+export const EMPTY_PARTS: CostParts = {
+  input: 0,
+  output: 0,
+  cache_write: 0,
+  cache_read: 0,
+  uncached: 0,
+};
+
+/**
+ * 기준값을 앞에, 다른 축을 괄호로. 토큰과 비용의 **괴리 자체가 정보**라서
+ * (캐시 읽기: 토큰 98.6% / 비용 73.5%) 한쪽만 보여주면 그 사실이 사라진다.
+ */
+export function basisText(
+  basis: Basis,
+  tokens: number,
+  cost: number,
+  currency: Currency,
+): string {
+  return basis === "tokens"
+    ? `${fmtTokens(tokens)} (${fmtCost(cost, false, currency)})`
+    : `${fmtCost(cost, false, currency)} (${fmtTokens(tokens)})`;
+}
+
+/** 기준에 맞는 표기 — 축·툴팁·범례가 같은 단위를 쓰게 한다. */
+export function fmtBasis(basis: Basis, value: number, currency: Currency): string {
+  return basis === "tokens" ? fmtTokens(value) : fmtCost(value, false, currency);
 }
 
 /** 비용 표기 통화. 환율은 설정에서 직접 넣는다 — 이 앱은 네트워크를 쓰지 않는다. */

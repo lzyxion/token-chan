@@ -59,6 +59,8 @@ export interface DayModel {
   model: string;
   source: Source;
   tokens: number;
+  /** 막대 기준을 비용으로 바꿀 때 쓴다 — 높이와 조각이 같은 기준이어야 한다 */
+  cost: number;
 }
 
 export interface DailyModels {

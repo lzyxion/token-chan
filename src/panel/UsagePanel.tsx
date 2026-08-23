@@ -25,6 +25,9 @@ import {
   showsHeatmap,
   shortModel,
   SOURCE_LABEL,
+  basisText,
+  EMPTY_PARTS,
+  type Basis,
   totalOf,
   type AlertThresholds,
   type Currency,
@@ -207,6 +210,19 @@ function VendorCard({
 
 const PAGE_TITLES = ["현황", "통계·사용량", "최근 세션"];
 
+/** 차트 기준(토큰/비용) 저장 키 — 패널은 별도 창이라 닫으면 상태가 날아간다.
+ *  설정(백엔드)에 넣을 만큼 무거운 값이 아니고 되돌리기 쉬운 뷰 취향이라 여기 둔다. */
+const BASIS_KEY = "token-chan:chart-basis";
+
+function loadBasis(): Basis {
+  try {
+    return localStorage.getItem(BASIS_KEY) === "cost" ? "cost" : "tokens";
+  } catch {
+    // 저장소가 막힌 환경에서도 화면은 떠야 한다
+    return "tokens";
+  }
+}
+
 /** 독립 창으로 뜨는 사용량 패널 — 펫 우클릭 또는 트레이 메뉴로 토글 */
 export default function UsagePanel() {
   const summary = useSummary();
@@ -248,6 +264,8 @@ export default function UsagePanel() {
 
   const topModels = summary.models_today.slice(0, 5);
   const todayTotal = totalOf(summary.today);
+  // 옛 백엔드가 붙어 있으면 통째로 없다 — 없는 객체를 파고들면 화면이 죽는다
+  const todayParts = summary.today_parts ?? EMPTY_PARTS;
   // 잔디가 덮는 기간(= summary.daily) 전체 합계. 백엔드에 따로 담지 않고 여기서 더한다 —
   // 일별 값이 이미 다 와 있어 서버 왕복을 늘릴 이유가 없다.
   const periodTotal = summary.daily.reduce((s, d) => s + totalOf(d.totals), 0);
@@ -268,6 +286,16 @@ export default function UsagePanel() {
     ? summary.contexts.reduce((a, b) => ((a.at ?? "") >= (b.at ?? "") ? a : b))
     : null;
   const activeSource = [...busySources][0] ?? latestContext?.source ?? null;
+
+  const [basis, setBasis] = useState<Basis>(loadBasis);
+  const switchBasis = (b: Basis) => {
+    setBasis(b);
+    try {
+      localStorage.setItem(BASIS_KEY, b);
+    } catch {
+      /* 저장 실패는 이번 세션만 기억 못 할 뿐이다 */
+    }
+  };
 
   const pageCount = PAGE_TITLES.length;
   const prev = () => setPage((p) => (p + pageCount - 1) % pageCount);
@@ -334,6 +362,22 @@ export default function UsagePanel() {
                   큰 숫자를 전체 합계로 오해하기 딱 좋다. 둘을 나란히 놓아 기간을 못 박는다.
                   기간 합계는 통계 페이지에 원래 있어야 할 값이기도 하다
                   (지금까지는 잔디를 눈으로 훑어야 총량을 짐작할 수 있었다). */}
+              {/* 기준 토글 — 차트마다 두지 않는다. 잔디와 막대가 다른 기준으로 그려지면
+                  나란히 놓고 비교할 수 없고 지금 뭘 보는지도 헷갈린다. */}
+              <div className="basis-toggle" role="group" aria-label="차트 기준">
+                <button
+                  className={basis === "tokens" ? "on" : ""}
+                  onClick={() => switchBasis("tokens")}
+                >
+                  토큰
+                </button>
+                <button
+                  className={basis === "cost" ? "on" : ""}
+                  onClick={() => switchBasis("cost")}
+                >
+                  비용
+                </button>
+              </div>
               <div className="totals">
                 <div className="total-item">
                   <span className="total-label">오늘</span>
@@ -351,10 +395,15 @@ export default function UsagePanel() {
                 </div>
               </div>
               {/* 어느 기간의 내역인지 앞에 못 박는다 (위 두 숫자와 헷갈리지 않게) */}
+              {/* 큰 숫자의 98% 가 캐시 읽기다 — 그 사실을 밝히는 유일한 줄이라 캐시를
+                  읽기/쓰기로 가른다 (둘은 단가가 20배 차이나 합치면 히트율을 못 읽는다). */}
               <div className="grand-mini">
-                오늘 · 입력 {fmtTokens(summary.today.input)} · 출력{" "}
-                {fmtTokens(summary.today.output)} · 캐시{" "}
-                {fmtTokens(summary.today.cache_write + summary.today.cache_read)}
+                오늘 · 입력 {basisText(basis, summary.today.input, todayParts.input, currency)}
+                {" · "}출력 {basisText(basis, summary.today.output, todayParts.output, currency)}
+                {" · "}캐시읽기{" "}
+                {basisText(basis, summary.today.cache_read, todayParts.cache_read, currency)}
+                {" · "}캐시쓰기{" "}
+                {basisText(basis, summary.today.cache_write, todayParts.cache_write, currency)}
               </div>
 
               {/* 조회 기간 = 스캔 범위라 위 기간 합계와 아래 잔디가 함께 움직인다.
@@ -381,19 +430,29 @@ export default function UsagePanel() {
               {showsHeatmap(retention) && (
                 <div className="chart-block">
                   <div className="chart-title">일별 사용량</div>
-                  <UsageHeatmap daily={summary.daily} firstEvent={summary.first_event_ts} currency={currency} />
+                  <UsageHeatmap
+                    daily={summary.daily}
+                    firstEvent={summary.first_event_ts}
+                    currency={currency}
+                    basis={basis}
+                  />
                 </div>
               )}
 
               <div className="chart-block">
                 <div className="chart-title">최근 7일</div>
-                <WeekBars daily={summary.daily} weekModels={summary.week_models ?? []} currency={currency} />
+                <WeekBars
+                  daily={summary.daily}
+                  weekModels={summary.week_models ?? []}
+                  currency={currency}
+                  basis={basis}
+                />
               </div>
 
               {topModels.length > 0 && (
                 <div className="chart-block">
                   <div className="chart-title">오늘 모델</div>
-                  <ModelMix models={summary.models_today} />
+                  <ModelMix models={summary.models_today} basis={basis} currency={currency} />
                 </div>
               )}
             </>

@@ -138,6 +138,41 @@
   font-size: 10px;
 }
 
+/* 기준 토글 — 이 페이지의 모든 차트가 따르는 값이라 차트 위가 아니라 **페이지 머리**에
+   둔다. 조회 기간(`.period-row`)과 같은 성격(페이지 전체를 바꾸는 조작)이지만, 두 값
+   중 하나를 고르는 것이라 select 가 아니라 붙은 버튼 두 개로 둔다. */
+.basis-toggle {
+  display: flex;
+  align-self: flex-end;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 8px;
+  overflow: hidden;
+}
+.basis-toggle button {
+  background: transparent;
+  color: var(--fg-dim);
+  border: 0;
+  padding: 3px 10px;
+  font: inherit;
+  font-size: 10px;
+  cursor: pointer;
+}
+.basis-toggle button:hover {
+  color: var(--fg);
+}
+.basis-toggle button.on {
+  background: rgba(255, 255, 255, 0.12);
+  color: var(--fg);
+}
+
+/* 비용 기준에서 단가를 모르는 모델은 막대에서 빠진다 — 조용히 빼면 "안 썼다"로
+   읽히므로 몇 개가 빠졌는지 밝힌다 (§ cost_partial 과 같은 원칙). */
+.mix-note {
+  color: var(--fg-dim);
+  font-size: 9px;
+  opacity: 0.8;
+}
+
 /* 차트 묶음 */
 /* 조회 기간 줄 — 통계 탭의 기간 합계와 잔디가 모두 이 값을 따른다.
    설정 창의 select 와 같은 생김새를 쓰되(같은 조작이라 같아야 한다) 라벨은
