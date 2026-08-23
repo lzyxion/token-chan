@@ -193,8 +193,10 @@
   display: flex;
   flex-direction: column;
   /* 탭과 판이 **한 값**을 봐야 한다. 두 곳에 적으면 언젠가 갈리고, 갈리는 순간
-     이어진 느낌이 깨진다. */
+     이어진 느낌이 깨진다. 선 색은 다른 조작들(`.period-select`·`.basis-toggle`)과
+     같은 값이라, 이 판만 튀지 않는다. */
   --vpanel-fill: rgba(255, 255, 255, 0.06);
+  --vpanel-line: rgba(255, 255, 255, 0.12);
 }
 .vtabs-row {
   display: flex;
@@ -216,7 +218,10 @@
   min-width: 0;
   background: transparent;
   color: var(--fg-dim);
-  border: 0;
+  /* 안 고른 탭은 선을 숨긴다 — 자리는 잡아 둬야 고를 때 글자가 안 밀린다
+     (`.vendor-card` 가 평소 투명 테두리를 두는 것과 같은 처리다) */
+  border: 1px solid transparent;
+  border-bottom: 0;
   border-radius: 7px 7px 0 0;
   padding: 4px 4px 5px;
   font: inherit;
@@ -228,12 +233,17 @@
   color: var(--fg);
 }
 .vtabs button.on {
-  /* 판과 **똑같은 면**이라야 이어진다. 값이 갈리면 탭만 떠 보인다.
-     선으로 잇지 않는 이유: 이 패널의 어법은 면이다 (`.vendor-card` 도 평소엔 테두리가
-     투명하고 선택됐을 때만 선이 선다). 판에만 사각 테두리를 두르면 탭과 이어진 게
-     아니라 **틀에 갇힌 별개 상자**로 읽힌다. */
+  /* 고른 탭은 판이 위로 뻗어 나온 부분이다 — 면도 선도 판과 같은 값을 쓴다. */
   background: var(--vpanel-fill);
+  border-color: var(--vpanel-line);
   color: var(--fg);
+  /* 폴더의 입구. 1px 내려앉아 **판의 위 테두리를 자기 폭만큼 덮는다** — 아래 테두리가
+     없으므로 탭의 면이 그 선을 지운다. 겹치는 만큼 아래 여백을 돌려줘야 글자가
+     안 밀린다. 판보다 늦게 그려져야 덮이므로 z-index 를 올린다. */
+  margin-bottom: -1px;
+  padding-bottom: 6px;
+  position: relative;
+  z-index: 1;
 }
 .vtabs button img {
   flex: none;
@@ -252,8 +262,10 @@
   display: flex;
   flex-direction: column;
   gap: 7px;
-  /* 위 모서리는 각지게 — 어느 탭이 선택되든 그 탭이 판에 그대로 얹힌다.
-     위쪽만 둥글리면 첫 탭일 때만 맞고 나머지 탭에서는 어긋나 보인다. */
+  /* 테두리를 유지하는 이유는 통일감이다 — 이 패널의 다른 조작들도 같은 선을 쓴다.
+     위 모서리만 각지게: 어느 탭이 선택되든 그 탭이 판에 그대로 얹힌다. 위쪽을
+     둥글리면 첫 탭일 때만 맞고 나머지 탭에서는 어긋나 보인다. */
+  border: 1px solid var(--vpanel-line);
   border-radius: 0 0 8px 8px;
   background: var(--vpanel-fill);
   padding: 9px 8px 10px;
