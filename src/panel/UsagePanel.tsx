@@ -501,7 +501,7 @@ export default function UsagePanel() {
               {tab !== "all" && picked && (
                 <>
                   <div className="chart-block">
-                    <div className="chart-title">무엇이 비용을 먹나 · {recorded}일</div>
+                    <div className="chart-title">항목별 비용 · {recorded}일</div>
                     <CostBreakdown
                       totals={picked.period}
                       parts={picked.period_parts ?? EMPTY_PARTS}
@@ -509,7 +509,7 @@ export default function UsagePanel() {
                     />
                   </div>
                   <div className="chart-block">
-                    <div className="chart-title">잘 쓰고 있나</div>
+                    <div className="chart-title">캐시 효율</div>
                     <Efficiency
                       totals={picked.period}
                       parts={picked.period_parts ?? EMPTY_PARTS}
