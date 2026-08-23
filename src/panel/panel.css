@@ -206,9 +206,9 @@
      환산해야 한다. */
   /* 빗변이 가로로 먹는 폭. 탭 높이(약 23px)에 `--tab-skew` 의 tan 을 곱한 값이어야
      빗변이 조각 안에 딱 들어간다 — 둘은 짝이라 한쪽만 바꾸면 어긋난다.
-     23 × tan(7°) ≈ 2.8 → 3px. */
-  --tab-slant: 3px;
-  --tab-skew: 7deg;
+     23 × tan(25°) ≈ 10.7 → 11px. */
+  --tab-slant: 11px;
+  --tab-skew: 25deg;
   --vpanel-fill: #26292f;
   --vpanel-line: #34363d;
 }
@@ -219,9 +219,17 @@
 }
 .vtabs {
   display: flex;
-  gap: 2px;
+  /* 빗변이 가로로 `--tab-slant` 를 먹는다. 그냥 두면 탭마다 라벨 자리가 그만큼
+     줄어드는데, 실제 서류 폴더도 탭끼리 겹쳐 있다 — 겹쳐 두면 빗변이 이웃 탭의
+     빈 왼쪽 위를 덮으므로 라벨 자리를 잃지 않는다.
+     안 고른 탭은 면도 선도 투명이라 겹쳐도 아무것도 안 보이고, 고른 탭은
+     `z-index: 1` 로 이웃 위에 온다. */
+  gap: 0;
   flex: 1;
   min-width: 0;
+}
+.vtabs button + button {
+  margin-left: calc(var(--tab-slant) * -1);
 }
 /* 폴더 모양 — 왼쪽은 각지고 오른쪽만 비스듬하다.
    `clip-path` 로는 안 된다: 모양은 잘려도 **테두리가 빗변을 따라가지 않는다**
