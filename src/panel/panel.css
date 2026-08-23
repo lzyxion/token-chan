@@ -152,7 +152,8 @@
    중 하나를 고르는 것이라 select 가 아니라 붙은 버튼 두 개로 둔다. */
 .basis-toggle {
   display: flex;
-  align-self: flex-end;
+  flex: none;
+  margin-bottom: 4px;
   border: 1px solid rgba(255, 255, 255, 0.12);
   border-radius: 8px;
   overflow: hidden;
@@ -182,34 +183,77 @@
   opacity: 0.8;
 }
 
-/* 벤더 탭 — 개요와 벤더 상세를 가른다. 기준 토글(`.basis-toggle`)과 나란히 서지만
-   성격이 다르다: 저건 "무엇을 크기로 삼나", 이건 "누구를 보나". 그래서 토글은 오른쪽
-   끝에 붙이고 이 줄은 폭을 채워 페이지의 머리로 읽히게 한다. */
+/* ── 폴더 탭 ──
+   탭과 본문이 **한 덩어리**로 읽혀야 한다. 버튼 줄로 두면 탭은 조작, 아래는 내용으로
+   따로 읽혀서 "이 숫자가 어느 탭 것인지"가 안 붙는다. 선택한 탭만 아래쪽 경계를
+   지우고 본문 판(`.vpanel`)과 같은 배경을 줘, 탭이 판의 튀어나온 부분이 되게 한다. */
+.vtabs-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 6px;
+  /* 탭 아래 선이 판 위쪽 테두리와 이어진다 */
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+  margin-bottom: -1px;
+}
 .vtabs {
   display: flex;
-  gap: 3px;
-}
-.vtabs button {
+  gap: 2px;
   flex: 1;
   min-width: 0;
-  background: rgba(255, 255, 255, 0.05);
+}
+.vtabs button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  flex: 1;
+  min-width: 0;
+  background: transparent;
   color: var(--fg-dim);
-  border: 0;
-  border-radius: 7px;
-  padding: 4px 2px;
+  border: 1px solid transparent;
+  border-bottom: 0;
+  border-radius: 7px 7px 0 0;
+  padding: 4px 4px 5px;
   font: inherit;
   font-size: 9.5px;
   white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
   cursor: pointer;
 }
 .vtabs button:hover {
   color: var(--fg);
 }
 .vtabs button.on {
-  background: rgba(255, 255, 255, 0.14);
+  background: rgba(255, 255, 255, 0.05);
+  border-color: rgba(255, 255, 255, 0.1);
   color: var(--fg);
+  /* 판과 이어지도록 아래 선을 판 배경으로 덮는다 — 이게 폴더처럼 보이게 하는 한 줄 */
+  box-shadow: 0 1px 0 0 rgba(255, 255, 255, 0.05);
+}
+.vtabs button img {
+  flex: none;
+  opacity: 0.75;
+}
+.vtabs button.on img {
+  opacity: 1;
+}
+.vtab-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* 탭이 이어지는 본문 판 */
+.vpanel {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 0 8px 8px 8px;
+  background: rgba(255, 255, 255, 0.05);
+  padding: 8px 8px 10px;
+}
+/* 판 안에서는 자식이 줄어들면 안 된다 (`.page-body > *` 와 같은 이유) */
+.vpanel > * {
+  flex: none;
 }
 
 /* 벤더별 비중 — 줄 전체가 상세로 가는 버튼이다 */

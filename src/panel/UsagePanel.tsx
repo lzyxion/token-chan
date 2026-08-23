@@ -216,6 +216,17 @@ function VendorCard({
 
 
 
+/**
+ * 탭에 들어갈 짧은 이름. 정식 이름(`SOURCE_LABEL`)은 280px 폭에서 네 칸이 되면
+ * 전부 말줄임이 되어 무슨 벤더인지 알 수 없다. 로고와 함께 세우므로 이름은
+ * 구분에 필요한 최소만 남긴다 — 정식 이름은 `title` 로 붙는다.
+ */
+const SHORT_VENDOR: Record<Source, string> = {
+  claude: "Claude",
+  codex: "Codex",
+  antigravity: "agy",
+};
+
 const PAGE_TITLES = ["현황", "통계·사용량", "최근 세션"];
 
 /** 차트 기준(토큰/비용) 저장 키 — 패널은 별도 창이라 닫으면 상태가 날아간다.
@@ -284,13 +295,21 @@ export default function UsagePanel() {
     );
   }
 
-  const topModels = summary.models_today.slice(0, 5);
-  const todayTotal = totalOf(summary.today);
-  // 옛 백엔드가 붙어 있으면 통째로 없다 — 없는 객체를 파고들면 화면이 죽는다
-  const todayParts = summary.today_parts ?? EMPTY_PARTS;
   // 기록이 있는 벤더만 탭으로 세운다 (`period` 는 옛 백엔드엔 없다)
   const vendorTabs = summary.sources.filter((v) => (v.period ? totalOf(v.period) : 0) > 0);
   const picked = summary.sources.find((v) => v.source === tab) ?? null;
+  // 탭을 고르면 위의 큰 숫자까지 그 벤더 것으로 바뀐다 — 탭은 걸러 보는 창이지
+  // 아래쪽 두 블록만 바꾸는 스위치가 아니다. 숫자와 탭이 어긋나면 어느 쪽이 참인지
+  // 알 수 없게 된다.
+  const shownToday = picked ? picked.today : summary.today;
+  const shownTodayCost = picked ? picked.today_cost : summary.today_cost;
+  const shownTodayParts = (picked ? picked.today_parts : summary.today_parts) ?? EMPTY_PARTS;
+  const shownPartial = picked ? picked.cost_partial : summary.cost_partial;
+  // 모델은 벤더에 속하므로 거를 수 있다. 잔디·주간 막대는 못 거른다 — `daily` 에는
+  // 소스 구분이 없다. 그래서 그 둘만 전체 탭에 남는다.
+  const shownModels = picked
+    ? summary.models_today.filter((m) => m.source === picked.source)
+    : summary.models_today;
   // 잔디가 덮는 기간(= summary.daily) 전체 합계. 백엔드에 따로 담지 않고 여기서 더한다 —
   // 일별 값이 이미 다 와 있어 서버 왕복을 늘릴 이유가 없다.
   const periodTotal = summary.daily.reduce((s, d) => s + totalOf(d.totals), 0);
@@ -373,52 +392,84 @@ export default function UsagePanel() {
 
           {page === 1 && (
             <>
+              {/* 탭 줄 — 왼쪽은 "누구를 보나"(폴더 탭), 오른쪽은 "무엇을 크기로 삼나"(기준).
+                  둘 다 아래 본문 전체를 바꾸는 조작이라 한 줄에 세우고, 본문은 탭에
+                  이어 붙는 판(`.vpanel`)으로 감싼다 — 선택한 탭이 그 판의 일부로 읽힌다. */}
+              <div className="vtabs-row">
+                <div className="vtabs" role="tablist">
+                  <button
+                    role="tab"
+                    aria-selected={tab === "all"}
+                    className={tab === "all" ? "on" : ""}
+                    onClick={() => setTab("all")}
+                    title="전체"
+                  >
+                    전체
+                  </button>
+                  {vendorTabs.map((v) => (
+                    <button
+                      role="tab"
+                      key={v.source}
+                      aria-selected={tab === v.source}
+                      className={tab === v.source ? "on" : ""}
+                      onClick={() => setTab(v.source)}
+                      title={SOURCE_LABEL[v.source]}
+                    >
+                      <VendorIcon source={v.source} size={11} />
+                      <span className="vtab-name">{SHORT_VENDOR[v.source]}</span>
+                    </button>
+                  ))}
+                </div>
+                <div className="basis-toggle" role="group" aria-label="차트 기준">
+                  <button
+                    className={basis === "tokens" ? "on" : ""}
+                    onClick={() => switchBasis("tokens")}
+                  >
+                    토큰
+                  </button>
+                  <button
+                    className={basis === "cost" ? "on" : ""}
+                    onClick={() => switchBasis("cost")}
+                  >
+                    비용
+                  </button>
+                </div>
+              </div>
+              <div className="vpanel">
               {/* 오늘만 크게 두면 바로 아래 91일 잔디와 기간이 뒤섞여 읽힌다 —
                   큰 숫자를 전체 합계로 오해하기 딱 좋다. 둘을 나란히 놓아 기간을 못 박는다.
                   기간 합계는 통계 페이지에 원래 있어야 할 값이기도 하다
                   (지금까지는 잔디를 눈으로 훑어야 총량을 짐작할 수 있었다). */}
-              {/* 기준 토글 — 차트마다 두지 않는다. 잔디와 막대가 다른 기준으로 그려지면
-                  나란히 놓고 비교할 수 없고 지금 뭘 보는지도 헷갈린다. */}
-              <div className="basis-toggle" role="group" aria-label="차트 기준">
-                <button
-                  className={basis === "tokens" ? "on" : ""}
-                  onClick={() => switchBasis("tokens")}
-                >
-                  토큰
-                </button>
-                <button
-                  className={basis === "cost" ? "on" : ""}
-                  onClick={() => switchBasis("cost")}
-                >
-                  비용
-                </button>
-              </div>
               <div className="totals">
                 <div className="total-item">
                   <span className="total-label">오늘</span>
-                  <span className="total-tokens">{fmtTokens(todayTotal)}</span>
+                  <span className="total-tokens">{fmtTokens(totalOf(shownToday))}</span>
                   <span className="total-cost">
-                    {fmtCost(summary.today_cost, summary.cost_partial, currency)}
+                    {fmtCost(shownTodayCost, shownPartial, currency)}
                   </span>
                 </div>
                 <div className="total-item">
                   {/* 격자 기간(84일)이 아니라 기록이 있는 날 수를 쓴다 —
                       기록 전 구간까지 포함한 숫자로 나누면 일평균이 어긋난다 */}
                   <span className="total-label">{recorded}일</span>
-                  <span className="total-tokens">{fmtTokens(periodTotal)}</span>
-                  <span className="total-cost">{fmtCost(periodCost, false, currency)}</span>
+                  <span className="total-tokens">
+                    {fmtTokens(picked ? totalOf(picked.period) : periodTotal)}
+                  </span>
+                  <span className="total-cost">
+                    {fmtCost(picked ? picked.period_cost : periodCost, false, currency)}
+                  </span>
                 </div>
               </div>
               {/* 어느 기간의 내역인지 앞에 못 박는다 (위 두 숫자와 헷갈리지 않게) */}
               {/* 큰 숫자의 98% 가 캐시 읽기다 — 그 사실을 밝히는 유일한 줄이라 캐시를
                   읽기/쓰기로 가른다 (둘은 단가가 20배 차이나 합치면 히트율을 못 읽는다). */}
               <div className="grand-mini">
-                오늘 · 입력 {basisText(basis, summary.today.input, todayParts.input, currency)}
-                {" · "}출력 {basisText(basis, summary.today.output, todayParts.output, currency)}
+                오늘 · 입력 {basisText(basis, shownToday.input, shownTodayParts.input, currency)}
+                {" · "}출력 {basisText(basis, shownToday.output, shownTodayParts.output, currency)}
                 {" · "}캐시읽기{" "}
-                {basisText(basis, summary.today.cache_read, todayParts.cache_read, currency)}
+                {basisText(basis, shownToday.cache_read, shownTodayParts.cache_read, currency)}
                 {" · "}캐시쓰기{" "}
-                {basisText(basis, summary.today.cache_write, todayParts.cache_write, currency)}
+                {basisText(basis, shownToday.cache_write, shownTodayParts.cache_write, currency)}
               </div>
 
               {/* 조회 기간 = 스캔 범위라 위 기간 합계와 아래 잔디가 함께 움직인다.
@@ -441,31 +492,6 @@ export default function UsagePanel() {
                 </select>
               </div>
 
-              {/* 벤더 탭 — 개요(전체)와 벤더 상세를 가른다. 데이터가 있는 벤더만 세운다:
-                  빈 탭은 눌러도 아무것도 없어서 고장으로 읽힌다. */}
-              {vendorTabs.length > 0 && (
-                <div className="vtabs" role="tablist">
-                  <button
-                    role="tab"
-                    aria-selected={tab === "all"}
-                    className={tab === "all" ? "on" : ""}
-                    onClick={() => setTab("all")}
-                  >
-                    전체
-                  </button>
-                  {vendorTabs.map((v) => (
-                    <button
-                      role="tab"
-                      key={v.source}
-                      aria-selected={tab === v.source}
-                      className={tab === v.source ? "on" : ""}
-                      onClick={() => setTab(v.source)}
-                    >
-                      {SOURCE_LABEL[v.source]}
-                    </button>
-                  ))}
-                </div>
-              )}
 
               {tab !== "all" && picked && (
                 <>
@@ -513,10 +539,10 @@ export default function UsagePanel() {
               </div>
               )}
 
-              {tab === "all" && topModels.length > 0 && (
+              {shownModels.length > 0 && (
                 <div className="chart-block">
                   <div className="chart-title">오늘 모델</div>
-                  <ModelMix models={summary.models_today} basis={basis} currency={currency} />
+                  <ModelMix models={shownModels} basis={basis} currency={currency} />
                 </div>
               )}
 
@@ -532,6 +558,7 @@ export default function UsagePanel() {
                   />
                 </div>
               )}
+              </div>
             </>
           )}
 
