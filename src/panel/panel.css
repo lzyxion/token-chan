@@ -204,9 +204,11 @@
      값은 카드 배경(`.card` rgba(24,27,34,·)) 위에 같은 알파를 얹었을 때와 같게
      환산한 것이다: 0.06 → #26292f, 0.12 → #34363d. 카드 색을 바꾸면 여기도 같이
      환산해야 한다. */
-  /* 빗변이 가로로 먹는 폭. 탭 높이(약 23px)에 skew 20° 를 걸면 위쪽이 그만큼
-     왼쪽으로 밀리므로, 이 값과 각도가 맞아야 빗변이 조각 안에 딱 들어간다. */
-  --tab-slant: 7px;
+  /* 빗변이 가로로 먹는 폭. 탭 높이(약 23px)에 `--tab-skew` 의 tan 을 곱한 값이어야
+     빗변이 조각 안에 딱 들어간다 — 둘은 짝이라 한쪽만 바꾸면 어긋난다.
+     23 × tan(12°) ≈ 4.9 → 5px. */
+  --tab-slant: 5px;
+  --tab-skew: 12deg;
   --vpanel-fill: #26292f;
   --vpanel-line: #34363d;
 }
@@ -228,6 +230,7 @@
    버튼 자신은 배경도 테두리도 갖지 않는다 — 두 조각이 전부 그린다. */
 .vtabs button {
   position: relative;
+  isolation: isolate;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -244,10 +247,15 @@
   white-space: nowrap;
   cursor: pointer;
 }
-/* 글자·로고는 두 조각 위에 온다 */
-.vtabs button > * {
-  position: relative;
-  z-index: 1;
+/* 두 조각을 **내용 뒤로** 보낸다.
+   앞서는 자식(`> *`)에 z-index 를 올리는 방식이었는데, 그러면 요소로 감싼 내용만
+   올라간다 — 「전체」처럼 맨 텍스트로 둔 라벨은 조각 밑에 깔려 보이지 않았다.
+   조각을 뒤로 보내면 요소든 맨 텍스트든 전부 위에 온다.
+   `isolation` 이 함께 있어야 한다: 스택 문맥을 만들어 두지 않으면 `z-index: -1` 이
+   버튼 밖으로 빠져나가 판 뒤까지 내려간다. */
+.vtabs button::before,
+.vtabs button::after {
+  z-index: -1;
 }
 .vtabs button::before,
 .vtabs button::after {
@@ -273,7 +281,7 @@
   width: var(--tab-slant);
   border-left: 0;
   border-radius: 0 4px 0 0;
-  transform: skewX(20deg);
+  transform: skewX(var(--tab-skew));
   transform-origin: bottom left;
 }
 .vtabs button.on::before,
