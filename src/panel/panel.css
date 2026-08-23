@@ -206,9 +206,9 @@
      환산해야 한다. */
   /* 빗변이 가로로 먹는 폭. 탭 높이(약 23px)에 `--tab-skew` 의 tan 을 곱한 값이어야
      빗변이 조각 안에 딱 들어간다 — 둘은 짝이라 한쪽만 바꾸면 어긋난다.
-     23 × tan(12°) ≈ 4.9 → 5px. */
-  --tab-slant: 5px;
-  --tab-skew: 12deg;
+     23 × tan(7°) ≈ 2.8 → 3px. */
+  --tab-slant: 3px;
+  --tab-skew: 7deg;
   --vpanel-fill: #26292f;
   --vpanel-line: #34363d;
 }
