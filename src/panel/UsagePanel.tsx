@@ -238,6 +238,17 @@ export default function UsagePanel() {
     ? [...RETENTION_OPTIONS]
     : [...RETENTION_OPTIONS, retention].sort((a, b) => (a === 0 ? 1 : b === 0 ? -1 : a - b));
   const [page, setPage] = useState(0);
+  // ⚠️ 훅은 전부 조기 반환(`if (!summary)`) **위**에 있어야 한다. 아래에 두면 summary 가
+  // 도착하는 순간 훅 개수가 늘어나 React 가 던지고, 패널은 투명 창이라 "안 열린다"로 보인다.
+  const [basis, setBasis] = useState<Basis>(loadBasis);
+  const switchBasis = (b: Basis) => {
+    setBasis(b);
+    try {
+      localStorage.setItem(BASIS_KEY, b);
+    } catch {
+      /* 저장 실패는 이번 세션만 기억 못 할 뿐이다 */
+    }
+  };
   const bodyRef = useRef<HTMLDivElement | null>(null);
 
   useWindowPersist("panel");
@@ -286,16 +297,6 @@ export default function UsagePanel() {
     ? summary.contexts.reduce((a, b) => ((a.at ?? "") >= (b.at ?? "") ? a : b))
     : null;
   const activeSource = [...busySources][0] ?? latestContext?.source ?? null;
-
-  const [basis, setBasis] = useState<Basis>(loadBasis);
-  const switchBasis = (b: Basis) => {
-    setBasis(b);
-    try {
-      localStorage.setItem(BASIS_KEY, b);
-    } catch {
-      /* 저장 실패는 이번 세션만 기억 못 할 뿐이다 */
-    }
-  };
 
   const pageCount = PAGE_TITLES.length;
   const prev = () => setPage((p) => (p + pageCount - 1) % pageCount);
