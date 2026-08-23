@@ -187,13 +187,18 @@
    탭과 본문이 **한 덩어리**로 읽혀야 한다. 버튼 줄로 두면 탭은 조작, 아래는 내용으로
    따로 읽혀서 "이 숫자가 어느 탭 것인지"가 안 붙는다. 선택한 탭만 아래쪽 경계를
    지우고 본문 판(`.vpanel`)과 같은 배경을 줘, 탭이 판의 튀어나온 부분이 되게 한다. */
+/* 탭 줄과 판은 **한 덩어리**여야 한다. `.page-body` 는 자식 사이에 gap 7px 을 넣으므로
+   둘을 따로 두면 그 틈만큼 폴더가 끊긴다 — margin -1px 로는 못 이긴다. 그래서 묶는다. */
+.vgroup {
+  display: flex;
+  flex-direction: column;
+}
 .vtabs-row {
   display: flex;
   align-items: flex-end;
   gap: 6px;
-  /* 탭 아래 선이 판 위쪽 테두리와 이어진다 */
+  /* 탭 아래 선이 판 위쪽 테두리와 정확히 겹친다 (판이 1px 위로 올라온다) */
   border-bottom: 1px solid rgba(255, 255, 255, 0.1);
-  margin-bottom: -1px;
 }
 .vtabs {
   display: flex;
@@ -223,11 +228,15 @@
   color: var(--fg);
 }
 .vtabs button.on {
+  /* 판과 **같은 배경**이어야 이어져 보인다. 값이 갈리면 탭만 떠 보인다. */
   background: rgba(255, 255, 255, 0.05);
   border-color: rgba(255, 255, 255, 0.1);
   color: var(--fg);
-  /* 판과 이어지도록 아래 선을 판 배경으로 덮는다 — 이게 폴더처럼 보이게 하는 한 줄 */
+  /* 탭 줄의 아래 선을 이 탭 폭만큼 판 배경으로 덮는다 — 폴더의 입구가 열리는 곳이다.
+     테두리 색이 아니라 배경색을 덮는 게 핵심이다. */
   box-shadow: 0 1px 0 0 rgba(255, 255, 255, 0.05);
+  position: relative;
+  z-index: 1;
 }
 .vtabs button img {
   flex: none;
@@ -247,9 +256,13 @@
   flex-direction: column;
   gap: 7px;
   border: 1px solid rgba(255, 255, 255, 0.1);
-  border-radius: 0 8px 8px 8px;
+  /* 위 모서리는 각지게 — 어느 탭이 선택되든 그 탭이 판에 그대로 얹힌다.
+     위쪽만 둥글리면 첫 탭일 때만 맞고 나머지 탭에서는 어긋나 보인다. */
+  border-radius: 0 0 8px 8px;
   background: rgba(255, 255, 255, 0.05);
-  padding: 8px 8px 10px;
+  padding: 9px 8px 10px;
+  /* 탭 줄의 아래 선과 판의 위 테두리가 두 줄로 보이지 않게 겹친다 */
+  margin-top: -1px;
 }
 /* 판 안에서는 자식이 줄어들면 안 된다 (`.page-body > *` 와 같은 이유) */
 .vpanel > * {

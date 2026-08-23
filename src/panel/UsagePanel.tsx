@@ -392,6 +392,9 @@ export default function UsagePanel() {
 
           {page === 1 && (
             <>
+              {/* 탭 줄과 판을 한 덩어리로 묶는다 — `.page-body` 의 gap 이 둘 사이에
+                  들어가면 폴더가 끊겨 보인다 (margin -1px 로는 못 이긴다). */}
+              <div className="vgroup">
               {/* 탭 줄 — 왼쪽은 "누구를 보나"(폴더 탭), 오른쪽은 "무엇을 크기로 삼나"(기준).
                   둘 다 아래 본문 전체를 바꾸는 조작이라 한 줄에 세우고, 본문은 탭에
                   이어 붙는 판(`.vpanel`)으로 감싼다 — 선택한 탭이 그 판의 일부로 읽힌다. */}
@@ -558,6 +561,7 @@ export default function UsagePanel() {
                   />
                 </div>
               )}
+              </div>
               </div>
             </>
           )}
