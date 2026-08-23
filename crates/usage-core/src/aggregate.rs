@@ -103,6 +103,10 @@ pub struct Summary {
     pub today_parts: CostParts,
     pub sources: Vec<SourceSummary>,
     pub models_today: Vec<ModelRow>,
+    /// **격자 기간**(`daily` 와 같은 창)의 모델별 합계. `models_today` 와 같은 모양이라
+    /// 화면이 같은 그래프를 기간으로 돌릴 수 있다.
+    #[serde(default)]
+    pub models_period: Vec<ModelRow>,
     pub daily: Vec<DailyRow>,
     /// 최근 [`WEEK_DAYS`]일의 **날짜별 모델 내역** — 주간 막대를 모델로 쌓기 위한 것.
     ///
@@ -193,6 +197,11 @@ pub fn build_summary(
     let period_start = today - Duration::days(days.max(1) as i64 - 1);
     let mut per_source_period: std::collections::BTreeMap<Source, (Totals, f64, bool, CostParts)> =
         Default::default();
+    // 모델 구성도 같은 창으로 낸다. 오늘치만으로는 구성비가 안 나온다 — 실측에서 오늘은
+    // 2종(한 모델이 98%)인데 84일로 보면 10종에 70/29 로 갈렸다. 페이지의 다른 값이
+    // 전부 기간인데 모델만 오늘이면 무엇과 비교하는 그래프인지도 어긋난다.
+    let mut per_model_period: std::collections::BTreeMap<(Source, String), (Totals, f64, bool)> =
+        Default::default();
     let mut per_model: std::collections::BTreeMap<(Source, String), (Totals, f64, bool)> = Default::default();
     let mut per_day: std::collections::BTreeMap<NaiveDate, (Totals, f64)> = Default::default();
     // 주간 막대용 (날짜, 소스, 모델) → 토큰. 보존기간이 7일보다 짧으면 그만큼만 본다.
@@ -215,6 +224,13 @@ pub fn build_summary(
                     e.3.add(&p);
                 }
                 None => e.2 = true,
+            }
+
+            let m = per_model_period.entry((ev.source, ev.model.clone())).or_default();
+            m.0.add_event(ev);
+            match cost {
+                Some(c) => m.1 += c,
+                None => m.2 = true,
             }
         }
 
@@ -292,6 +308,18 @@ pub fn build_summary(
         .collect();
     models_today.sort_by_key(|m| std::cmp::Reverse(m.totals.total()));
 
+    let mut models_period: Vec<ModelRow> = per_model_period
+        .into_iter()
+        .map(|((source, model), (totals, cost, partial))| ModelRow {
+            model,
+            source,
+            totals,
+            cost,
+            cost_known: !partial,
+        })
+        .collect();
+    models_period.sort_by_key(|m| std::cmp::Reverse(m.totals.total()));
+
     // 최근 N일 (빈 날 포함, 오름차순)
     let mut daily = vec![];
     for i in (0..days).rev() {
@@ -326,6 +354,7 @@ pub fn build_summary(
         today_parts,
         sources,
         models_today,
+        models_period,
         daily,
         week_models,
         first_event_ts: events.first().map(|e| e.ts),
@@ -362,6 +391,35 @@ mod tests {
         assert!((src.period_cost - cost_from_daily).abs() < 1e-9);
         // 창 밖 이벤트는 빠졌다 (이벤트 3개 중 2개만)
         assert_eq!(src.period.output, 20);
+    }
+
+    /// 기간 모델은 **`daily` 와 같은 창**을 덮어야 한다 — 벤더별 기간과 같은 조건이다.
+    /// 어긋나면 화면에서 "모델 합 ≠ 기간 총액" 이 되어 어느 쪽이 참인지 알 수 없다.
+    #[test]
+    fn period_models_match_the_daily_window() {
+        let pricing = PriceTable::builtin();
+        let off = FixedOffset::east_opt(0).unwrap();
+        let now = DateTime::parse_from_rfc3339("2026-08-23T12:00:00Z").unwrap().with_timezone(&Utc);
+        let days = 28;
+        let evs = vec![
+            ev(Source::Claude, "claude-opus-5", "2026-08-23T01:00:00Z", 10), // 오늘
+            ev(Source::Claude, "claude-sonnet-5", "2026-08-10T01:00:00Z", 20), // 창 안, 다른 모델
+            ev(Source::Claude, "claude-opus-5", "2026-01-01T01:00:00Z", 40), // 창 밖
+        ];
+        let s = build_summary(&evs, &[(Source::Claude, SourceStatus::Ok)], &pricing, days, now, off);
+
+        // 창 밖 이벤트는 빠진다 — 모델은 둘, 출력은 10+20
+        assert_eq!(s.models_period.len(), 2, "창 안의 모델만");
+        let tok: u64 = s.models_period.iter().map(|m| m.totals.total()).sum();
+        let from_daily: u64 = s.daily.iter().map(|d| d.totals.total()).sum();
+        assert_eq!(tok, from_daily, "기간 모델 합 = daily 합");
+        let cost: f64 = s.models_period.iter().map(|m| m.cost).sum();
+        let cost_daily: f64 = s.daily.iter().map(|d| d.cost).sum();
+        assert!((cost - cost_daily).abs() < 1e-9, "비용도 같아야 한다");
+
+        // 오늘치는 그대로 오늘만 — 기간이 오늘을 덮어쓰지 않는다
+        assert_eq!(s.models_today.len(), 1);
+        assert_eq!(s.models_today[0].totals.output, 10);
     }
 
     /// 오늘 구성의 합은 오늘 총액과 같다.

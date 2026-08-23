@@ -116,6 +116,8 @@ export interface Summary {
   today_parts: CostParts;
   sources: SourceSummary[];
   models_today: ModelRow[];
+  /** 격자 기간(`daily` 와 같은 창)의 모델별 합계 — 같은 그래프를 기간으로 돌릴 때 쓴다 */
+  models_period: ModelRow[];
   daily: DailyRow[];
   /** 최근 7일의 날짜별 모델 내역 — `daily` 의 마지막 7개와 날짜가 맞물린다 */
   week_models: DailyModels[];
