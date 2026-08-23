@@ -204,11 +204,6 @@
      값은 카드 배경(`.card` rgba(24,27,34,·)) 위에 같은 알파를 얹었을 때와 같게
      환산한 것이다: 0.06 → #26292f, 0.12 → #34363d. 카드 색을 바꾸면 여기도 같이
      환산해야 한다. */
-  /* 빗변이 가로로 먹는 폭. 탭 높이(약 23px)에 `--tab-skew` 의 tan 을 곱한 값이어야
-     빗변이 조각 안에 딱 들어간다 — 둘은 짝이라 한쪽만 바꾸면 어긋난다.
-     23 × tan(35°) ≈ 16.1 → 16px. */
-  --tab-slant: 16px;
-  --tab-skew: 35deg;
   --vpanel-fill: #26292f;
   --vpanel-line: #34363d;
 }
@@ -219,26 +214,11 @@
 }
 .vtabs {
   display: flex;
-  /* 빗변이 가로로 `--tab-slant` 를 먹는다. 그냥 두면 탭마다 라벨 자리가 그만큼
-     줄어드는데, 실제 서류 폴더도 탭끼리 겹쳐 있다 — 겹쳐 두면 빗변이 이웃 탭의
-     빈 왼쪽 위를 덮으므로 라벨 자리를 잃지 않는다.
-     안 고른 탭은 면도 선도 투명이라 겹쳐도 아무것도 안 보이고, 고른 탭은
-     `z-index: 1` 로 이웃 위에 온다. */
-  gap: 0;
+  gap: 2px;
   flex: 1;
   min-width: 0;
 }
-.vtabs button + button {
-  margin-left: calc(var(--tab-slant) * -1);
-}
-/* 폴더 모양 — 왼쪽은 각지고 오른쪽만 비스듬하다.
-   `clip-path` 로는 안 된다: 모양은 잘려도 **테두리가 빗변을 따라가지 않는다**
-   (테두리는 사각 상자에 그려진 뒤 잘려 나간다). 그래서 몸통(`::before`)과
-   빗변 조각(`::after`)으로 나눠 그리고, 조각만 skew 로 눕힌다.
-   버튼 자신은 배경도 테두리도 갖지 않는다 — 두 조각이 전부 그린다. */
 .vtabs button {
-  position: relative;
-  isolation: isolate;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -247,62 +227,24 @@
   min-width: 0;
   background: transparent;
   color: var(--fg-dim);
-  border: 0;
-  /* 오른쪽은 빗변이 먹으므로 글자를 그만큼 밀어 둔다 */
-  padding: 4px calc(3px + var(--tab-slant)) 5px 4px;
+  /* 안 고른 탭은 선을 숨긴다 — 자리는 잡아 둬야 고를 때 글자가 안 밀린다
+     (`.vendor-card` 가 평소 투명 테두리를 두는 것과 같은 처리다) */
+  border: 1px solid transparent;
+  border-bottom: 0;
+  border-radius: 7px 7px 0 0;
+  padding: 4px 4px 5px;
   font: inherit;
   font-size: 9.5px;
   white-space: nowrap;
   cursor: pointer;
 }
-/* 두 조각을 **내용 뒤로** 보낸다.
-   앞서는 자식(`> *`)에 z-index 를 올리는 방식이었는데, 그러면 요소로 감싼 내용만
-   올라간다 — 「전체」처럼 맨 텍스트로 둔 라벨은 조각 밑에 깔려 보이지 않았다.
-   조각을 뒤로 보내면 요소든 맨 텍스트든 전부 위에 온다.
-   `isolation` 이 함께 있어야 한다: 스택 문맥을 만들어 두지 않으면 `z-index: -1` 이
-   버튼 밖으로 빠져나가 판 뒤까지 내려간다. */
-.vtabs button::before,
-.vtabs button::after {
-  z-index: -1;
-}
-.vtabs button::before,
-.vtabs button::after {
-  content: "";
-  position: absolute;
-  top: 0;
-  bottom: 0;
-  /* 안 고른 탭은 자리만 잡는다 — 선을 투명으로 둬야 고를 때 글자가 안 밀린다
-     (`.vendor-card` 가 평소 투명 테두리를 두는 것과 같은 처리다) */
-  border: 1px solid transparent;
-  border-bottom: 0;
-}
-/* 몸통 — 왼쪽 위만 살짝 둥글고 나머지는 각지다 */
-.vtabs button::before {
-  left: 0;
-  right: var(--tab-slant);
-  border-right: 0;
-  border-radius: 5px 0 0 0;
-}
-/* 빗변 조각 — 아래를 축으로 눕혀 위쪽이 왼쪽으로 밀린다(= 아래가 넓은 사다리꼴) */
-.vtabs button::after {
-  right: 0;
-  width: var(--tab-slant);
-  border-left: 0;
-  border-radius: 0 4px 0 0;
-  transform: skewX(var(--tab-skew));
-  transform-origin: bottom left;
-}
-.vtabs button.on::before,
-.vtabs button.on::after {
-  background: var(--vpanel-fill);
-  border-color: var(--vpanel-line);
-}
 .vtabs button:hover {
   color: var(--fg);
 }
 .vtabs button.on {
-  /* 면과 선은 위의 두 조각이 갖는다 (`::before`·`::after`). 여기 남는 건 글자색과
-     판 위로 1px 내려앉는 겹침 보정뿐이다. */
+  /* 고른 탭은 판이 위로 뻗어 나온 부분이다 — 면도 선도 판과 같은 값을 쓴다. */
+  background: var(--vpanel-fill);
+  border-color: var(--vpanel-line);
   color: var(--fg);
   /* 폴더의 입구. 1px 내려앉아 **판의 위 테두리를 자기 폭만큼 덮는다** — 아래 테두리가
      없으므로 탭의 면이 그 선을 지운다. 겹치는 만큼 아래 여백을 돌려줘야 글자가
@@ -321,7 +263,7 @@
 }
 .vtab-name {
   /* flex 자식은 기본으로 내용보다 작아지지 않는다(min-width: auto) — 없으면 탭이
-     좁아졌을 때 말줄임 대신 글자가 빗변을 뚫고 넘친다. */
+     좁아졌을 때 말줄임 대신 글자가 탭 밖으로 넘친다. */
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;

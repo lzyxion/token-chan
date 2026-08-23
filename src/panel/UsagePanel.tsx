@@ -407,9 +407,8 @@ export default function UsagePanel() {
                     onClick={() => setTab("all")}
                     title="전체"
                   >
-                    {/* 맨 텍스트로 두면 안 된다 — 폴더 조각(`::before`/`::after`)이
-                        절대 위치라 흐름 속 텍스트보다 위에 그려진다. 요소로 감싸야
-                        `.vtabs button > *` 의 z-index 를 받아 조각 위로 올라온다. */}
+                    {/* 벤더 탭과 같은 요소로 감싼다 — 라벨 처리(말줄임)를 한 규칙이
+                        맡게 하려면 맨 텍스트로 두면 안 된다. */}
                     <span className="vtab-name">전체</span>
                   </button>
                   {vendorTabs.map((v) => (
