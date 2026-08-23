@@ -4,10 +4,19 @@ import {
   fmtCost,
   fmtTokens,
   shortModel,
+  totalOf,
   type Basis,
   type Currency,
 } from "../format";
-import type { DailyModels, DailyRow, DayModel, ModelRow } from "../types";
+import type {
+  CostParts,
+  DailyModels,
+  DailyRow,
+  DayModel,
+  ModelRow,
+  SourceSummary,
+  Totals,
+} from "../types";
 
 /** 주간 막대가 덮는 일수 — 백엔드 `aggregate::WEEK_DAYS` 와 같아야 날짜가 맞물린다 */
 const WEEK_DAYS = 7;
@@ -324,6 +333,152 @@ export function WeekBars({
               {l.label} <b>{fmtBasis(basis, l.tokens, currency)}</b>
             </span>
           ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/**
+ * 벤더별 비중 — 개요의 마지막 줄이자 **상세로 들어가는 문**.
+ *
+ * 파이가 아니라 목록인 이유: 실측에서 벤더 사이 규모가 100배 넘게 벌어진다
+ * (Claude $2,215 / Codex $26 / agy $0.58). 한 막대에 얹으면 뒤 둘이 실오라기가 되고,
+ * 그래도 "얼마 썼나"는 숫자로 읽혀야 한다.
+ */
+export function VendorShare({
+  sources,
+  currency,
+  basis,
+  onPick,
+}: {
+  sources: SourceSummary[];
+  currency: Currency;
+  basis: Basis;
+  onPick: (s: SourceSummary["source"]) => void;
+}) {
+  const val = (v: SourceSummary) => basisOf(basis, v.period, v.period_cost);
+  const rows = sources.filter((v) => val(v) > 0).sort((a, b) => val(b) - val(a));
+  const total = rows.reduce((s2, v) => s2 + val(v), 0);
+  if (total === 0) return null;
+  return (
+    <div className="vshare">
+      {rows.map((v) => {
+        const pct = (val(v) / total) * 100;
+        return (
+          <button className="vshare-row" key={v.source} onClick={() => onPick(v.source)}>
+            <span className="vshare-name">{v.label}</span>
+            <span className="vshare-bar">
+              <span className={`vshare-fill ${v.source}`} style={{ width: `${pct}%` }} />
+            </span>
+            <span className="vshare-val">{fmtBasis(basis, val(v), currency)}</span>
+            <span className="vshare-pct">{pct >= 0.1 ? pct.toFixed(1) : "<0.1"}%</span>
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+/** 구성 분해의 한 줄이 담는 것 — 토큰과 비용을 **둘 다** 들고 있어야 괴리가 보인다. */
+const PART_ROWS = [
+  { key: "cache_read", label: "캐시읽기" },
+  { key: "cache_write", label: "캐시쓰기" },
+  { key: "output", label: "출력" },
+  { key: "input", label: "입력" },
+] as const;
+
+/**
+ * 무엇이 비용을 먹나 — **항상 비용 기준**이다.
+ *
+ * 페이지 토글을 따르지 않는 유일한 자리다. 이 표의 요지가 "토큰 비중과 비용 비중이
+ * 어긋난다" 인데(출력: 토큰 0.3% / 비용 11.6%), 토큰 기준으로 그리면 그 어긋남이
+ * 사라진다. 대신 토큰 비중을 괄호로 같이 적어 한 줄에서 둘을 비교하게 한다.
+ */
+export function CostBreakdown({
+  totals,
+  parts,
+  currency,
+}: {
+  totals: Totals;
+  parts: CostParts;
+  currency: Currency;
+}) {
+  const cost = parts.input + parts.output + parts.cache_write + parts.cache_read;
+  const tok = totalOf(totals);
+  if (cost <= 0) return null;
+  return (
+    <div className="breakdown">
+      {PART_ROWS.map((r) => {
+        const c = parts[r.key];
+        const t = totals[r.key];
+        const cp = (c / cost) * 100;
+        const tp = tok > 0 ? (t / tok) * 100 : 0;
+        return (
+          <div className="bd-row" key={r.key}>
+            <span className="bd-name">{r.label}</span>
+            <span className="bd-bar">
+              <span className={`bd-fill ${r.key}`} style={{ width: `${cp}%` }} />
+            </span>
+            <span className="bd-cost">{fmtCost(c, false, currency)}</span>
+            {/* 괄호 안이 토큰 비중 — 두 숫자가 벌어질수록 "적은 토큰이 큰 돈"이다 */}
+            <span className="bd-pct">
+              {cp.toFixed(1)}% <i>({tp.toFixed(1)}%)</i>
+            </span>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+/**
+ * 잘 쓰고 있나 — 위 구성 분해에서 **유도되는 값들**이다. 새 데이터가 아니다.
+ *
+ * 벤더마다 줄 수가 다르다. 캐시 쓰기를 기록하지 않는 소스(Codex·agy)에서 재사용 배수를
+ * "0배"로 적으면 거짓말이라, 그 줄을 아예 빼고 이유를 밝힌다.
+ */
+export function Efficiency({
+  totals,
+  parts,
+  currency,
+}: {
+  totals: Totals;
+  parts: CostParts;
+  currency: Currency;
+}) {
+  const cost = parts.input + parts.output + parts.cache_write + parts.cache_read;
+  if (cost <= 0) return null;
+  const readable = totals.input + totals.cache_write + totals.cache_read;
+  const hit = readable > 0 ? (totals.cache_read / readable) * 100 : 0;
+  const reuse = totals.cache_write > 0 ? totals.cache_read / totals.cache_write : null;
+  const save = parts.uncached > 0 ? parts.uncached / cost : null;
+  return (
+    <div className="eff">
+      {reuse !== null ? (
+        <div className="eff-row">
+          <span className="eff-name">캐시 재사용</span>
+          <span className="eff-val">{reuse.toFixed(1)}배</span>
+          {/* 적재는 1.25~2배를 먼저 내고 읽기에서 0.1배로 돌려받는다 — 2~3회는 읽어야 남는다 */}
+          <span className="eff-note">손익분기 2~3회</span>
+        </div>
+      ) : (
+        <div className="eff-row muted">
+          <span className="eff-name">캐시 재사용</span>
+          <span className="eff-note">이 벤더는 캐시 적재를 기록하지 않는다</span>
+        </div>
+      )}
+      <div className="eff-row">
+        <span className="eff-name">캐시 히트율</span>
+        <span className="eff-val">{hit.toFixed(1)}%</span>
+      </div>
+      {save !== null && (
+        <div className="eff-row">
+          <span className="eff-name">캐시 절감</span>
+          <span className="eff-val">{save.toFixed(1)}배</span>
+          <span className="eff-note">
+            없었다면 {fmtCost(parts.uncached, false, currency)}
+          </span>
         </div>
       )}
     </div>

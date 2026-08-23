@@ -182,6 +182,163 @@
   opacity: 0.8;
 }
 
+/* 벤더 탭 — 개요와 벤더 상세를 가른다. 기준 토글(`.basis-toggle`)과 나란히 서지만
+   성격이 다르다: 저건 "무엇을 크기로 삼나", 이건 "누구를 보나". 그래서 토글은 오른쪽
+   끝에 붙이고 이 줄은 폭을 채워 페이지의 머리로 읽히게 한다. */
+.vtabs {
+  display: flex;
+  gap: 3px;
+}
+.vtabs button {
+  flex: 1;
+  min-width: 0;
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--fg-dim);
+  border: 0;
+  border-radius: 7px;
+  padding: 4px 2px;
+  font: inherit;
+  font-size: 9.5px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: pointer;
+}
+.vtabs button:hover {
+  color: var(--fg);
+}
+.vtabs button.on {
+  background: rgba(255, 255, 255, 0.14);
+  color: var(--fg);
+}
+
+/* 벤더별 비중 — 줄 전체가 상세로 가는 버튼이다 */
+.vshare {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.vshare-row {
+  display: grid;
+  grid-template-columns: auto 1fr auto auto;
+  align-items: center;
+  gap: 6px;
+  background: transparent;
+  border: 0;
+  padding: 2px 0;
+  font: inherit;
+  font-size: 9.5px;
+  color: var(--fg-dim);
+  cursor: pointer;
+  text-align: left;
+}
+.vshare-row:hover {
+  color: var(--fg);
+}
+.vshare-name {
+  white-space: nowrap;
+}
+.vshare-bar {
+  height: 5px;
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.07);
+  overflow: hidden;
+}
+.vshare-fill {
+  display: block;
+  height: 100%;
+  border-radius: 3px;
+}
+.vshare-val {
+  color: var(--fg);
+  font-variant-numeric: tabular-nums;
+}
+.vshare-pct {
+  font-variant-numeric: tabular-nums;
+  min-width: 34px;
+  text-align: right;
+}
+
+/* 구성 분해 — 항상 비용 기준이고, 괄호가 토큰 비중이다 (둘의 괴리가 요지) */
+.breakdown {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.bd-row {
+  display: grid;
+  grid-template-columns: 46px 1fr auto auto;
+  align-items: center;
+  gap: 6px;
+  font-size: 9.5px;
+  color: var(--fg-dim);
+}
+.bd-bar {
+  height: 5px;
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.07);
+  overflow: hidden;
+}
+.bd-fill {
+  display: block;
+  height: 100%;
+  border-radius: 3px;
+}
+/* 색은 항목의 성격을 따른다 — 캐시는 같은 계열의 밝기 차이, 출력은 대비색.
+   벤더 색(파이·주간 막대)과 겹치지 않게 무채·보라 계열로 잡는다. */
+.bd-fill.cache_read {
+  background: #6b7fd7;
+}
+.bd-fill.cache_write {
+  background: #4b5aa0;
+}
+.bd-fill.output {
+  background: #d7a86b;
+}
+.bd-fill.input {
+  background: #7a8290;
+}
+.bd-cost {
+  color: var(--fg);
+  font-variant-numeric: tabular-nums;
+}
+.bd-pct {
+  font-variant-numeric: tabular-nums;
+  min-width: 74px;
+  text-align: right;
+}
+.bd-pct i {
+  font-style: normal;
+  opacity: 0.6;
+}
+
+/* 효율 — 구성 분해에서 유도되는 값. 벤더마다 줄 수가 다르다. */
+.eff {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  font-size: 9.5px;
+  color: var(--fg-dim);
+}
+.eff-row {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+}
+.eff-row.muted {
+  opacity: 0.65;
+}
+.eff-name {
+  min-width: 58px;
+}
+.eff-val {
+  color: var(--fg);
+  font-variant-numeric: tabular-nums;
+}
+.eff-note {
+  opacity: 0.7;
+}
+
 /* 차트 묶음 */
 /* 조회 기간 줄 — 통계 탭의 기간 합계와 잔디가 모두 이 값을 따른다.
    설정 창의 select 와 같은 생김새를 쓰되(같은 조작이라 같아야 한다) 라벨은
@@ -686,11 +843,13 @@
    중요해 보인다. 색상만 20°·285°·220° 로 갈라 놓는다. */
 .mix-seg.claude,
 .mix-dot.claude,
+.vshare-fill.claude,
 .weekbar-seg.claude {
   background: #c07a5e;
 }
 .mix-seg.codex,
 .mix-dot.codex,
+.vshare-fill.codex,
 .weekbar-seg.codex {
   /* 순백이 아니라 **살짝 식힌 회백**이다. 어두운 패널에서 #fff 는 대비가 최대라
      같은 토큰이어도 Codex 조각만 커 보인다 — 본문 글자색(--fg #e8eaf0)보다 밝으면
@@ -710,6 +869,7 @@
 }
 .mix-seg.antigravity,
 .mix-dot.antigravity,
+.vshare-fill.antigravity,
 .weekbar-seg.antigravity {
   background: #5a7fc4;
 }

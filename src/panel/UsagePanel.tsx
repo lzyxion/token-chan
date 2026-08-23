@@ -3,7 +3,15 @@ import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import ResizeGrips from "../components/ResizeGrips";
 import VendorIcon from "../components/VendorIcon";
-import { ModelMix, recordedDays, UsageHeatmap, WeekBars } from "./UsageCharts";
+import {
+  CostBreakdown,
+  Efficiency,
+  ModelMix,
+  recordedDays,
+  UsageHeatmap,
+  VendorShare,
+  WeekBars,
+} from "./UsageCharts";
 import {
   useCurrency,
   useLive,
@@ -32,7 +40,7 @@ import {
   type AlertThresholds,
   type Currency,
 } from "../format";
-import type { ContextState, PlanMeter, PlanUsage, SourceStatus, SourceSummary } from "../types";
+import type { ContextState, PlanMeter, PlanUsage, Source, SourceStatus, SourceSummary } from "../types";
 import "./panel.css";
 
 function statusChip(status: SourceStatus) {
@@ -240,6 +248,9 @@ export default function UsagePanel() {
   const [page, setPage] = useState(0);
   // ⚠️ 훅은 전부 조기 반환(`if (!summary)`) **위**에 있어야 한다. 아래에 두면 summary 가
   // 도착하는 순간 훅 개수가 늘어나 React 가 던지고, 패널은 투명 창이라 "안 열린다"로 보인다.
+  // "all" = 개요. 벤더를 고르면 그 벤더의 구성·효율만 본다 — 시간축(잔디·주간)은
+  // 소스별로 나뉘어 오지 않으므로 개요에만 있다.
+  const [tab, setTab] = useState<Source | "all">("all");
   const [basis, setBasis] = useState<Basis>(loadBasis);
   const switchBasis = (b: Basis) => {
     setBasis(b);
@@ -277,6 +288,9 @@ export default function UsagePanel() {
   const todayTotal = totalOf(summary.today);
   // 옛 백엔드가 붙어 있으면 통째로 없다 — 없는 객체를 파고들면 화면이 죽는다
   const todayParts = summary.today_parts ?? EMPTY_PARTS;
+  // 기록이 있는 벤더만 탭으로 세운다 (`period` 는 옛 백엔드엔 없다)
+  const vendorTabs = summary.sources.filter((v) => (v.period ? totalOf(v.period) : 0) > 0);
+  const picked = summary.sources.find((v) => v.source === tab) ?? null;
   // 잔디가 덮는 기간(= summary.daily) 전체 합계. 백엔드에 따로 담지 않고 여기서 더한다 —
   // 일별 값이 이미 다 와 있어 서버 왕복을 늘릴 이유가 없다.
   const periodTotal = summary.daily.reduce((s, d) => s + totalOf(d.totals), 0);
@@ -427,8 +441,55 @@ export default function UsagePanel() {
                 </select>
               </div>
 
+              {/* 벤더 탭 — 개요(전체)와 벤더 상세를 가른다. 데이터가 있는 벤더만 세운다:
+                  빈 탭은 눌러도 아무것도 없어서 고장으로 읽힌다. */}
+              {vendorTabs.length > 0 && (
+                <div className="vtabs" role="tablist">
+                  <button
+                    role="tab"
+                    aria-selected={tab === "all"}
+                    className={tab === "all" ? "on" : ""}
+                    onClick={() => setTab("all")}
+                  >
+                    전체
+                  </button>
+                  {vendorTabs.map((v) => (
+                    <button
+                      role="tab"
+                      key={v.source}
+                      aria-selected={tab === v.source}
+                      className={tab === v.source ? "on" : ""}
+                      onClick={() => setTab(v.source)}
+                    >
+                      {SOURCE_LABEL[v.source]}
+                    </button>
+                  ))}
+                </div>
+              )}
+
+              {tab !== "all" && picked && (
+                <>
+                  <div className="chart-block">
+                    <div className="chart-title">무엇이 비용을 먹나 · {recorded}일</div>
+                    <CostBreakdown
+                      totals={picked.period}
+                      parts={picked.period_parts ?? EMPTY_PARTS}
+                      currency={currency}
+                    />
+                  </div>
+                  <div className="chart-block">
+                    <div className="chart-title">잘 쓰고 있나</div>
+                    <Efficiency
+                      totals={picked.period}
+                      parts={picked.period_parts ?? EMPTY_PARTS}
+                      currency={currency}
+                    />
+                  </div>
+                </>
+              )}
+
               {/* 짧은 기간에선 격자를 접는다 — 남는 칸이 "안 썼다"는 거짓말이 된다 */}
-              {showsHeatmap(retention) && (
+              {tab === "all" && showsHeatmap(retention) && (
                 <div className="chart-block">
                   <div className="chart-title">일별 사용량</div>
                   <UsageHeatmap
@@ -440,6 +501,7 @@ export default function UsagePanel() {
                 </div>
               )}
 
+              {tab === "all" && (
               <div className="chart-block">
                 <div className="chart-title">최근 7일</div>
                 <WeekBars
@@ -449,11 +511,25 @@ export default function UsagePanel() {
                   basis={basis}
                 />
               </div>
+              )}
 
-              {topModels.length > 0 && (
+              {tab === "all" && topModels.length > 0 && (
                 <div className="chart-block">
                   <div className="chart-title">오늘 모델</div>
                   <ModelMix models={summary.models_today} basis={basis} currency={currency} />
+                </div>
+              )}
+
+              {/* 개요의 마지막 줄이자 상세로 들어가는 문 */}
+              {tab === "all" && vendorTabs.length > 1 && (
+                <div className="chart-block">
+                  <div className="chart-title">벤더별 · {recorded}일</div>
+                  <VendorShare
+                    sources={vendorTabs}
+                    currency={currency}
+                    basis={basis}
+                    onPick={setTab}
+                  />
                 </div>
               )}
             </>
