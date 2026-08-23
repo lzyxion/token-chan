@@ -9,6 +9,20 @@ export interface Totals {
   cache_read: number;
 }
 
+/**
+ * 비용을 토큰 종류별로 쪼갠 것. `Totals`(토큰 수)와는 다른 축이다 — 종류마다 단가가
+ * 20배까지 차이나서 토큰 비중과 비용 비중이 서로를 예측하지 못한다.
+ * 단가는 모델마다 달라 프론트가 나눌 수 없으므로 백엔드가 갈라 보낸다.
+ */
+export interface CostParts {
+  input: number;
+  output: number;
+  cache_write: number;
+  cache_read: number;
+  /** 캐시가 없었다면 들었을 비용. **반사실이라 위 넷의 합에 포함되지 않는다.** */
+  uncached: number;
+}
+
 export type SourceStatus = { kind: "ok" } | { kind: "no_data" };
 
 export interface SourceSummary {
@@ -18,6 +32,12 @@ export interface SourceSummary {
   today: Totals;
   today_cost: number;
   cost_partial: boolean;
+  today_parts: CostParts;
+  /** 격자 기간(`daily` 와 같은 창)의 이 벤더 합계 — `daily` 에는 소스 구분이 없어 여기서만 온다 */
+  period: Totals;
+  period_cost: number;
+  period_parts: CostParts;
+  period_partial: boolean;
 }
 
 export interface ModelRow {
@@ -91,6 +111,7 @@ export interface Summary {
   today: Totals;
   today_cost: number;
   cost_partial: boolean;
+  today_parts: CostParts;
   sources: SourceSummary[];
   models_today: ModelRow[];
   daily: DailyRow[];

@@ -5,9 +5,43 @@
 use std::collections::HashMap;
 use std::path::Path;
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use crate::model::UsageEvent;
+
+/// 비용을 **토큰 종류별로** 쪼갠 것.
+///
+/// 토큰 수([`crate::aggregate::Totals`])와는 다른 축이다 — 종류마다 단가가 20배까지
+/// 차이나서, 토큰 비중과 비용 비중이 서로를 예측하지 못한다 (실측: 캐시 읽기가 토큰의
+/// 98.6% 인데 비용은 73.5%, 출력은 토큰 0.3% 인데 비용 11.6%). 그 괴리를 화면이
+/// 보여주려면 비용도 갈라서 와야 하고, 단가는 모델마다 달라서 프론트가 나눌 수 없다.
+#[derive(Default, Clone, Copy, Debug, Serialize)]
+pub struct CostParts {
+    pub input: f64,
+    pub output: f64,
+    pub cache_write: f64,
+    pub cache_read: f64,
+    /// **캐시가 없었다면** 들었을 비용 — 캐시로 오간 입력을 전부 정가 입력으로 친 값.
+    ///
+    /// 네 항목의 형제가 아니라 **비교용 반사실**이라 [`CostParts::total`] 에 들어가지
+    /// 않는다 (`total_excludes_uncached` 가 지킨다). `cache_write_1h` 와 같은 규칙이다.
+    pub uncached: f64,
+}
+
+impl CostParts {
+    /// 실제 비용. `uncached` 는 반사실이라 빠진다.
+    pub fn total(&self) -> f64 {
+        self.input + self.output + self.cache_write + self.cache_read
+    }
+
+    pub fn add(&mut self, o: &CostParts) {
+        self.input += o.input;
+        self.output += o.output;
+        self.cache_write += o.cache_write;
+        self.cache_read += o.cache_read;
+        self.uncached += o.uncached;
+    }
+}
 
 const BUILTIN: &str = include_str!("../pricing/prices.json");
 
@@ -89,19 +123,27 @@ impl PriceTable {
 
     /// 이벤트 비용(USD). 단가 미등록 모델은 None.
     pub fn cost(&self, ev: &UsageEvent) -> Option<f64> {
+        self.cost_parts(ev).map(|p| p.total())
+    }
+
+    /// 이벤트 비용을 토큰 종류별로 쪼개 준다. 단가 미등록 모델은 None.
+    pub fn cost_parts(&self, ev: &UsageEvent) -> Option<CostParts> {
         let p = self.lookup(&ev.model)?;
         // cache_write_1h 는 cache_write 의 **부분집합**이다 (model.rs 불변식).
         // 나머지가 5분 몫이고, 1h 단가가 없는 표는 전부 5분으로 친다.
         let cw_1h = ev.cache_write_1h.min(ev.cache_write);
         let cw_5m = ev.cache_write - cw_1h;
-        Some(
-            (ev.input as f64 * p.input
-                + ev.output as f64 * p.output
-                + cw_5m as f64 * p.cw
-                + cw_1h as f64 * p.cw1h.unwrap_or(p.cw)
-                + ev.cache_read as f64 * p.cr)
-                / 1_000_000.0,
-        )
+        const M: f64 = 1_000_000.0;
+        Some(CostParts {
+            input: ev.input as f64 * p.input / M,
+            output: ev.output as f64 * p.output / M,
+            cache_write: (cw_5m as f64 * p.cw + cw_1h as f64 * p.cw1h.unwrap_or(p.cw)) / M,
+            cache_read: ev.cache_read as f64 * p.cr / M,
+            // 캐시가 없었다면 캐시로 오간 입력도 전부 정가 입력이다.
+            uncached: ((ev.input + ev.cache_write + ev.cache_read) as f64 * p.input
+                + ev.output as f64 * p.output)
+                / M,
+        })
     }
 }
 
@@ -195,6 +237,30 @@ mod tests {
         let (a, b) = (t.lookup("gemini-3.6-flash").unwrap(), t.lookup("gemini-3.7-flash").unwrap());
         assert_eq!((a.input, a.output, a.cr), (b.input, b.output, b.cr));
         assert_eq!((a.input, a.output), (0.75, 3.75));
+    }
+
+    /// 구성 비용의 합은 총 비용과 같아야 한다 — 화면이 둘을 나란히 놓기 때문이다.
+    /// 그리고 `uncached` 는 반사실이라 합에 들어가면 안 된다.
+    #[test]
+    fn parts_sum_to_cost_and_total_excludes_uncached() {
+        let t = PriceTable::builtin();
+        let e = ev_ttl("claude-opus-5", 1_000, 2_000, 3_000, 1_000, 4_000);
+        let p = t.cost_parts(&e).unwrap();
+        let c = t.cost(&e).unwrap();
+        assert!((p.total() - c).abs() < 1e-12, "구성 합 {} vs 총액 {c}", p.total());
+        assert!(p.uncached > p.total(), "캐시가 없었다면 더 비싸야 한다");
+        // uncached 를 합에 넣으면 이 등식이 깨진다
+        assert!((p.input + p.output + p.cache_write + p.cache_read - p.total()).abs() < 1e-12);
+    }
+
+    /// 캐시 읽기가 많을수록 `uncached` 와의 격차가 벌어진다 — 효율 지표의 근거다.
+    #[test]
+    fn uncached_reflects_cache_savings() {
+        let t = PriceTable::builtin();
+        // 캐시 읽기 100만: 실제는 cr 단가(0.5), 캐시가 없었다면 입력 단가(5.0)
+        let p = t.cost_parts(&ev_ttl("claude-opus-5", 0, 0, 0, 0, 1_000_000)).unwrap();
+        assert!((p.total() - 0.5).abs() < 1e-9);
+        assert!((p.uncached - 5.0).abs() < 1e-9, "10배");
     }
 
     /// 1시간 TTL 몫은 `cw1h` 단가로, 나머지는 `cw` 로 — 부분집합이지 별도 종류가 아니다.

@@ -4,7 +4,7 @@ use chrono::{DateTime, Duration, FixedOffset, NaiveDate, Utc};
 use serde::Serialize;
 
 use crate::model::{Source, SourceStatus, UsageEvent};
-use crate::pricing::PriceTable;
+use crate::pricing::{CostParts, PriceTable};
 
 #[derive(Default, Clone, Copy, Debug, Serialize)]
 pub struct Totals {
@@ -34,6 +34,22 @@ pub struct SourceSummary {
     pub today: Totals,
     pub today_cost: f64,
     pub cost_partial: bool,
+    /// 오늘 비용의 종류별 내역
+    #[serde(default)]
+    pub today_parts: CostParts,
+    /// **격자 기간**(`daily` 와 같은 창)의 벤더별 합계.
+    ///
+    /// `daily` 를 더해서는 못 만든다 — 거기엔 소스 구분이 없다. "어느 벤더가 돈을
+    /// 먹었나"와 벤더 상세의 구성 분해가 이 값을 쓴다.
+    #[serde(default)]
+    pub period: Totals,
+    #[serde(default)]
+    pub period_cost: f64,
+    #[serde(default)]
+    pub period_parts: CostParts,
+    /// 기간 안에 단가 미등록 모델이 섞였는지 (§ cost_partial 과 같은 뜻, 기간 범위)
+    #[serde(default)]
+    pub period_partial: bool,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -77,6 +93,9 @@ pub struct Summary {
     pub today: Totals,
     pub today_cost: f64,
     pub cost_partial: bool,
+    /// 오늘 비용의 종류별 내역 (전 소스 합)
+    #[serde(default)]
+    pub today_parts: CostParts,
     pub sources: Vec<SourceSummary>,
     pub models_today: Vec<ModelRow>,
     pub daily: Vec<DailyRow>,
@@ -160,8 +179,15 @@ pub fn build_summary(
     let mut today_totals = Totals::default();
     let mut today_cost = 0.0;
     let mut cost_partial = false;
+    let mut today_parts = CostParts::default();
 
     let mut per_source: std::collections::BTreeMap<Source, (Totals, f64, bool)> = Default::default();
+    let mut per_source_parts: std::collections::BTreeMap<Source, CostParts> = Default::default();
+    // 격자 기간(= `daily` 가 덮는 창)의 소스별 합계. 창 밖 이벤트는 넣지 않는다 —
+    // 화면의 기간 합계는 `daily` 를 더해 만들므로 범위가 어긋나면 숫자가 안 맞는다.
+    let period_start = today - Duration::days(days.max(1) as i64 - 1);
+    let mut per_source_period: std::collections::BTreeMap<Source, (Totals, f64, bool, CostParts)> =
+        Default::default();
     let mut per_model: std::collections::BTreeMap<(Source, String), (Totals, f64, bool)> = Default::default();
     let mut per_day: std::collections::BTreeMap<NaiveDate, (Totals, f64)> = Default::default();
     // 주간 막대용 (날짜, 소스, 모델) → 토큰. 보존기간이 7일보다 짧으면 그만큼만 본다.
@@ -172,7 +198,20 @@ pub fn build_summary(
 
     for ev in events {
         let d = local_date(ev.ts, offset);
-        let cost = pricing.cost(ev);
+        let parts = pricing.cost_parts(ev);
+        let cost = parts.map(|p| p.total());
+
+        if days > 0 && d >= period_start && d <= today {
+            let e = per_source_period.entry(ev.source).or_default();
+            e.0.add_event(ev);
+            match parts {
+                Some(p) => {
+                    e.1 += p.total();
+                    e.3.add(&p);
+                }
+                None => e.2 = true,
+            }
+        }
 
         let day = per_day.entry(d).or_default();
         day.0.add_event(ev);
@@ -184,8 +223,11 @@ pub fn build_summary(
 
         if d == today {
             today_totals.add_event(ev);
-            match cost {
-                Some(c) => today_cost += c,
+            match parts {
+                Some(p) => {
+                    today_cost += p.total();
+                    today_parts.add(&p);
+                }
                 None => cost_partial = true,
             }
 
@@ -194,6 +236,9 @@ pub fn build_summary(
             match cost {
                 Some(c) => s.1 += c,
                 None => s.2 = true,
+            }
+            if let Some(p) = parts {
+                per_source_parts.entry(ev.source).or_default().add(&p);
             }
 
             let m = per_model.entry((ev.source, ev.model.clone())).or_default();
@@ -210,6 +255,8 @@ pub fn build_summary(
         .iter()
         .map(|(src, status)| {
             let (totals, cost, partial) = per_source.get(src).copied().unwrap_or_default();
+            let (p_tot, p_cost, p_partial, p_parts) =
+                per_source_period.get(src).copied().unwrap_or_default();
             SourceSummary {
                 source: *src,
                 label: src.label().to_string(),
@@ -217,6 +264,11 @@ pub fn build_summary(
                 today: totals,
                 today_cost: cost,
                 cost_partial: partial,
+                today_parts: per_source_parts.get(src).copied().unwrap_or_default(),
+                period: p_tot,
+                period_cost: p_cost,
+                period_parts: p_parts,
+                period_partial: p_partial,
             }
         })
         .collect();
@@ -264,6 +316,7 @@ pub fn build_summary(
         today: today_totals,
         today_cost,
         cost_partial,
+        today_parts,
         sources,
         models_today,
         daily,
@@ -280,6 +333,46 @@ pub fn build_summary(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 벤더별 기간 합계는 **`daily` 와 같은 창**을 덮어야 한다 — 화면의 기간 총합은
+    /// `daily` 를 더해 만들므로, 범위가 어긋나면 "벤더별 합 ≠ 전체"가 된다.
+    #[test]
+    fn per_source_period_matches_the_daily_window() {
+        let pricing = PriceTable::builtin();
+        let off = FixedOffset::east_opt(0).unwrap();
+        let now = DateTime::parse_from_rfc3339("2026-08-23T12:00:00Z").unwrap().with_timezone(&Utc);
+        let days = 28;
+        let evs = vec![
+            ev(Source::Claude, "claude-opus-5", "2026-08-23T01:00:00Z", 10), // 오늘
+            ev(Source::Claude, "claude-opus-5", "2026-08-10T01:00:00Z", 10), // 창 안
+            ev(Source::Claude, "claude-opus-5", "2026-01-01T01:00:00Z", 10), // 창 밖
+        ];
+        let s = build_summary(&evs, &[(Source::Claude, SourceStatus::Ok)], &pricing, days, now, off);
+        let src = &s.sources[0];
+        let from_daily: u64 = s.daily.iter().map(|d| d.totals.total()).sum();
+        assert_eq!(src.period.total(), from_daily, "벤더별 기간 합 = daily 합");
+        let cost_from_daily: f64 = s.daily.iter().map(|d| d.cost).sum();
+        assert!((src.period_cost - cost_from_daily).abs() < 1e-9);
+        // 창 밖 이벤트는 빠졌다 (이벤트 3개 중 2개만)
+        assert_eq!(src.period.output, 20);
+    }
+
+    /// 오늘 구성의 합은 오늘 총액과 같다.
+    #[test]
+    fn today_parts_sum_to_today_cost() {
+        let pricing = PriceTable::builtin();
+        let off = FixedOffset::east_opt(0).unwrap();
+        let now = DateTime::parse_from_rfc3339("2026-08-23T12:00:00Z").unwrap().with_timezone(&Utc);
+        let evs = vec![
+            ev(Source::Claude, "claude-opus-5", "2026-08-23T01:00:00Z", 100),
+            ev(Source::Codex, "gpt-5.6-terra", "2026-08-23T02:00:00Z", 50),
+        ];
+        let statuses = [(Source::Claude, SourceStatus::Ok), (Source::Codex, SourceStatus::Ok)];
+        let s = build_summary(&evs, &statuses, &pricing, 28, now, off);
+        assert!((s.today_parts.total() - s.today_cost).abs() < 1e-9);
+        let per_src: f64 = s.sources.iter().map(|x| x.today_parts.total()).sum();
+        assert!((per_src - s.today_cost).abs() < 1e-9, "벤더별 구성 합 = 전체 오늘 비용");
+    }
 
     #[test]
     fn daily_window_follows_retention_in_whole_weeks() {
