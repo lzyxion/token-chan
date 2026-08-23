@@ -406,6 +406,7 @@ fn parse_conversation(path: &Path) -> Option<(Vec<ParsedEvent>, RawContext, Opti
                 output,
                 // 캐시 생성 비용을 따로 알려주는 필드는 없다
                 cache_write: 0,
+                cache_write_1h: 0,
                 cache_read,
                 sidechain: false,
             },

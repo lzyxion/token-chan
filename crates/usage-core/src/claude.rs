@@ -74,6 +74,20 @@ struct Usage {
     cache_creation_input_tokens: u64,
     #[serde(default)]
     cache_read_input_tokens: u64,
+    /// TTL 별 내역. `cache_creation_input_tokens` 를 5분/1시간으로 쪼갠 것이라 **합이 곧
+    /// 그 값**이다. 옛 트랜스크립트엔 이 객체가 없고, 그때는 전부 5분으로 친다.
+    #[serde(default)]
+    cache_creation: Option<CacheCreation>,
+}
+
+/// 둘 다 실제로 쓰인다 — **메인 대화는 1시간, 서브에이전트는 5분**이 관측됐다
+/// (2026-08-23, dedup 후 10,094 이벤트: 1h 만 16,764행 · 5m 만 2,316행, 5m 은 전부
+/// `subagents/agent-*.jsonl`). 짧게 끝나는 서브에이전트가 긴 TTL 을 살 이유가 없다.
+/// 전부 5분 단가로 계산하면 이 머신 기준 비용이 5.37% 덜 잡힌다.
+#[derive(Deserialize)]
+struct CacheCreation {
+    #[serde(default)]
+    ephemeral_1h_input_tokens: u64,
 }
 
 /// dedup 키와 함께 캐시되는 파싱 결과
@@ -389,6 +403,13 @@ fn parse_transcript(
                 input: usage.input_tokens,
                 output: usage.output_tokens,
                 cache_write: usage.cache_creation_input_tokens,
+                // 내역이 없으면 0 → 전액 5분 단가 (옛 트랜스크립트와의 호환)
+                cache_write_1h: usage
+                    .cache_creation
+                    .as_ref()
+                    .map_or(0, |c| c.ephemeral_1h_input_tokens)
+                    // 내역이 총량을 넘는 일은 없어야 하지만, 넘으면 단가가 뒤집힌다
+                    .min(usage.cache_creation_input_tokens),
                 cache_read: usage.cache_read_input_tokens,
                 sidechain,
             },
@@ -450,6 +471,28 @@ pub(crate) fn conformance_roots() -> (Vec<tempfile::TempDir>, Vec<PathBuf>) {
 
 #[cfg(test)]
 mod tests {
+    /// `cache_creation` 내역이 있으면 1시간 몫을 뽑고, 없으면 0 (= 전액 5분 단가).
+    #[test]
+    fn parses_cache_creation_ttl_breakdown() {
+        use super::*;
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("proj");
+        std::fs::create_dir_all(&root).unwrap();
+        let with = r#"{"type":"assistant","requestId":"r1","timestamp":"2026-08-23T00:00:00Z","message":{"id":"m1","model":"claude-opus-5","usage":{"input_tokens":1,"output_tokens":2,"cache_creation_input_tokens":1000,"cache_read_input_tokens":5,"cache_creation":{"ephemeral_5m_input_tokens":400,"ephemeral_1h_input_tokens":600}}}}"#;
+        let without = r#"{"type":"assistant","requestId":"r2","timestamp":"2026-08-23T00:00:01Z","message":{"id":"m2","model":"claude-opus-5","usage":{"input_tokens":1,"output_tokens":2,"cache_creation_input_tokens":1000,"cache_read_input_tokens":5}}}"#;
+        std::fs::write(root.join("s.jsonl"), format!("{with}
+{without}
+")).unwrap();
+        let mut a = ClaudeAdapter::new(vec![dir.path().to_path_buf()]);
+        let out = a.scan(DateTime::<Utc>::UNIX_EPOCH);
+        let mut evs = out.events;
+        evs.sort_by_key(|e| e.ts);
+        assert_eq!(evs.len(), 2);
+        assert_eq!(evs[0].cache_write, 1000);
+        assert_eq!(evs[0].cache_write_1h, 600, "내역이 있으면 1시간 몫");
+        assert_eq!(evs[1].cache_write_1h, 0, "내역이 없으면 0 = 전액 5분");
+    }
+
     use super::*;
     use std::fs;
 

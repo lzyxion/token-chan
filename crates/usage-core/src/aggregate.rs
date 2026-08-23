@@ -308,6 +308,7 @@ mod tests {
             input: 100,
             output,
             cache_write: 0,
+            cache_write_1h: 0,
             cache_read: 1000,
             sidechain: false,
         }

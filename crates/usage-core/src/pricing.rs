@@ -20,6 +20,10 @@ pub struct Price {
     pub output: f64,
     /// cache write (5분 TTL 기준)
     pub cw: f64,
+    /// cache write (1시간 TTL). 없으면 [`Price::cw`] 로 물러난다 — 사용자 오버라이드
+    /// 파일이 이 키를 모르던 시절 그대로여도 깨지지 않아야 한다.
+    #[serde(default)]
+    pub cw1h: Option<f64>,
     /// cache read
     pub cr: f64,
     /// 컨텍스트 창 크기(토큰). 확인된 모델에만 채워져 있고, 없으면 `context` 모듈이
@@ -86,10 +90,15 @@ impl PriceTable {
     /// 이벤트 비용(USD). 단가 미등록 모델은 None.
     pub fn cost(&self, ev: &UsageEvent) -> Option<f64> {
         let p = self.lookup(&ev.model)?;
+        // cache_write_1h 는 cache_write 의 **부분집합**이다 (model.rs 불변식).
+        // 나머지가 5분 몫이고, 1h 단가가 없는 표는 전부 5분으로 친다.
+        let cw_1h = ev.cache_write_1h.min(ev.cache_write);
+        let cw_5m = ev.cache_write - cw_1h;
         Some(
             (ev.input as f64 * p.input
                 + ev.output as f64 * p.output
-                + ev.cache_write as f64 * p.cw
+                + cw_5m as f64 * p.cw
+                + cw_1h as f64 * p.cw1h.unwrap_or(p.cw)
                 + ev.cache_read as f64 * p.cr)
                 / 1_000_000.0,
         )
@@ -103,6 +112,10 @@ mod tests {
     use chrono::Utc;
 
     fn ev(model: &str, input: u64, output: u64, cw: u64, cr: u64) -> UsageEvent {
+        ev_ttl(model, input, output, cw, 0, cr)
+    }
+
+    fn ev_ttl(model: &str, input: u64, output: u64, cw: u64, cw1h: u64, cr: u64) -> UsageEvent {
         UsageEvent {
             source: Source::Claude,
             model: model.into(),
@@ -110,6 +123,7 @@ mod tests {
             input,
             output,
             cache_write: cw,
+            cache_write_1h: cw1h,
             cache_read: cr,
             sidechain: false,
         }
@@ -136,18 +150,36 @@ mod tests {
     #[test]
     fn gpt_5_6_prices_and_alias_match_the_official_tiers() {
         let t = PriceTable::builtin();
+        // 2026-08-23 공식 표(developers.openai.com/api/docs/pricing) 재대조 — standard·short.
+        // 이전 값(sol 5/30/0/0.5)은 셋이 틀렸다: cache writes 는 **5.6 계열에만 존재**하고
+        // (구세대는 칸이 비었거나 없다), sol 은 4/20 이다.
         let cases = [
-            ("gpt-5.6-sol", 5.0, 30.0, 0.0, 0.5),
-            ("gpt-5.6-terra", 2.0, 12.0, 0.0, 0.2),
-            ("gpt-5.6-luna", 0.2, 1.2, 0.0, 0.02),
-            // 공식 별칭 `gpt-5.6` 은 Sol 로 라우팅된다.
-            ("gpt-5.6", 5.0, 30.0, 0.0, 0.5),
+            ("gpt-5.6-sol", 4.0, 20.0, 5.0, 0.4),
+            ("gpt-5.6-terra", 2.0, 12.0, 2.5, 0.2),
+            ("gpt-5.6-luna", 0.2, 1.2, 0.25, 0.02),
+            // 공식 표에 bare 행이 없다 — 알 수 없는 5.6 변종의 폴백이라 상위(Sol)에 맞춘다.
+            ("gpt-5.6", 4.0, 20.0, 5.0, 0.4),
         ];
         for (model, input, output, cache_write, cache_read) in cases {
             let p = t.lookup(model).unwrap();
             assert_eq!((p.input, p.output, p.cw, p.cr), (input, output, cache_write, cache_read));
             assert_eq!(p.ctx, Some(1_050_000));
         }
+    }
+
+    /// OpenAI 의 cache writes 요금은 **5.6 계열에만** 있다 (공식 표 실측).
+    /// 구세대에 값을 넣으면 없는 요금을 물리게 된다.
+    #[test]
+    fn openai_cache_writes_only_on_the_5_6_family() {
+        let t = PriceTable::builtin();
+        for m in ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"] {
+            assert!(t.lookup(m).unwrap().cw > 0.0, "{m} 는 cache writes 요금이 있다");
+        }
+        for m in ["gpt-5.3-codex", "gpt-5.1", "gpt-5", "gpt-5-mini", "gpt-5-nano", "gpt-4o"] {
+            assert_eq!(t.lookup(m).unwrap().cw, 0.0, "{m} 에는 cache writes 요금이 없다");
+        }
+        // TTL 선택이 없으므로 1시간 단가도 없다 → cost() 가 cw 로 물러난다
+        assert!(t.lookup("gpt-5.6-terra").unwrap().cw1h.is_none());
     }
 
     /// 실제로 관측되는 모델은 표에 있어야 한다 — 없으면 토큰만 세고 비용은 0 이 된다.
@@ -163,6 +195,43 @@ mod tests {
         let (a, b) = (t.lookup("gemini-3.6-flash").unwrap(), t.lookup("gemini-3.7-flash").unwrap());
         assert_eq!((a.input, a.output, a.cr), (b.input, b.output, b.cr));
         assert_eq!((a.input, a.output), (0.75, 3.75));
+    }
+
+    /// 1시간 TTL 몫은 `cw1h` 단가로, 나머지는 `cw` 로 — 부분집합이지 별도 종류가 아니다.
+    #[test]
+    fn cache_write_splits_by_ttl() {
+        let t = PriceTable::builtin();
+        // opus-5: in 5 / cw 6.25 / cw1h 10 — 1M 캐시쓰기가 전부 1시간이면 $10
+        let all_1h = t.cost(&ev_ttl("claude-opus-5", 0, 0, 1_000_000, 1_000_000, 0)).unwrap();
+        assert!((all_1h - 10.0).abs() < 1e-9, "1시간 전액: {all_1h}");
+        // 전부 5분이면 $6.25
+        let all_5m = t.cost(&ev_ttl("claude-opus-5", 0, 0, 1_000_000, 0, 0)).unwrap();
+        assert!((all_5m - 6.25).abs() < 1e-9, "5분 전액: {all_5m}");
+        // 반반이면 그 중간
+        let half = t.cost(&ev_ttl("claude-opus-5", 0, 0, 1_000_000, 500_000, 0)).unwrap();
+        assert!((half - 8.125).abs() < 1e-9, "반반: {half}");
+        // 1시간 몫이 총량을 넘어와도 총량을 넘겨 과금하지 않는다
+        let over = t.cost(&ev_ttl("claude-opus-5", 0, 0, 1_000_000, 9_000_000, 0)).unwrap();
+        assert!((over - 10.0).abs() < 1e-9, "총량 상한: {over}");
+    }
+
+    /// `cw1h` 가 없는 표(옛 사용자 오버라이드)는 전부 5분 단가로 물러난다.
+    #[test]
+    fn missing_cw1h_falls_back_to_cw() {
+        let mut m = std::collections::HashMap::new();
+        m.insert("x".to_string(), Price { input: 1.0, output: 1.0, cw: 2.0, cw1h: None, cr: 1.0, ctx: None });
+        let t = PriceTable::from_maps(&[m]);
+        let c = t.cost(&ev_ttl("x", 0, 0, 1_000_000, 1_000_000, 0)).unwrap();
+        assert!((c - 2.0).abs() < 1e-9, "폴백: {c}");
+    }
+
+    /// **이중 계산 방지** — 1시간 몫은 부분집합이라 총 토큰 수를 늘리지 않는다.
+    #[test]
+    fn total_ignores_cache_write_1h() {
+        let a = ev_ttl("claude-opus-5", 1, 2, 100, 0, 4);
+        let b = ev_ttl("claude-opus-5", 1, 2, 100, 100, 4);
+        assert_eq!(a.total(), b.total(), "1시간 몫이 total() 을 바꾸면 안 된다");
+        assert_eq!(a.total(), 1 + 2 + 100 + 4);
     }
 
     #[test]

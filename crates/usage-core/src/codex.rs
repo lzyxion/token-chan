@@ -685,6 +685,8 @@ fn parse_rollout(path: &Path) -> Rollout {
                 output,
                 // 실데이터에서 관측값은 아직 0 — input_tokens 포함 여부가 미확인이라 그대로 전달만
                 cache_write: delta.cache_write,
+                // OpenAI 는 캐시 TTL 을 고를 수 없다 — 단가가 하나뿐이라 몫을 가를 일이 없다
+                cache_write_1h: 0,
                 cache_read: delta.cached,
                 sidechain: false,
             },

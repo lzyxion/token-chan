@@ -47,6 +47,13 @@ pub struct UsageEvent {
     pub input: u64,
     pub output: u64,
     pub cache_write: u64,
+    /// `cache_write` 중 **1시간 TTL** 로 적재된 몫 — 부분집합이지 별도 종류가 아니다.
+    ///
+    /// 다섯 번째 토큰 종류가 아니므로 [`UsageEvent::total`] 에도 `Totals` 에도 들어가지
+    /// 않는다 (넣으면 이중 계산된다 — `total_ignores_cache_write_1h` 가 지킨다).
+    /// 단가만 갈라야 해서 존재한다: 5분 TTL 은 입력의 1.25배, 1시간은 2배다.
+    /// 값을 못 얻으면 0 이고, 그러면 전액 5분 단가 — 이 필드가 생기기 전과 같은 결과다.
+    pub cache_write_1h: u64,
     pub cache_read: u64,
     /// 서브에이전트(사이드체인) 이벤트 여부 — "활성 모델" 판정에서 제외됨
     pub sidechain: bool,
