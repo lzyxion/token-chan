@@ -224,7 +224,8 @@ function VendorCard({
 const SHORT_VENDOR: Record<Source, string> = {
   claude: "Claude",
   codex: "Codex",
-  antigravity: "agy",
+  // Antigravity 의 약자라 대문자다 — CLI 실행 명령인 소문자 `agy` 와는 다른 것이다
+  antigravity: "AGY",
 };
 
 const PAGE_TITLES = ["현황", "통계·사용량", "최근 세션"];
