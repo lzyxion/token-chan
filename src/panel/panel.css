@@ -107,37 +107,130 @@
 
 /* ── 통계·사용량 ── */
 
-/* 오늘 / 기간 합계를 나란히. 오늘만 크게 두면 바로 아래 91일 잔디와 기간이 섞여
-   큰 숫자를 전체 합계로 오해한다 — 라벨과 나란한 배치로 그 모호함을 없앤다. */
-.totals {
+.overall-total {
   display: flex;
-  gap: 8px;
-}
-.total-item {
-  flex: 1;
-  min-width: 0;
-  display: flex;
-  align-items: baseline;
-  gap: 5px;
-  padding: 5px 8px;
+  flex-direction: column;
+  gap: 3px;
+  padding: 7px 8px;
   border-radius: 8px;
   background: rgba(255, 255, 255, 0.04);
 }
-.total-label {
+.overall-total-head,
+.overall-total-values {
+  display: flex;
+  align-items: baseline;
+}
+.overall-total-head {
+  justify-content: space-between;
+  gap: 8px;
+}
+.overall-total-label,
+.overall-total-recorded {
   color: var(--fg-dim);
   font-size: 9.5px;
-  flex: none;
 }
-.total-tokens {
-  font-size: 15px;
+.overall-total .period-select {
+  flex: none;
+  width: 104px;
+  padding: 3px 6px;
+  font-size: 10px;
+}
+.overall-total-values {
+  gap: 7px;
+}
+.overall-total-tokens {
+  color: var(--fg);
+  font-size: 16px;
   font-weight: 800;
   letter-spacing: -0.3px;
 }
-.total-cost {
-  margin-left: auto;
+.overall-total-cost {
   color: var(--accent);
-  font-weight: 700;
   font-size: 10.5px;
+  font-weight: 700;
+}
+
+.cost-pace {
+  display: flex;
+  gap: 8px;
+}
+.cost-pace-item {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 5px 7px;
+  border-radius: 7px;
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--fg-dim);
+  font-size: 9px;
+}
+.cost-pace-item b {
+  color: var(--accent);
+  font-size: 11px;
+}
+
+.cost-analysis {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  padding: 8px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.04);
+}
+.cost-analysis-section {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.cost-analysis-section + .cost-analysis-section {
+  padding-top: 7px;
+  border-top: 1px solid rgba(255, 255, 255, 0.09);
+}
+.cost-analysis-title {
+  color: var(--fg-dim);
+  font-size: 9px;
+}
+
+/* 현황의 첫 질문은 "오늘 전체로 얼마나 썼나"다. 벤더 카드가 세부 답을 맡기 전에
+   토큰과 비용을 한 덩어리로 크게 보여 준다. 비교 막대는 직전 7일 평균의 2배를 끝으로
+   잡아, 100% 지점이 평균(막대 중앙)이 된다. */
+.today-overview {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px 9px;
+  border-radius: 9px;
+  background: rgba(255, 255, 255, 0.055);
+  border: 1px solid rgba(255, 255, 255, 0.09);
+}
+.today-overview-label {
+  color: var(--fg-dim);
+  font-size: 9.5px;
+}
+.today-overview-values {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex: 1;
+  min-width: 0;
+}
+.today-overview-tokens {
+  color: var(--fg);
+  font-size: 17px;
+  font-weight: 800;
+  letter-spacing: -0.35px;
+}
+.today-overview-cost {
+  color: var(--accent);
+  font-size: 11px;
+  font-weight: 700;
+}
+.today-trend-label {
+  color: var(--fg-dim);
+  font-size: 8px;
+  line-height: 1.2;
   white-space: nowrap;
 }
 /* ── 폴더 탭 ──
@@ -374,8 +467,8 @@
 /* 단가를 모르는 모델은 비용 기준 막대에서 0 이라 사라진다. 조용히 빼면 "안 썼다"로
    읽히므로 몇 개가 빠졌는지 밝힌다 (`cost_partial` 과 같은 원칙).
    지금은 모든 모델에 단가가 있어 안 뜨지만, 새 모델이 나온 직후가 정확히 그 상황이다. */
-/* 오늘 구성 — 기간 막대 아래 붙는 한 줄. 막대의 범례(`.mix-legend`)와 헷갈리지
-   않게 앞에 「오늘」을 못 박고 한 단계 흐리게 둔다. */
+/* 오늘 구성 — 현황의 오늘 누적 카드에 붙는 한 줄. 총합·평균 대비보다 한 단계 흐리게
+   두어 보조 정보로 읽힌다. */
 .mix-today {
   color: var(--fg-dim);
   font-size: 9px;
@@ -389,19 +482,6 @@
 }
 
 /* 차트 묶음 */
-/* 조회 기간 줄 — 통계 탭의 기간 합계와 잔디가 모두 이 값을 따른다.
-   설정 창의 select 와 같은 생김새를 쓰되(같은 조작이라 같아야 한다) 라벨은
-   차트 제목(`.chart-title`)과 맞춘다 — 이 줄이 아래 차트들의 머리말이라서다. */
-.period-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-.period-label {
-  color: var(--fg-dim);
-  font-size: 9.5px;
-  flex: none;
-}
 .period-select {
   flex: 1;
   min-width: 0;
@@ -428,6 +508,73 @@
   font-size: 9.5px;
 }
 
+/* 사용 기록은 분석 카드와 분리된 독립 페이지다. 잔디를 넓게 읽되, 기간 선택은 이
+   기록에만 영향을 준다는 점이 머리줄에서 바로 드러나게 한다. */
+.history-page {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 10px 9px;
+  background: var(--vpanel-fill);
+  border: 1px solid var(--vpanel-line);
+  border-radius: 8px;
+}
+.history-summary {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 7px 8px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.04);
+}
+.history-summary-head,
+.history-period {
+  display: flex;
+  align-items: center;
+}
+.history-summary-head {
+  gap: 8px;
+}
+.history-summary-label {
+  color: var(--fg-dim);
+  font-size: 9px;
+}
+.history-period {
+  gap: 5px;
+  margin-left: auto;
+  color: var(--fg-faint);
+  font-size: 9px;
+}
+.history-period .period-select {
+  flex: none;
+  width: 86px;
+  padding: 3px 5px;
+  font-size: 9px;
+}
+.history-summary-items {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 5px;
+}
+.history-summary-items > span {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.history-summary-items i {
+  color: var(--fg-faint);
+  font-size: 8px;
+  font-style: normal;
+  white-space: nowrap;
+}
+.history-summary-items b {
+  color: var(--fg);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
 /* 잔디 — 열=주, 행=요일.
    열 수와 최대 폭은 컴포넌트가 인라인으로 준다 (보존기간에 따라 4~26주로 변한다).
    `margin: 0 auto` 로 주가 적을 때 남는 폭을 가운데 정렬로 흡수한다 — 칸을 키우면
@@ -444,6 +591,9 @@
   aspect-ratio: 1;
   border-radius: 2px;
   background: rgba(255, 255, 255, 0.06);
+  border: 0;
+  padding: 0;
+  cursor: pointer;
 }
 .grass-cell.empty {
   background: none;
@@ -474,6 +624,10 @@
 .grass-cell.lv4 {
   background: var(--grass);
 }
+.grass-cell.selected {
+  outline: 1px solid var(--fg);
+  outline-offset: 1px;
+}
 .grass-legend {
   display: flex;
   align-items: center;
@@ -492,6 +646,35 @@
   height: 7px;
   aspect-ratio: auto;
 }
+.history-day-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 7px 8px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.04);
+}
+.history-day-head,
+.history-day-total,
+.history-day-row {
+  display: flex;
+  align-items: center;
+}
+.history-day-head {
+  justify-content: space-between;
+  color: var(--fg-dim);
+  font-size: 9px;
+}
+.history-day-head b { color: var(--fg); }
+.history-day-total { gap: 7px; }
+.history-day-total b { color: var(--fg); font-size: 14px; }
+.history-day-total span { color: var(--accent); font-size: 10px; font-weight: 700; }
+.history-day-rows { display: flex; flex-direction: column; gap: 3px; }
+.history-day-row { gap: 5px; color: var(--fg-dim); font-size: 9px; }
+.history-day-row b { margin-left: auto; color: var(--fg); font-variant-numeric: tabular-nums; }
+.history-day-row i { min-width: 35px; color: var(--accent); font-size: 9px; font-style: normal; text-align: right; }
+.history-day-models { display: flex; flex-direction: column; gap: 4px; }
+.history-day-models-title { color: var(--fg-faint); font-size: 8.5px; }
 
 /* 최근 7일 막대 — 잔디가 흐름이면 이쪽은 요일별 크기를 읽게 한다 */
 .weekbars {
@@ -540,6 +723,8 @@
    덮는 방식이라 벤더가 몇이든 규칙은 이 둘뿐이고, 「오늘 모델」과 색이 어긋나지 않는다. */
 .weekbar-seg.sh1::after,
 .weekbar-seg.sh2::after,
+.mix-seg.sh1::after,
+.mix-seg.sh2::after,
 .mix-dot.sh1::after,
 .mix-dot.sh2::after {
   content: "";
@@ -548,10 +733,12 @@
   border-radius: inherit;
 }
 .weekbar-seg.sh1::after,
+.mix-seg.sh1::after,
 .mix-dot.sh1::after {
   background: rgba(255, 255, 255, 0.3);
 }
 .weekbar-seg.sh2::after,
+.mix-seg.sh2::after,
 .mix-dot.sh2::after {
   background: rgba(255, 255, 255, 0.55);
 }
@@ -630,7 +817,7 @@
 }
 .vendor-card.active {
   background: rgba(255, 255, 255, 0.06);
-  border-color: rgba(255, 255, 255, 0.14);
+  border-color: rgba(53, 208, 127, 0.72);
 }
 .vendor-head {
   display: flex;
@@ -649,11 +836,6 @@
 }
 .source-label {
   flex: 0 0 auto;
-}
-.busy-chip {
-  margin-left: 0;
-  background: rgba(53, 208, 127, 0.18);
-  color: #6fe0a8;
 }
 /* 벤더 로고 — 게이지와 같은 그림을 써서 두 화면이 같은 언어를 쓰게 한다 */
 .vendor-icon {
@@ -690,7 +872,7 @@
   color: var(--fg-dim);
   font-size: 9.5px;
 }
-/* 리셋까지 남은 시간. 컨텍스트 행은 리셋이 없어 빈칸이지만 열은 유지된다 */
+/* 리셋까지 남은 시간. 컨텍스트 행은 같은 열에 현재 사용량만 표시한다. */
 .vendor-reset {
   color: var(--fg-faint);
   font-size: 9px;
@@ -704,40 +886,25 @@
   font-style: italic;
   opacity: 0.75;
 }
-/* 오늘 비용 — 머리줄 오른쪽 끝. 카드에서 별도 줄을 없애 벤더 3개가 스크롤 없이 들어간다.
-   토큰 수는 컨텍스트 줄 끝(.vendor-reset)으로 내려갔고 여기엔 **돈만** 남는다 —
-   머리줄에서 눈이 먼저 가야 하는 값이라 본문 색으로 띄운다. */
+/* 오늘 누적 — 머리줄 오른쪽 끝. 토큰은 보조색, 비용은 본문색으로 두어 한 줄에서
+   규모와 지출을 함께 읽는다. */
 .vendor-today {
   margin-left: auto;
-  color: var(--fg);
-  font-weight: 700;
   font-size: 9.5px;
   white-space: nowrap;
 }
-/* 컨텍스트 줄이 없는 벤더에서만 머리줄에 남는 토큰 수 — 돈보다 한 단계 죽인다 */
+/* 현황의 오늘 누적과 같은 위계: 토큰은 흰색 굵게, 비용은 강조색. */
 .vendor-today b {
-  color: var(--fg-dim);
-  font-weight: 400;
+  color: var(--fg);
+  font-weight: 800;
+}
+.vendor-cost {
+  color: var(--accent);
+  font-weight: 700;
 }
 .source-label {
   color: var(--fg-soft);
 }
-.chip {
-  margin-left: auto;
-  font-size: 9.5px;
-  padding: 1px 7px;
-  border-radius: 7px;
-}
-.chip.muted {
-  background: rgba(255, 255, 255, 0.08);
-  color: var(--fg-dim);
-}
-.chip.warn {
-  background: rgba(255, 180, 94, 0.16);
-  color: var(--warn);
-}
-
-
 /* ── 모델·세션 ── */
 
 .active-model {
@@ -819,9 +986,14 @@
     ".    meta  tokens";
   align-items: center;
   column-gap: 6px;
-  padding: 4px 6px;
+  padding: 3px 5px;
   border-radius: 6px;
   background: rgba(255, 255, 255, 0.03);
+  border: 1px solid transparent;
+}
+.session-row.active {
+  background: rgba(255, 255, 255, 0.06);
+  border-color: rgba(53, 208, 127, 0.72);
 }
 .session-row .vendor-icon {
   grid-area: icon;
@@ -878,6 +1050,7 @@
 .mix-seg {
   /* 비중이 아주 작아도 사라지지는 않게 (조각이 없으면 범례가 거짓말이 된다) */
   min-width: 4px;
+  position: relative;
 }
 /* 벤더 색 — 「오늘 모델」과 주간 막대가 **같은 값을 공유한다**.
    한 페이지에 두 그래프가 있어 색이 갈리면 같은 색이 서로 다른 뜻이 된다.
@@ -909,10 +1082,12 @@
    아무것도 안 하므로, 그대로 두면 Codex 만 모델 구분이 사라진다 — 범례엔 모델이 셋인데
    막대는 한 덩어리가 된다. 자리와 규칙은 같고 막의 색만 반대로 준다. */
 .weekbar-seg.codex.sh1::after,
+.mix-seg.codex.sh1::after,
 .mix-dot.codex.sh1::after {
   background: rgba(20, 24, 33, 0.22);
 }
 .weekbar-seg.codex.sh2::after,
+.mix-seg.codex.sh2::after,
 .mix-dot.codex.sh2::after {
   background: rgba(20, 24, 33, 0.42);
 }

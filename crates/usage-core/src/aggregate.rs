@@ -69,6 +69,23 @@ pub struct DailyRow {
     pub cost: f64,
 }
 
+/// 선택한 날짜의 벤더별 사용량.
+#[derive(Clone, Debug, Serialize)]
+pub struct DailySource {
+    pub source: Source,
+    pub totals: Totals,
+    pub cost: f64,
+    pub cost_known: bool,
+}
+
+/// 사용 기록에서 날짜를 눌렀을 때 보여줄 상세. `daily`와 같은 기간만 담는다.
+#[derive(Clone, Debug, Serialize)]
+pub struct DailyDetail {
+    pub date: String,
+    pub sources: Vec<DailySource>,
+    pub models: Vec<ModelRow>,
+}
+
 /// 하루에 모델 하나가 쓴 양.
 ///
 /// 토큰과 비용을 **둘 다** 담는다. 막대의 기준을 토글로 바꾸는데, 높이만 비용으로
@@ -108,6 +125,8 @@ pub struct Summary {
     #[serde(default)]
     pub models_period: Vec<ModelRow>,
     pub daily: Vec<DailyRow>,
+    #[serde(default)]
+    pub daily_details: Vec<DailyDetail>,
     /// 최근 [`WEEK_DAYS`]일의 **날짜별 모델 내역** — 주간 막대를 모델로 쌓기 위한 것.
     ///
     /// `daily` 에 붙이지 않는다. `daily` 는 보존기간만큼 길어(최대 수개월) 10초마다
@@ -204,6 +223,10 @@ pub fn build_summary(
         Default::default();
     let mut per_model: std::collections::BTreeMap<(Source, String), (Totals, f64, bool)> = Default::default();
     let mut per_day: std::collections::BTreeMap<NaiveDate, (Totals, f64)> = Default::default();
+    let mut per_day_source: std::collections::BTreeMap<(NaiveDate, Source), (Totals, f64, bool)> =
+        Default::default();
+    let mut per_day_detail_model: std::collections::BTreeMap<(NaiveDate, Source, String), (Totals, f64, bool)> =
+        Default::default();
     // 주간 막대용 (날짜, 소스, 모델) → 토큰. 보존기간이 7일보다 짧으면 그만큼만 본다.
     let week_len = days.min(WEEK_DAYS);
     let week_start = today - Duration::days(week_len.max(1) as i64 - 1);
@@ -232,6 +255,20 @@ pub fn build_summary(
                 Some(c) => m.1 += c,
                 None => m.2 = true,
             }
+
+            let source = per_day_source.entry((d, ev.source)).or_default();
+            source.0.add_event(ev);
+            match cost {
+                Some(c) => source.1 += c,
+                None => source.2 = true,
+            }
+            let model = per_day_detail_model.entry((d, ev.source, ev.model.clone())).or_default();
+            model.0.add_event(ev);
+            match cost {
+                Some(c) => model.1 += c,
+                None => model.2 = true,
+            }
+
         }
 
         let day = per_day.entry(d).or_default();
@@ -322,10 +359,35 @@ pub fn build_summary(
 
     // 최근 N일 (빈 날 포함, 오름차순)
     let mut daily = vec![];
+    let mut daily_details = vec![];
     for i in (0..days).rev() {
         let d = today - Duration::days(i as i64);
         let (totals, cost) = per_day.get(&d).copied().unwrap_or_default();
         daily.push(DailyRow { date: d.to_string(), totals, cost });
+        let mut sources: Vec<DailySource> = per_day_source
+            .iter()
+            .filter(|((day, _), _)| *day == d)
+            .map(|((_, source), (totals, cost, partial))| DailySource {
+                source: *source,
+                totals: *totals,
+                cost: *cost,
+                cost_known: !*partial,
+            })
+            .collect();
+        sources.sort_by_key(|s| std::cmp::Reverse(s.totals.total()));
+        let mut models: Vec<ModelRow> = per_day_detail_model
+            .iter()
+            .filter(|((day, _, _), _)| *day == d)
+            .map(|((_, source, model), (totals, cost, partial))| ModelRow {
+                source: *source,
+                model: model.clone(),
+                totals: *totals,
+                cost: *cost,
+                cost_known: !*partial,
+            })
+            .collect();
+        models.sort_by_key(|m| std::cmp::Reverse(m.totals.total()));
+        daily_details.push(DailyDetail { date: d.to_string(), sources, models });
     }
 
     // 주간 막대용 모델 내역 — `daily` 꼬리와 같은 날짜·같은 순서여야 프론트가 붙일 수 있다
@@ -356,6 +418,7 @@ pub fn build_summary(
         models_today,
         models_period,
         daily,
+        daily_details,
         week_models,
         first_event_ts: events.first().map(|e| e.ts),
         last_event_ts: events.last().map(|e| e.ts),

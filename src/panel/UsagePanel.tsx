@@ -31,25 +31,16 @@ import {
   resetIsStale,
   retentionLabel,
   RETENTION_OPTIONS,
-  showsHeatmap,
   shortModel,
+  showsHeatmap,
   SOURCE_LABEL,
   EMPTY_PARTS,
   totalOf,
   type AlertThresholds,
   type Currency,
 } from "../format";
-import type { ContextState, PlanMeter, PlanUsage, Source, SourceStatus, SourceSummary } from "../types";
+import type { ContextState, DailyDetail, PlanMeter, PlanUsage, Source, SourceSummary } from "../types";
 import "./panel.css";
-
-function statusChip(status: SourceStatus) {
-  switch (status.kind) {
-    case "no_data":
-      return <span className="chip muted">미감지</span>;
-    default:
-      return null;
-  }
-}
 
 /** 게이지 한 줄: `라벨 | 바 | % | 리셋`. 컨텍스트와 한도가 같은 격자를 써야
  *  한 벤더의 소진율이 세로로 정렬돼 한눈에 비교된다. */
@@ -139,7 +130,6 @@ function VendorCard({
   thresholds: AlertThresholds;
 }) {
   const total = totalOf(s.today);
-  const chip = statusChip(s.status);
   const pct = context ? Math.round(context.used_pct) : null;
   const showsContext = pct != null && context != null;
   // 오늘 한 번도 안 쓴 벤더(연결 안 된 소스 포함)는 토큰 수를 적지 않는다 — "0" 은
@@ -149,24 +139,19 @@ function VendorCard({
   const meters = plan?.meters ?? [];
   return (
     <div className={`vendor-card ${active ? "active" : ""}`}>
-      {/* 오늘 사용량을 머리줄 오른쪽에 붙여 카드에서 한 줄을 없앴다 —
-          벤더 3개가 스크롤 없이 들어가야 "한눈에 비교"가 성립한다.
-          컨텍스트 토큰 수(76K/200K)는 바와 % 가 이미 말하고 있어 툴팁으로 내렸다. */}
+      {/* 오늘 누적은 머리줄, 컨텍스트는 그 행에서만 읽는다. 둘을 같은 자리에 놓으면
+          `76K / 200K`를 오늘 합계로 오해하게 된다. */}
       <div className="vendor-head">
         <VendorIcon source={s.source} size={13} className={busy ? "busy" : ""} />
         <span className="source-label">{SOURCE_LABEL[s.source]}</span>
         {context?.model && <span className="vendor-model">{shortModel(context.model)}</span>}
-        {busy && <span className="chip busy-chip">작업 중</span>}
-        {chip}
-        {/* 오늘 토큰은 컨텍스트 줄 끝으로 내려갔다 — 컨텍스트 줄이 없는 벤더에서만
-            머리줄에 남는다 (내려보낼 자리가 없다) */}
         <span className="vendor-today">
-          {!showsContext && usedToday && (
+          {usedToday && (
             <>
               <b>{fmtTokens(total)}</b>{" "}
             </>
           )}
-          {fmtCost(s.today_cost, s.cost_partial, currency)}
+          <span className="vendor-cost">{fmtCost(s.today_cost, s.cost_partial, currency)}</span>
         </span>
       </div>
       {showsContext && (
@@ -174,7 +159,7 @@ function VendorCard({
           label="컨텍스트"
           pct={pct}
           danger={thresholds.context}
-          aside={usedToday ? fmtTokens(total) : undefined}
+          aside={fmtTokens(context.tokens).replace(/\.0([KMB])$/, "$1")}
           title={`${context.tokens.toLocaleString()} / ${context.window.toLocaleString()} 토큰${
             context.interim ? " (정리 중)" : ""
           }`}
@@ -227,7 +212,7 @@ const SHORT_VENDOR: Record<Source, string> = {
   antigravity: "AGY",
 };
 
-const PAGE_TITLES = ["현황", "통계·사용량", "최근 세션"];
+const PAGE_TITLES = ["현황", "최근 세션", "통계·사용량", "사용 기록"];
 
 /** 독립 창으로 뜨는 사용량 패널 — 펫 우클릭 또는 트레이 메뉴로 토글 */
 export default function UsagePanel() {
@@ -249,6 +234,7 @@ export default function UsagePanel() {
   // "all" = 개요. 벤더를 고르면 그 벤더의 구성·효율만 본다 — 시간축(잔디·주간)은
   // 소스별로 나뉘어 오지 않으므로 개요에만 있다.
   const [tab, setTab] = useState<Source | "all">("all");
+  const [selectedHistoryDate, setSelectedHistoryDate] = useState<string | null>(null);
   const bodyRef = useRef<HTMLDivElement | null>(null);
 
   useWindowPersist("panel");
@@ -276,13 +262,10 @@ export default function UsagePanel() {
   // 기록이 있는 벤더만 탭으로 세운다 (`period` 는 옛 백엔드엔 없다)
   const vendorTabs = summary.sources.filter((v) => (v.period ? totalOf(v.period) : 0) > 0);
   const picked = summary.sources.find((v) => v.source === tab) ?? null;
-  // 탭을 고르면 위의 큰 숫자까지 그 벤더 것으로 바뀐다 — 탭은 걸러 보는 창이지
-  // 아래쪽 두 블록만 바꾸는 스위치가 아니다. 숫자와 탭이 어긋나면 어느 쪽이 참인지
-  // 알 수 없게 된다.
-  const shownToday = picked ? picked.today : summary.today;
-  const shownTodayCost = picked ? picked.today_cost : summary.today_cost;
-  const shownPartial = picked ? picked.cost_partial : summary.cost_partial;
   const shownModels = summary.models_today;
+  const shownPeriodModels = picked
+    ? summary.models_period.filter((m) => m.source === picked.source)
+    : summary.models_period;
   // 잔디가 덮는 기간(= summary.daily) 전체 합계. 백엔드에 따로 담지 않고 여기서 더한다 —
   // 일별 값이 이미 다 와 있어 서버 왕복을 늘릴 이유가 없다.
   const periodTotal = summary.daily.reduce((s, d) => s + totalOf(d.totals), 0);
@@ -290,6 +273,37 @@ export default function UsagePanel() {
   // 격자 기간이 아니라 **기록이 있는 날 수**로 라벨을 단다 — 앞쪽이 통째로 기록 없는
   // 구간이면 "84일에 42.3M" 으로 읽혀 일평균을 잘못 계산하게 된다 (잔디 범례와 같은 값).
   const recorded = recordedDays(summary.daily, summary.first_event_ts);
+  const activeHistoryDays = summary.daily.filter((d) => totalOf(d.totals) > 0);
+  const busiestHistoryDay = activeHistoryDays.reduce<(typeof summary.daily)[number] | null>(
+    (top, day) => (!top || totalOf(day.totals) > totalOf(top.totals) ? day : top),
+    null,
+  );
+  let currentStreak = 0;
+  for (const day of [...summary.daily].reverse()) {
+    if (totalOf(day.totals) === 0) break;
+    currentStreak += 1;
+  }
+  const selectedHistoryDetail: DailyDetail | null =
+    summary.daily_details?.find((d) => d.date === selectedHistoryDate) ??
+    summary.daily_details?.[summary.daily_details.length - 1] ??
+    null;
+  const selectedHistoryTotal = selectedHistoryDetail
+    ? summary.daily.find((d) => d.date === selectedHistoryDetail.date) ?? null
+    : null;
+  // 오늘과 비교할 평균은 실제 기록이 시작된 뒤의 직전 달력일만 쓴다. 설치 전 빈 날을
+  // 0으로 넣으면 첫 며칠의 "평균 대비"가 부풀려진다.
+  const firstRecordedDate = summary.first_event_ts?.slice(0, 10) ?? null;
+  const priorDays = summary.daily
+    .filter((d) => d.date < summary.today_date && (!firstRecordedDate || d.date >= firstRecordedDate))
+    .slice(-7);
+  const priorAverage = priorDays.length
+    ? priorDays.reduce((s, d) => s + totalOf(d.totals), 0) / priorDays.length
+    : null;
+  const priorAverageCost = priorDays.length
+    ? priorDays.reduce((s, d) => s + d.cost, 0) / priorDays.length
+    : null;
+  const todayVsAverage = priorAverage && priorAverage > 0 ? totalOf(summary.today) / priorAverage : null;
+  const todayDelta = todayVsAverage == null ? null : Math.round((todayVsAverage - 1) * 100);
 
   // 지금 돌고 있는 세션들 — 세 소스 다 파일에 적힌 턴 경계에서 온 값이다
   const running = live.sessions.filter((s) => s.status === "busy");
@@ -321,6 +335,20 @@ export default function UsagePanel() {
     else prev();
   };
 
+  const periodSelect = (
+    <select
+      className="period-select"
+      value={retention}
+      onChange={(e) => void invoke("set_retention_days", { days: Number(e.currentTarget.value) })}
+    >
+      {options.map((d) => (
+        <option key={d} value={d}>
+          {retentionLabel(d)}
+        </option>
+      ))}
+    </select>
+  );
+
   return (
     <div className="panel-root" onWheel={onWheel}>
       <ResizeGrips />
@@ -342,28 +370,45 @@ export default function UsagePanel() {
 
         <div className="page-body" ref={bodyRef}>
           {page === 0 && (
-            /* 활성 벤더를 맨 위로 — 게이지가 보여주는 게 이것이라 시선이 먼저 닿아야 한다 */
-            <div className="sources">
-              {[...summary.sources]
-                .sort(
-                  (a, b) => Number(b.source === activeSource) - Number(a.source === activeSource),
-                )
-                .map((s) => (
-                  <VendorCard
-                    key={s.source}
-                    s={s}
-                    context={summary.contexts.find((c) => c.source === s.source) ?? null}
-                    plan={plans.find((p) => p.source === s.source) ?? null}
-                    active={s.source === activeSource}
-                    busy={busySources.has(s.source)}
-                    currency={currency}
-                    thresholds={thresholds}
-                  />
-                ))}
-            </div>
+            <>
+              <div className="today-overview">
+                <span className="today-overview-label">오늘 누적</span>
+                <div className="today-overview-values">
+                  <span className="today-overview-tokens">{fmtTokens(totalOf(summary.today))}</span>
+                  <span className="today-overview-cost">
+                    {fmtCost(summary.today_cost, summary.cost_partial, currency)}
+                  </span>
+                </div>
+                <span className="today-trend-label">
+                  최근 7일 토큰
+                  {todayDelta != null && ` · 평균 대비 ${todayDelta >= 0 ? "+" : ""}${todayDelta}%`}
+                </span>
+                <ModelToday models={shownModels} />
+              </div>
+              {/* 활성 벤더를 맨 위로 — 게이지가 보여주는 게 이것이라 시선이 먼저 닿아야 한다 */}
+              <div className="sources">
+                {summary.sources
+                  .filter((s) => s.status.kind !== "no_data")
+                  .sort(
+                    (a, b) => Number(b.source === activeSource) - Number(a.source === activeSource),
+                  )
+                  .map((s) => (
+                    <VendorCard
+                      key={s.source}
+                      s={s}
+                      context={summary.contexts.find((c) => c.source === s.source) ?? null}
+                      plan={plans.find((p) => p.source === s.source) ?? null}
+                      active={s.source === activeSource}
+                      busy={busySources.has(s.source)}
+                      currency={currency}
+                      thresholds={thresholds}
+                    />
+                  ))}
+              </div>
+            </>
           )}
 
-          {page === 1 && (
+          {page === 2 && (
             <>
               {/* 탭 줄과 판을 한 덩어리로 묶는다 — `.page-body` 의 gap 이 둘 사이에
                   들어가면 폴더가 끊겨 보인다 (margin -1px 로는 못 이긴다). */}
@@ -398,49 +443,47 @@ export default function UsagePanel() {
                 </div>
               </div>
               <div className="vpanel">
-              {/* 오늘만 크게 두면 바로 아래 91일 잔디와 기간이 뒤섞여 읽힌다 —
-                  큰 숫자를 전체 합계로 오해하기 딱 좋다. 둘을 나란히 놓아 기간을 못 박는다.
-                  기간 합계는 통계 페이지에 원래 있어야 할 값이기도 하다
-                  (지금까지는 잔디를 눈으로 훑어야 총량을 짐작할 수 있었다). */}
-              <div className="totals">
-                <div className="total-item">
-                  <span className="total-label">오늘</span>
-                  <span className="total-tokens">{fmtTokens(totalOf(shownToday))}</span>
-                  <span className="total-cost">
-                    {fmtCost(shownTodayCost, shownPartial, currency)}
-                  </span>
+              {tab === "all" ? (
+                <div className="overall-total">
+                  <div className="overall-total-head">
+                    <span className="overall-total-label">전체 사용량</span>
+                    {periodSelect}
+                  </div>
+                  <div className="overall-total-values">
+                    <span className="overall-total-tokens">{fmtTokens(periodTotal)}</span>
+                    <span className="overall-total-cost">{fmtCost(periodCost, false, currency)}</span>
+                  </div>
+                  <span className="overall-total-recorded">기록 {recorded}일</span>
                 </div>
-                <div className="total-item">
-                  {/* 격자 기간(84일)이 아니라 기록이 있는 날 수를 쓴다 —
-                      기록 전 구간까지 포함한 숫자로 나누면 일평균이 어긋난다 */}
-                  <span className="total-label">{recorded}일</span>
-                  <span className="total-tokens">
-                    {fmtTokens(picked ? totalOf(picked.period) : periodTotal)}
-                  </span>
-                  <span className="total-cost">
-                    {fmtCost(picked ? picked.period_cost : periodCost, false, currency)}
-                  </span>
+              ) : picked ? (
+                <div className="overall-total">
+                  <div className="overall-total-head">
+                    <span className="overall-total-label">{SOURCE_LABEL[picked.source]} 사용량</span>
+                    {periodSelect}
+                  </div>
+                  <div className="overall-total-values">
+                    <span className="overall-total-tokens">{fmtTokens(totalOf(picked.period))}</span>
+                    <span className="overall-total-cost">{fmtCost(picked.period_cost, false, currency)}</span>
+                  </div>
+                  <span className="overall-total-recorded">기록 {recorded}일</span>
                 </div>
-              </div>
-              {/* 조회 기간 = 스캔 범위라 위 기간 합계와 아래 잔디가 함께 움직인다.
-                  설정 창이 아니라 여기 두는 이유: 값을 바꾼 결과가 이 화면에서 바로
-                  보인다. 주간 막대는 이름 그대로 항상 최근 7일이라 영향받지 않는다. */}
-              <div className="period-row">
-                <span className="period-label">조회 기간</span>
-                <select
-                  className="period-select"
-                  value={retention}
-                  onChange={(e) =>
-                    void invoke("set_retention_days", { days: Number(e.currentTarget.value) })
-                  }
-                >
-                  {options.map((d) => (
-                    <option key={d} value={d}>
-                      {retentionLabel(d)}
-                    </option>
-                  ))}
-                </select>
-              </div>
+              ) : null}
+
+              {tab === "all" && priorAverageCost != null && (
+                <div className="chart-block">
+                  <div className="chart-title">비용 페이스</div>
+                  <div className="cost-pace">
+                    <div className="cost-pace-item">
+                      <span>최근 {priorDays.length}일 일평균</span>
+                      <b>{fmtCost(priorAverageCost, false, currency)}</b>
+                    </div>
+                    <div className="cost-pace-item">
+                      <span>30일 환산</span>
+                      <b>{fmtCost(priorAverageCost * 30, false, currency)}</b>
+                    </div>
+                  </div>
+                </div>
+              )}
 
               {/* 개요에서 기간 전체를 어떤 벤더가 차지했는지 먼저 보고, 아래 시간축으로
                   내려간다. 이 줄은 벤더 상세로 들어가는 문이기도 하다. */}
@@ -458,36 +501,32 @@ export default function UsagePanel() {
 
               {tab !== "all" && picked && (
                 <>
-                  <div className="chart-block">
-                    <div className="chart-title">항목별 비용 · {recorded}일</div>
-                    <CostBreakdown
-                      totals={picked.period}
-                      parts={picked.period_parts ?? EMPTY_PARTS}
-                      currency={currency}
-                    />
-                  </div>
-                  <div className="chart-block">
-                    <div className="chart-title">캐시 효율 · {recorded}일</div>
-                    <Efficiency
-                      totals={picked.period}
-                      parts={picked.period_parts ?? EMPTY_PARTS}
-                      currency={currency}
-                    />
+                  {shownPeriodModels.some((m) => m.cost_known) && (
+                    <div className="chart-block">
+                      <div className="chart-title">모델별 비용 · {recorded}일</div>
+                      <ModelMix models={shownPeriodModels} basis="cost" currency={currency} />
+                    </div>
+                  )}
+                  <div className="cost-analysis">
+                    <div className="chart-title">비용 분석 · {recorded}일</div>
+                    <div className="cost-analysis-section">
+                      <span className="cost-analysis-title">항목별 비용</span>
+                      <CostBreakdown
+                        totals={picked.period}
+                        parts={picked.period_parts ?? EMPTY_PARTS}
+                        currency={currency}
+                      />
+                    </div>
+                    <div className="cost-analysis-section">
+                      <span className="cost-analysis-title">캐시 효율</span>
+                      <Efficiency
+                        totals={picked.period}
+                        parts={picked.period_parts ?? EMPTY_PARTS}
+                        currency={currency}
+                      />
+                    </div>
                   </div>
                 </>
-              )}
-
-              {/* 짧은 기간에선 격자를 접는다 — 남는 칸이 "안 썼다"는 거짓말이 된다 */}
-              {tab === "all" && showsHeatmap(retention) && (
-                <div className="chart-block">
-                  <div className="chart-title">일별 토큰</div>
-                  <UsageHeatmap
-                    daily={summary.daily}
-                    firstEvent={summary.first_event_ts}
-                    currency={currency}
-                    basis="tokens"
-                  />
-                </div>
               )}
 
               {tab === "all" && (
@@ -502,43 +541,108 @@ export default function UsagePanel() {
               </div>
               )}
 
-              {/* 막대는 기간이 갖는다 — 오늘치는 한 모델로 쏠리는 날이 많아 통짜 막대가
-                  된다(실측 20일 중 14일이 90% 초과). 오늘은 아래 한 줄로 붙인다. */}
-              {tab === "all" && summary.models_period?.length > 0 && (
-                <div className="chart-block">
-                  <div className="chart-title">모델별 토큰 · {recorded}일</div>
-                  <ModelMix models={summary.models_period} basis="tokens" currency={currency} />
-                  <ModelToday models={shownModels} />
-                </div>
-              )}
               </div>
               </div>
             </>
           )}
 
-          {page === 2 && (
+          {page === 1 && (
             <div className="sessions">
               {summary.sessions.length === 0 ? (
                 <div className="empty-hint">최근 세션이 없습니다</div>
               ) : (
-                summary.sessions.map((r) => (
-                  <div className="session-row" key={`${r.source}:${r.id}`} title={r.cwd || r.id}>
-                    {/* 벤더가 아니라 **이 세션**이 도는지로 판단한다 — 벤더로 보면
-                        한 세션만 돌아도 그 벤더의 지난 세션까지 전부 깜빡였다 */}
-                    <VendorIcon
-                      source={r.source}
-                      size={12}
-                      className={runningKeys.has(`${r.source}:${r.id}`) ? "busy" : ""}
-                    />
-                    <span className="session-label">{r.label}</span>
-                    <span className="session-ago">{fmtAgo(r.at)}</span>
-                    <span className="session-meta">
-                      {shortModel(r.model)}
-                      {r.branch && ` · ${r.branch}`}
-                    </span>
-                    <span className="session-tokens">{fmtTokens(r.tokens)}</span>
+                summary.sessions.map((r) => {
+                  const active = runningKeys.has(`${r.source}:${r.id}`);
+                  return (
+                    <div className={`session-row${active ? " active" : ""}`} key={`${r.source}:${r.id}`} title={r.cwd || r.id}>
+                      {/* 벤더가 아니라 **이 세션**이 도는지로 판단한다 — 벤더로 보면
+                          한 세션만 돌아도 그 벤더의 지난 세션까지 전부 깜빡였다 */}
+                      <VendorIcon source={r.source} size={12} className={active ? "busy" : ""} />
+                      <span className="session-label">{r.label}</span>
+                      <span className="session-ago">{fmtAgo(r.at)}</span>
+                      <span className="session-meta">
+                        {shortModel(r.model)}
+                        {r.branch && ` · ${r.branch}`}
+                      </span>
+                      <span className="session-tokens">{fmtTokens(r.tokens)}</span>
+                    </div>
+                  );
+                })
+              )}
+            </div>
+          )}
+
+          {page === 3 && (
+            <div className="history-page">
+              <div className="history-summary">
+                <div className="history-summary-head">
+                  <span className="history-summary-label">활동 요약</span>
+                  <div className="history-period">
+                    {periodSelect}
                   </div>
-                ))
+                </div>
+                <div className="history-summary-items">
+                  <span>
+                    <i>기록 시작</i>
+                    <b>{summary.first_event_ts ? summary.first_event_ts.slice(5, 10) : "—"}</b>
+                  </span>
+                  <span>
+                    <i>활동일</i>
+                    <b>{activeHistoryDays.length}일</b>
+                  </span>
+                  <span>
+                    <i>연속</i>
+                    <b>{currentStreak}일</b>
+                  </span>
+                  <span>
+                    <i>최다 사용</i>
+                    <b>{busiestHistoryDay ? busiestHistoryDay.date.slice(5) : "—"}</b>
+                  </span>
+                </div>
+              </div>
+              {showsHeatmap(retention) ? (
+                <>
+                  <UsageHeatmap
+                    daily={summary.daily}
+                    firstEvent={summary.first_event_ts}
+                    currency={currency}
+                    basis="tokens"
+                    selectedDate={selectedHistoryDetail?.date}
+                    onSelect={setSelectedHistoryDate}
+                  />
+                  {selectedHistoryDetail && selectedHistoryTotal && (
+                    <div className="history-day-detail">
+                      <div className="history-day-head">
+                        <span>선택한 날짜</span>
+                        <b>{selectedHistoryDetail.date}</b>
+                      </div>
+                      <div className="history-day-total">
+                        <b>{fmtTokens(totalOf(selectedHistoryTotal.totals))}</b>
+                        <span>{fmtCost(selectedHistoryTotal.cost, false, currency)}</span>
+                      </div>
+                      {selectedHistoryDetail.sources.length > 0 && (
+                        <div className="history-day-rows">
+                          {selectedHistoryDetail.sources.map((source) => (
+                            <div className="history-day-row" key={source.source}>
+                              <VendorIcon source={source.source} size={11} />
+                              <span>{SOURCE_LABEL[source.source]}</span>
+                              <b>{fmtTokens(totalOf(source.totals))}</b>
+                              {source.cost_known && <i>{fmtCost(source.cost, false, currency)}</i>}
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                      {selectedHistoryDetail.models.length > 0 && (
+                        <div className="history-day-models">
+                          <span className="history-day-models-title">모델별 토큰</span>
+                          <ModelMix models={selectedHistoryDetail.models} basis="tokens" currency={currency} />
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </>
+              ) : (
+                <div className="empty-hint">사용 기록은 최근 28일 이상에서 볼 수 있습니다</div>
               )}
             </div>
           )}

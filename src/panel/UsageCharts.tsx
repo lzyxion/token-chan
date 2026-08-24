@@ -95,12 +95,16 @@ export function UsageHeatmap({
   firstEvent,
   currency,
   basis,
+  selectedDate,
+  onSelect,
 }: {
   daily: DailyRow[];
   /** 가장 오래된 이벤트 시각. 이전 날짜는 "안 씀"이 아니라 **기록이 없던 날**이다. */
   firstEvent: string | null;
   currency: Currency;
   basis: Basis;
+  selectedDate?: string | null;
+  onSelect?: (date: string) => void;
 }) {
   if (daily.length === 0) return null;
   const days = daily;
@@ -142,10 +146,12 @@ export function UsageHeatmap({
             );
           }
           return (
-            <span
+            <button
+              type="button"
               key={d.date}
-              className={`grass-cell lv${levelOf(total)}`}
+              className={`grass-cell lv${levelOf(total)}${d.date === selectedDate ? " selected" : ""}`}
               title={`${d.date} · ${fmtTokens(total)} tokens · ${fmtCost(d.cost, false, currency)}`}
+              onClick={() => onSelect?.(d.date)}
             />
           );
         })}
@@ -200,12 +206,19 @@ export function ModelMix({
   const total = sorted.reduce((s, m) => s + val(m), 0);
   if (total === 0) return null;
 
-  const parts = sorted.slice(0, MIX_MAX).map((m) => ({
-    key: `${m.source}-${m.model}`,
-    label: shortModel(m.model),
-    tone: m.source as string,
-    tokens: val(m),
-  }));
+  // 벤더 색은 유지하되 같은 벤더의 모델은 사용량 순서로 밝기 단계를 준다. 모델마다
+  // 새 색을 부여하면 벤더 기여도와 연결이 끊기므로, 색상은 벤더·명도는 모델이 맡는다.
+  const shadeCount = new Map<string, number>();
+  const parts = sorted.slice(0, MIX_MAX).map((m) => {
+    const n = shadeCount.get(m.source) ?? 0;
+    shadeCount.set(m.source, n + 1);
+    return {
+      key: `${m.source}-${m.model}`,
+      label: shortModel(m.model),
+      tone: n === 0 ? m.source : `${m.source} sh${Math.min(n, SHADE_MAX)}`,
+      tokens: val(m),
+    };
+  });
   const rest = sorted.slice(MIX_MAX).reduce((s, m) => s + val(m), 0);
   if (rest > 0) {
     parts.push({ key: "rest", label: "기타", tone: "rest", tokens: rest });
@@ -522,7 +535,7 @@ export function Efficiency({
       ) : (
         <div className="eff-row muted">
           <span className="eff-name">캐시 재사용</span>
-          <span className="eff-note">이 벤더는 캐시 적재를 기록하지 않는다</span>
+          <span className="eff-note">캐시 적재 미기록</span>
         </div>
       )}
       <div className="eff-row">

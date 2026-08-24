@@ -54,6 +54,19 @@ export interface DailyRow {
   cost: number;
 }
 
+export interface DailySource {
+  source: Source;
+  totals: Totals;
+  cost: number;
+  cost_known: boolean;
+}
+
+export interface DailyDetail {
+  date: string;
+  sources: DailySource[];
+  models: ModelRow[];
+}
+
 /** 하루에 모델 하나가 쓴 양 (주간 막대를 모델로 쌓기 위한 것) */
 export interface DayModel {
   model: string;
@@ -119,6 +132,7 @@ export interface Summary {
   /** 격자 기간(`daily` 와 같은 창)의 모델별 합계 — 같은 그래프를 기간으로 돌릴 때 쓴다 */
   models_period: ModelRow[];
   daily: DailyRow[];
+  daily_details: DailyDetail[];
   /** 최근 7일의 날짜별 모델 내역 — `daily` 의 마지막 7개와 날짜가 맞물린다 */
   week_models: DailyModels[];
   /** 스캔 범위에서 가장 오래된 이벤트 — 잔디의 "기록 없음" 경계 */
