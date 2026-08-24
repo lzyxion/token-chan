@@ -475,13 +475,20 @@ pub fn fetch_codex_usage(home: &Path, now: DateTime<Utc>) -> Option<PlanUsage> {
 /// stdin을 열린 채로 둬야 서버가 요청을 취소하지 않으므로, 응답 id=2를 받을 때까지만
 /// 별도 읽기 스레드에서 기다린 뒤 프로세스를 정리한다. 10초가 지나면 조용히 포기한다.
 fn fetch_codex_app_server_reset_credits() -> Option<ResetCredits> {
-    let mut child = Command::new("codex")
+    let mut command = Command::new("codex");
+    command
         .args(["app-server", "--stdio"])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-        .ok()?;
+        .stderr(Stdio::null());
+    // Windows의 콘솔 실행 파일은 Tauri 앱에서 자식으로 띄우면 별도 터미널을 만든다.
+    // stdin/stdout 파이프 통신은 그대로 두고 창만 만들지 않는다.
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        command.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+    }
+    let mut child = command.spawn().ok()?;
     let mut stdin = child.stdin.take()?;
     let stdout = child.stdout.take()?;
     let (tx, rx) = mpsc::sync_channel(1);
