@@ -56,9 +56,32 @@ export function recordedDays(daily: DailyRow[], firstEvent: string | null): numb
   return daily.filter((r) => localDate(r.date).getTime() >= started).length;
 }
 
-function levelOf(v: number, max: number): number {
-  if (v <= 0 || max <= 0) return 0;
-  return Math.min(LEVELS, Math.ceil((v / max) * LEVELS));
+/**
+ * 칸의 단계를 **순위**로 나눈다 — 최댓값 대비 선형이 아니다.
+ *
+ * 선형으로 하면 큰 하루가 나머지를 전부 바닥으로 누른다. 실측(2026-08-24, 84일 격자):
+ * 기록된 27일 중 **17일이 같은 색**이었고 그 안에 $1 부터 $75 까지 75배 차이가
+ * 들어 있었다. 하루치가 $373 이라서다. 격자가 "언제 많이 썼나"에 답하려면 색이
+ * 갈려야 하는데, 그날 하나 때문에 갈리지 않았다.
+ *
+ * 그래서 기록이 있는 날만 모아 사분위로 자른다 (GitHub 잔디와 같은 방식).
+ * 기록이 없는 날은 단계 0 이고 사분위 계산에서도 빠진다 — 넣으면 빈 날이 많은 격자에서
+ * 문턱이 전부 바닥으로 쏠린다.
+ */
+function levelScale(values: number[]): (v: number) => number {
+  const sorted = values.filter((v) => v > 0).sort((a, b) => a - b);
+  if (sorted.length === 0) return () => 0;
+  // 사분위 문턱. 날이 적으면 문턱이 겹쳐 단계가 덜 갈리는데, 그건 실제로 데이터가
+  // 그만큼 없다는 뜻이라 그대로 둔다.
+  const at = (p: number) => sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * p))];
+  const t = [at(0.25), at(0.5), at(0.75)];
+  return (v: number) => {
+    if (v <= 0) return 0;
+    if (v < t[0]) return 1;
+    if (v < t[1]) return 2;
+    if (v < t[2]) return 3;
+    return LEVELS;
+  };
 }
 
 /**
@@ -82,7 +105,7 @@ export function UsageHeatmap({
   if (daily.length === 0) return null;
   const days = daily;
   const val = (d: DailyRow) => basisOf(basis, d.totals, d.cost);
-  const max = Math.max(...days.map(val));
+  const levelOf = levelScale(days.map(val));
 
   // 기록이 시작된 날. 이전 칸을 0 과 같은 모양으로 그리면 CLI 를 깔기도 전 날짜까지
   // "그날 안 썼음"으로 보인다 — 격자 모양은 그대로 두고 칸 모양만 다르게 한다.
@@ -121,7 +144,7 @@ export function UsageHeatmap({
           return (
             <span
               key={d.date}
-              className={`grass-cell lv${levelOf(total, max)}`}
+              className={`grass-cell lv${levelOf(total)}`}
               title={`${d.date} · ${fmtTokens(total)} tokens · ${fmtCost(d.cost, false, currency)}`}
             />
           );
@@ -335,6 +358,36 @@ export function WeekBars({
           ))}
         </div>
       )}
+    </div>
+  );
+}
+
+/** 오늘 줄에 이름을 몇 개까지 세울지. 넘으면 「외 N개」로 접는다. */
+const TODAY_MAX = 3;
+
+/**
+ * 오늘 모델 구성 — **막대가 아니라 한 줄**이다.
+ *
+ * 실측(20일): 1위 모델이 90% 를 넘는 날이 14일이고 그중 5일은 100% 였다. 대부분의
+ * 날에 막대를 그리면 통짜 한 덩어리라 자리값을 못 한다. 그런데 08-11(53.6/45.7)·
+ * 08-16(56.3/43.7) 처럼 **반반 섞어 쓴 날**이 실제로 있어 지워버릴 수도 없다.
+ *
+ * 그래서 막대는 기간이 갖고(늘 갈린다) 오늘은 한 줄로 붙인다. 통짜인 날은
+ * 「opus-5 100%」 한 마디로 끝나고, 섞은 날은 두 이름이 나란히 서서 눈에 띈다.
+ */
+export function ModelToday({ models }: { models: ModelRow[] }) {
+  const total = models.reduce((s2, m) => s2 + totalOf(m.totals), 0);
+  // 오늘 아직 안 썼으면 줄 자체를 내지 않는다 — 총합이 이미 0 을 보여준다
+  if (total === 0) return null;
+  const sorted = [...models].sort((a2, b) => totalOf(b.totals) - totalOf(a2.totals));
+  const head = sorted
+    .slice(0, TODAY_MAX)
+    .map((m) => `${shortModel(m.model)} ${((totalOf(m.totals) / total) * 100).toFixed(1)}%`);
+  const rest = sorted.length - TODAY_MAX;
+  return (
+    <div className="mix-today">
+      오늘 · {head.join(" · ")}
+      {rest > 0 && ` · 외 ${rest}개`}
     </div>
   );
 }

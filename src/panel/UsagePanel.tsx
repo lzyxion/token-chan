@@ -7,6 +7,7 @@ import {
   CostBreakdown,
   Efficiency,
   ModelMix,
+  ModelToday,
   recordedDays,
   UsageHeatmap,
   VendorShare,
@@ -33,9 +34,7 @@ import {
   showsHeatmap,
   shortModel,
   SOURCE_LABEL,
-  basisText,
   EMPTY_PARTS,
-  type Basis,
   totalOf,
   type AlertThresholds,
   type Currency,
@@ -230,19 +229,6 @@ const SHORT_VENDOR: Record<Source, string> = {
 
 const PAGE_TITLES = ["현황", "통계·사용량", "최근 세션"];
 
-/** 차트 기준(토큰/비용) 저장 키 — 패널은 별도 창이라 닫으면 상태가 날아간다.
- *  설정(백엔드)에 넣을 만큼 무거운 값이 아니고 되돌리기 쉬운 뷰 취향이라 여기 둔다. */
-const BASIS_KEY = "token-chan:chart-basis";
-
-function loadBasis(): Basis {
-  try {
-    return localStorage.getItem(BASIS_KEY) === "cost" ? "cost" : "tokens";
-  } catch {
-    // 저장소가 막힌 환경에서도 화면은 떠야 한다
-    return "tokens";
-  }
-}
-
 /** 독립 창으로 뜨는 사용량 패널 — 펫 우클릭 또는 트레이 메뉴로 토글 */
 export default function UsagePanel() {
   const summary = useSummary();
@@ -263,15 +249,6 @@ export default function UsagePanel() {
   // "all" = 개요. 벤더를 고르면 그 벤더의 구성·효율만 본다 — 시간축(잔디·주간)은
   // 소스별로 나뉘어 오지 않으므로 개요에만 있다.
   const [tab, setTab] = useState<Source | "all">("all");
-  const [basis, setBasis] = useState<Basis>(loadBasis);
-  const switchBasis = (b: Basis) => {
-    setBasis(b);
-    try {
-      localStorage.setItem(BASIS_KEY, b);
-    } catch {
-      /* 저장 실패는 이번 세션만 기억 못 할 뿐이다 */
-    }
-  };
   const bodyRef = useRef<HTMLDivElement | null>(null);
 
   useWindowPersist("panel");
@@ -304,13 +281,8 @@ export default function UsagePanel() {
   // 알 수 없게 된다.
   const shownToday = picked ? picked.today : summary.today;
   const shownTodayCost = picked ? picked.today_cost : summary.today_cost;
-  const shownTodayParts = (picked ? picked.today_parts : summary.today_parts) ?? EMPTY_PARTS;
   const shownPartial = picked ? picked.cost_partial : summary.cost_partial;
-  // 모델은 벤더에 속하므로 거를 수 있다. 잔디·주간 막대는 못 거른다 — `daily` 에는
-  // 소스 구분이 없다. 그래서 그 둘만 전체 탭에 남는다.
-  const shownModels = picked
-    ? summary.models_today.filter((m) => m.source === picked.source)
-    : summary.models_today;
+  const shownModels = summary.models_today;
   // 잔디가 덮는 기간(= summary.daily) 전체 합계. 백엔드에 따로 담지 않고 여기서 더한다 —
   // 일별 값이 이미 다 와 있어 서버 왕복을 늘릴 이유가 없다.
   const periodTotal = summary.daily.reduce((s, d) => s + totalOf(d.totals), 0);
@@ -396,9 +368,7 @@ export default function UsagePanel() {
               {/* 탭 줄과 판을 한 덩어리로 묶는다 — `.page-body` 의 gap 이 둘 사이에
                   들어가면 폴더가 끊겨 보인다 (margin -1px 로는 못 이긴다). */}
               <div className="vgroup">
-              {/* 탭 줄 — 왼쪽은 "누구를 보나"(폴더 탭), 오른쪽은 "무엇을 크기로 삼나"(기준).
-                  둘 다 아래 본문 전체를 바꾸는 조작이라 한 줄에 세우고, 본문은 탭에
-                  이어 붙는 판(`.vpanel`)으로 감싼다 — 선택한 탭이 그 판의 일부로 읽힌다. */}
+              {/* 탭과 본문을 한 줄로 잇고, 본문은 탭에 이어 붙는 판(`.vpanel`)으로 감싼다. */}
               <div className="vtabs-row">
                 <div className="vtabs" role="tablist">
                   <button
@@ -426,20 +396,6 @@ export default function UsagePanel() {
                     </button>
                   ))}
                 </div>
-                <div className="basis-toggle" role="group" aria-label="차트 기준">
-                  <button
-                    className={basis === "tokens" ? "on" : ""}
-                    onClick={() => switchBasis("tokens")}
-                  >
-                    토큰
-                  </button>
-                  <button
-                    className={basis === "cost" ? "on" : ""}
-                    onClick={() => switchBasis("cost")}
-                  >
-                    비용
-                  </button>
-                </div>
               </div>
               <div className="vpanel">
               {/* 오늘만 크게 두면 바로 아래 91일 잔디와 기간이 뒤섞여 읽힌다 —
@@ -466,18 +422,6 @@ export default function UsagePanel() {
                   </span>
                 </div>
               </div>
-              {/* 어느 기간의 내역인지 앞에 못 박는다 (위 두 숫자와 헷갈리지 않게) */}
-              {/* 큰 숫자의 98% 가 캐시 읽기다 — 그 사실을 밝히는 유일한 줄이라 캐시를
-                  읽기/쓰기로 가른다 (둘은 단가가 20배 차이나 합치면 히트율을 못 읽는다). */}
-              <div className="grand-mini">
-                오늘 · 입력 {basisText(basis, shownToday.input, shownTodayParts.input, currency)}
-                {" · "}출력 {basisText(basis, shownToday.output, shownTodayParts.output, currency)}
-                {" · "}캐시읽기{" "}
-                {basisText(basis, shownToday.cache_read, shownTodayParts.cache_read, currency)}
-                {" · "}캐시쓰기{" "}
-                {basisText(basis, shownToday.cache_write, shownTodayParts.cache_write, currency)}
-              </div>
-
               {/* 조회 기간 = 스캔 범위라 위 기간 합계와 아래 잔디가 함께 움직인다.
                   설정 창이 아니라 여기 두는 이유: 값을 바꾼 결과가 이 화면에서 바로
                   보인다. 주간 막대는 이름 그대로 항상 최근 7일이라 영향받지 않는다. */}
@@ -498,6 +442,19 @@ export default function UsagePanel() {
                 </select>
               </div>
 
+              {/* 개요에서 기간 전체를 어떤 벤더가 차지했는지 먼저 보고, 아래 시간축으로
+                  내려간다. 이 줄은 벤더 상세로 들어가는 문이기도 하다. */}
+              {tab === "all" && vendorTabs.length > 1 && (
+                <div className="chart-block">
+                  <div className="chart-title">벤더별 비용 · {recorded}일</div>
+                  <VendorShare
+                    sources={vendorTabs}
+                    currency={currency}
+                    basis="cost"
+                    onPick={setTab}
+                  />
+                </div>
+              )}
 
               {tab !== "all" && picked && (
                 <>
@@ -510,7 +467,7 @@ export default function UsagePanel() {
                     />
                   </div>
                   <div className="chart-block">
-                    <div className="chart-title">캐시 효율</div>
+                    <div className="chart-title">캐시 효율 · {recorded}일</div>
                     <Efficiency
                       totals={picked.period}
                       parts={picked.period_parts ?? EMPTY_PARTS}
@@ -523,45 +480,35 @@ export default function UsagePanel() {
               {/* 짧은 기간에선 격자를 접는다 — 남는 칸이 "안 썼다"는 거짓말이 된다 */}
               {tab === "all" && showsHeatmap(retention) && (
                 <div className="chart-block">
-                  <div className="chart-title">일별 사용량</div>
+                  <div className="chart-title">일별 토큰</div>
                   <UsageHeatmap
                     daily={summary.daily}
                     firstEvent={summary.first_event_ts}
                     currency={currency}
-                    basis={basis}
+                    basis="tokens"
                   />
                 </div>
               )}
 
               {tab === "all" && (
               <div className="chart-block">
-                <div className="chart-title">최근 7일</div>
+                <div className="chart-title">모델별 토큰 · 최근 7일</div>
                 <WeekBars
                   daily={summary.daily}
                   weekModels={summary.week_models ?? []}
                   currency={currency}
-                  basis={basis}
+                  basis="tokens"
                 />
               </div>
               )}
 
-              {shownModels.length > 0 && (
+              {/* 막대는 기간이 갖는다 — 오늘치는 한 모델로 쏠리는 날이 많아 통짜 막대가
+                  된다(실측 20일 중 14일이 90% 초과). 오늘은 아래 한 줄로 붙인다. */}
+              {tab === "all" && summary.models_period?.length > 0 && (
                 <div className="chart-block">
-                  <div className="chart-title">오늘 모델</div>
-                  <ModelMix models={shownModels} basis={basis} currency={currency} />
-                </div>
-              )}
-
-              {/* 개요의 마지막 줄이자 상세로 들어가는 문 */}
-              {tab === "all" && vendorTabs.length > 1 && (
-                <div className="chart-block">
-                  <div className="chart-title">벤더별 · {recorded}일</div>
-                  <VendorShare
-                    sources={vendorTabs}
-                    currency={currency}
-                    basis={basis}
-                    onPick={setTab}
-                  />
+                  <div className="chart-title">모델별 토큰 · {recorded}일</div>
+                  <ModelMix models={summary.models_period} basis="tokens" currency={currency} />
+                  <ModelToday models={shownModels} />
                 </div>
               )}
               </div>

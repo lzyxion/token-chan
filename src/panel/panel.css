@@ -140,49 +140,6 @@
   font-size: 10.5px;
   white-space: nowrap;
 }
-/* 비용은 헤더가 아니라 토큰 총합 바로 옆 — 둘이 같은 것(오늘 사용량)을 말한다 */
-.grand-mini {
-  width: 100%;
-  color: var(--fg-dim);
-  font-size: 10px;
-}
-
-/* 기준 토글 — 이 페이지의 모든 차트가 따르는 값이라 차트 위가 아니라 **페이지 머리**에
-   둔다. 조회 기간(`.period-row`)과 같은 성격(페이지 전체를 바꾸는 조작)이지만, 두 값
-   중 하나를 고르는 것이라 select 가 아니라 붙은 버튼 두 개로 둔다. */
-.basis-toggle {
-  display: flex;
-  flex: none;
-  margin-bottom: 4px;
-  border: 1px solid rgba(255, 255, 255, 0.12);
-  border-radius: 8px;
-  overflow: hidden;
-}
-.basis-toggle button {
-  background: transparent;
-  color: var(--fg-dim);
-  border: 0;
-  padding: 3px 10px;
-  font: inherit;
-  font-size: 10px;
-  cursor: pointer;
-}
-.basis-toggle button:hover {
-  color: var(--fg);
-}
-.basis-toggle button.on {
-  background: rgba(255, 255, 255, 0.12);
-  color: var(--fg);
-}
-
-/* 비용 기준에서 단가를 모르는 모델은 막대에서 빠진다 — 조용히 빼면 "안 썼다"로
-   읽히므로 몇 개가 빠졌는지 밝힌다 (§ cost_partial 과 같은 원칙). */
-.mix-note {
-  color: var(--fg-dim);
-  font-size: 9px;
-  opacity: 0.8;
-}
-
 /* ── 폴더 탭 ──
    탭과 본문이 **한 덩어리**로 읽혀야 한다. 버튼 줄로 두면 탭은 조작, 아래는 내용으로
    따로 읽혀서 "이 숫자가 어느 탭 것인지"가 안 붙는다. 선택한 탭만 아래쪽 경계를
@@ -412,6 +369,23 @@
 }
 .eff-note {
   opacity: 0.7;
+}
+
+/* 단가를 모르는 모델은 비용 기준 막대에서 0 이라 사라진다. 조용히 빼면 "안 썼다"로
+   읽히므로 몇 개가 빠졌는지 밝힌다 (`cost_partial` 과 같은 원칙).
+   지금은 모든 모델에 단가가 있어 안 뜨지만, 새 모델이 나온 직후가 정확히 그 상황이다. */
+/* 오늘 구성 — 기간 막대 아래 붙는 한 줄. 막대의 범례(`.mix-legend`)와 헷갈리지
+   않게 앞에 「오늘」을 못 박고 한 단계 흐리게 둔다. */
+.mix-today {
+  color: var(--fg-dim);
+  font-size: 9px;
+  opacity: 0.85;
+}
+
+.mix-note {
+  color: var(--fg-dim);
+  font-size: 9px;
+  opacity: 0.8;
 }
 
 /* 차트 묶음 */
