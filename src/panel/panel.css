@@ -805,8 +805,10 @@
 
 /* ── 벤더 카드 ──
    게이지는 벤더 하나만 보여주므로 벤더 비교는 여기가 유일한 자리다.
-   활성 벤더는 테두리를 살려 시선이 먼저 닿게 한다 (목록 맨 위로도 올라온다). */
+   활성 벤더는 좌측 상태 레일로 시선이 먼저 닿게 한다 (목록 맨 위로도 올라온다). */
 .vendor-card {
+  position: relative;
+  overflow: hidden;
   display: flex;
   flex-direction: column;
   gap: 4px;
@@ -815,9 +817,19 @@
   background: rgba(255, 255, 255, 0.03);
   border: 1px solid transparent;
 }
-.vendor-card.active {
-  background: rgba(255, 255, 255, 0.06);
-  border-color: rgba(53, 208, 127, 0.72);
+.vendor-card.active::before,
+.session-row.active::before {
+  content: "";
+  position: absolute;
+  top: 5px;
+  bottom: 5px;
+  left: 0;
+  width: 2px;
+  border-radius: 0 2px 2px 0;
+  background: var(--grass);
+  box-shadow: 0 0 7px rgba(53, 208, 127, 0.55);
+  animation: active-rail 2.4s ease-in-out infinite;
+  pointer-events: none;
 }
 .vendor-head {
   display: flex;
@@ -902,6 +914,55 @@
   color: var(--accent);
   font-weight: 700;
 }
+.vendor-reset-credits {
+  display: grid;
+  grid-template-columns: 44px 1fr 32px 54px;
+  align-items: center;
+  gap: 6px;
+}
+.reset-credit-track {
+  height: 4px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.1);
+}
+.reset-credit-track i {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--fg-faint);
+}
+.reset-credit-days {
+  min-width: 27px;
+  color: var(--fg-faint);
+  font-size: 9px;
+  text-align: right;
+}
+.vendor-reset-credits b {
+  color: var(--fg-soft);
+  font-weight: 700;
+  font-size: 9.5px;
+  text-align: right;
+  white-space: nowrap;
+}
+.vendor-reset-credits.safe .reset-credit-track i {
+  background: var(--grass);
+}
+.vendor-reset-credits.safe .reset-credit-days {
+  color: var(--grass);
+}
+.vendor-reset-credits.warn .reset-credit-track i {
+  background: var(--warn);
+}
+.vendor-reset-credits.warn .reset-credit-days {
+  color: var(--warn);
+}
+.vendor-reset-credits.danger .reset-credit-track i {
+  background: var(--danger);
+}
+.vendor-reset-credits.danger .reset-credit-days {
+  color: var(--danger);
+}
 .source-label {
   color: var(--fg-soft);
 }
@@ -979,6 +1040,8 @@
   gap: 4px;
 }
 .session-row {
+  position: relative;
+  overflow: hidden;
   display: grid;
   grid-template-columns: 12px 1fr auto;
   grid-template-areas:
@@ -991,9 +1054,24 @@
   background: rgba(255, 255, 255, 0.03);
   border: 1px solid transparent;
 }
-.session-row.active {
-  background: rgba(255, 255, 255, 0.06);
-  border-color: rgba(53, 208, 127, 0.72);
+@keyframes active-rail {
+  0%,
+  100% {
+    opacity: 0.55;
+    box-shadow: 0 0 3px rgba(53, 208, 127, 0.25);
+  }
+  50% {
+    opacity: 1;
+    box-shadow: 0 0 8px rgba(53, 208, 127, 0.68);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .vendor-card.active::before,
+  .session-row.active::before {
+    animation: none;
+    opacity: 0.8;
+    box-shadow: 0 0 5px rgba(53, 208, 127, 0.4);
+  }
 }
 .session-row .vendor-icon {
   grid-area: icon;

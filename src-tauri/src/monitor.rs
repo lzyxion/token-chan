@@ -176,13 +176,21 @@ fn enabled_roots(app: &AppHandle) -> EnabledRoots {
 /// 이기고, 턴이 없는 동안엔 API 가 이긴다 — 호출 순서와 무관하게 결과가 같다.
 /// 같으면 덮어쓴다 — Claude 플랜 스레드는 같은 fetched_at 으로 리셋 시각만 갈아 끼워
 /// 다시 부르기 때문이다.
-fn set_plan(app: &AppHandle, plan: usage_core::plan::PlanUsage) {
+fn set_plan(app: &AppHandle, mut plan: usage_core::plan::PlanUsage) {
     let all = {
         let state = app.state::<AppState>();
         let mut list = state.plan.lock().unwrap();
         match list.iter_mut().find(|p| p.source == plan.source) {
             Some(slot) if plan.fetched_at < slot.fetched_at => return,
-            Some(slot) => *slot = plan,
+            Some(slot) => {
+                // Codex rollout은 턴마다 더 새 시각으로 오지만 리셋권을 싣지 않는다.
+                // 그 빈 값을 받아도 직전 API 조회의 리셋권을 지우면 안 된다. API가
+                // 명시적으로 0개를 보낸 경우(Some)는 그대로 갱신한다.
+                if plan.reset_credits.is_none() {
+                    plan.reset_credits = slot.reset_credits.clone();
+                }
+                *slot = plan;
+            }
             None => list.push(plan),
         }
         // 소스 순서를 고정해 두면 프론트에서 줄이 튀지 않는다

@@ -137,6 +137,8 @@ function VendorCard({
   // 비용 0 이 이미 말하고, 연결 여부는 상태 칩이 말한다.
   const usedToday = total > 0;
   const meters = plan?.meters ?? [];
+  const resetCredits = s.source === "codex" ? plan?.reset_credits : null;
+  const resetExpiry = resetCredits ? resetCreditExpiry(resetCredits) : null;
   return (
     <div className={`vendor-card ${active ? "active" : ""}`}>
       {/* 오늘 누적은 머리줄, 컨텍스트는 그 행에서만 읽는다. 둘을 같은 자리에 놓으면
@@ -190,6 +192,16 @@ function VendorCard({
           }
         />
       ))}
+      {resetCredits && resetCredits.available_count > 0 && (
+        <div className={`vendor-reset-credits ${resetExpiry?.tone ?? "neutral"}`} title={resetCredits.expires_at ? `가장 이른 만료: ${new Date(resetCredits.expires_at).toLocaleString()}` : "만료 시각 정보 없음"}>
+          <span className="vendor-key">리셋권</span>
+          <span className="reset-credit-track">
+            <i style={{ width: `${resetExpiry?.pct ?? 0}%` }} />
+          </span>
+          <span className="reset-credit-days">{resetExpiry ? `D-${resetExpiry.days}` : "—"}</span>
+          <b>{resetCredits.available_count}개</b>
+        </div>
+      )}
       {/* 한도 미터가 없어도 아무 말도 안 한다. 예전엔 "공식 한도 없음" 을 적었는데,
           카드에 이미 벤더·모델·컨텍스트·오늘 사용량이 차 있어 빈 줄이 "로딩 중"으로
           읽히지 않는다. Antigravity 는 한도를 **영영** 안 주므로 그 줄이 상시 노이즈였고,
@@ -213,6 +225,23 @@ const SHORT_VENDOR: Record<Source, string> = {
 };
 
 const PAGE_TITLES = ["현황", "최근 세션", "통계·사용량", "사용 기록"];
+const PAGE = { STATUS: 0, SESSIONS: 1, STATS: 2, HISTORY: 3 } as const;
+
+function localMonthDay(iso: string): string {
+  const date = new Date(iso);
+  return `${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+}
+
+function resetCreditExpiry(credit: NonNullable<PlanUsage["reset_credits"]>) {
+  if (!credit.expires_at) return null;
+  const end = new Date(credit.expires_at).getTime();
+  const remaining = Math.max(0, end - Date.now());
+  const days = Math.ceil(remaining / 86_400_000);
+  const start = credit.granted_at ? new Date(credit.granted_at).getTime() : NaN;
+  const pct = Number.isFinite(start) && end > start ? Math.min(100, (remaining / (end - start)) * 100) : 0;
+  const tone = days > 14 ? "safe" : days > 7 ? "warn" : "danger";
+  return { days, pct, tone };
+}
 
 /** 독립 창으로 뜨는 사용량 패널 — 펫 우클릭 또는 트레이 메뉴로 토글 */
 export default function UsagePanel() {
@@ -228,7 +257,7 @@ export default function UsagePanel() {
   const options: number[] = (RETENTION_OPTIONS as readonly number[]).includes(retention)
     ? [...RETENTION_OPTIONS]
     : [...RETENTION_OPTIONS, retention].sort((a, b) => (a === 0 ? 1 : b === 0 ? -1 : a - b));
-  const [page, setPage] = useState(0);
+  const [page, setPage] = useState<number>(PAGE.STATUS);
   // ⚠️ 훅은 전부 조기 반환(`if (!summary)`) **위**에 있어야 한다. 아래에 두면 summary 가
   // 도착하는 순간 훅 개수가 늘어나 React 가 던지고, 패널은 투명 창이라 "안 열린다"로 보인다.
   // "all" = 개요. 벤더를 고르면 그 벤더의 구성·효율만 본다 — 시간축(잔디·주간)은
@@ -292,7 +321,7 @@ export default function UsagePanel() {
     : null;
   // 오늘과 비교할 평균은 실제 기록이 시작된 뒤의 직전 달력일만 쓴다. 설치 전 빈 날을
   // 0으로 넣으면 첫 며칠의 "평균 대비"가 부풀려진다.
-  const firstRecordedDate = summary.first_event_ts?.slice(0, 10) ?? null;
+  const firstRecordedDate = activeHistoryDays[0]?.date ?? null;
   const priorDays = summary.daily
     .filter((d) => d.date < summary.today_date && (!firstRecordedDate || d.date >= firstRecordedDate))
     .slice(-7);
@@ -308,16 +337,18 @@ export default function UsagePanel() {
   // 지금 돌고 있는 세션들 — 세 소스 다 파일에 적힌 턴 경계에서 온 값이다
   const running = live.sessions.filter((s) => s.status === "busy");
   const busySources = new Set(running.map((s) => s.source));
+  // 현황 카드의 두 번째 우선순위는 마지막 세션 활동이다. 작업이 끝나도 방금 쓴
+  // 벤더가 위에 남아야 카드 위치가 기본 순서로 갑자기 되돌아가지 않는다.
+  const lastSessionAt = new Map<Source, number>();
+  for (const session of summary.sessions) {
+    const at = new Date(session.at).getTime();
+    if (Number.isFinite(at) && at > (lastSessionAt.get(session.source) ?? 0)) {
+      lastSessionAt.set(session.source, at);
+    }
+  }
   // 최근 세션 목록에서 **그 줄**만 짚기 위한 키. id 를 못 알아낸 세션은 넣지 않는다 —
   // 빈 문자열을 넣으면 id 가 빈 다른 줄과 잘못 맞물린다.
   const runningKeys = new Set(running.filter((s) => s.id).map((s) => `${s.source}:${s.id}`));
-  // 게이지가 보여주는 벤더와 같은 기준 — 작업 중 우선, 없으면 마지막으로 움직인 세션.
-  // 게이지와 달리 여기선 깜빡임이 문제되지 않아 히스테리시스를 걸지 않는다.
-  const latestContext = summary.contexts.length
-    ? summary.contexts.reduce((a, b) => ((a.at ?? "") >= (b.at ?? "") ? a : b))
-    : null;
-  const activeSource = [...busySources][0] ?? latestContext?.source ?? null;
-
   const pageCount = PAGE_TITLES.length;
   const prev = () => setPage((p) => (p + pageCount - 1) % pageCount);
   const next = () => setPage((p) => (p + 1) % pageCount);
@@ -369,7 +400,7 @@ export default function UsagePanel() {
         </div>
 
         <div className="page-body" ref={bodyRef}>
-          {page === 0 && (
+          {page === PAGE.STATUS && (
             <>
               <div className="today-overview">
                 <span className="today-overview-label">오늘 누적</span>
@@ -385,20 +416,23 @@ export default function UsagePanel() {
                 </span>
                 <ModelToday models={shownModels} />
               </div>
-              {/* 활성 벤더를 맨 위로 — 게이지가 보여주는 게 이것이라 시선이 먼저 닿아야 한다 */}
+              {/* 작업 중 → 최근 세션 활동 → 기본 순서. 활성 표시는 작업 중인 세션만 근거로
+                  하지만, 끝난 뒤 카드 위치는 마지막 활동 시각을 이어받는다. */}
               <div className="sources">
                 {summary.sources
                   .filter((s) => s.status.kind !== "no_data")
-                  .sort(
-                    (a, b) => Number(b.source === activeSource) - Number(a.source === activeSource),
-                  )
+                  .sort((a, b) => {
+                    const busy = Number(busySources.has(b.source)) - Number(busySources.has(a.source));
+                    if (busy) return busy;
+                    return (lastSessionAt.get(b.source) ?? 0) - (lastSessionAt.get(a.source) ?? 0);
+                  })
                   .map((s) => (
                     <VendorCard
                       key={s.source}
                       s={s}
                       context={summary.contexts.find((c) => c.source === s.source) ?? null}
                       plan={plans.find((p) => p.source === s.source) ?? null}
-                      active={s.source === activeSource}
+                      active={busySources.has(s.source)}
                       busy={busySources.has(s.source)}
                       currency={currency}
                       thresholds={thresholds}
@@ -408,7 +442,7 @@ export default function UsagePanel() {
             </>
           )}
 
-          {page === 2 && (
+          {page === PAGE.STATS && (
             <>
               {/* 탭 줄과 판을 한 덩어리로 묶는다 — `.page-body` 의 gap 이 둘 사이에
                   들어가면 폴더가 끊겨 보인다 (margin -1px 로는 못 이긴다). */}
@@ -546,7 +580,7 @@ export default function UsagePanel() {
             </>
           )}
 
-          {page === 1 && (
+          {page === PAGE.SESSIONS && (
             <div className="sessions">
               {summary.sessions.length === 0 ? (
                 <div className="empty-hint">최근 세션이 없습니다</div>
@@ -572,7 +606,7 @@ export default function UsagePanel() {
             </div>
           )}
 
-          {page === 3 && (
+          {page === PAGE.HISTORY && (
             <div className="history-page">
               <div className="history-summary">
                 <div className="history-summary-head">
@@ -584,7 +618,7 @@ export default function UsagePanel() {
                 <div className="history-summary-items">
                   <span>
                     <i>기록 시작</i>
-                    <b>{summary.first_event_ts ? summary.first_event_ts.slice(5, 10) : "—"}</b>
+                    <b>{summary.first_event_ts ? localMonthDay(summary.first_event_ts) : "—"}</b>
                   </span>
                   <span>
                     <i>활동일</i>

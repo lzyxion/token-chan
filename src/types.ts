@@ -205,6 +205,8 @@ export interface PlanUsage {
   meters: PlanMeter[];
   /** 플랜 이름 (예: "Max 5x", "Plus") */
   detail: string;
+  /** Codex가 보상으로 받은 사용 한도 리셋권. 조회를 지원하지 않으면 null. */
+  reset_credits: { available_count: number; granted_at: string | null; expires_at: string | null } | null;
   /** 서버에서 받아온 시각 — 읽은 시각이 아니라 낡음 판단에 쓸 수 있다 */
   fetched_at: string;
 }

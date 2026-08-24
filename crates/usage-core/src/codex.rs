@@ -504,6 +504,7 @@ fn parse_rate_limits(v: &Value, at: DateTime<Utc>) -> Option<PlanUsage> {
         source: Source::Codex,
         meters: meters.into_iter().map(|(_, m)| m).collect(),
         detail,
+        reset_credits: None,
         fetched_at: at,
     })
 }
@@ -574,13 +575,26 @@ fn parse_rollout(path: &Path) -> Rollout {
         // 제목 = 첫 **사람** 메시지. 뒤엣것은 이어지는 대화라 제목이 아니다.
         // 다른 도구가 Claude 대화를 그대로 입력으로 넣은 세션이 실측돼서(`Codex Desktop`
         // originator) 여기에도 `<command-name>…` 같은 래퍼가 들어온다 — 걸러야 한다.
-        if p_ty == "user_message" && title.is_empty() {
-            if let Some(m) =
-                payload.get("message").and_then(Value::as_str).filter(|m| is_human_prompt(m))
-            {
+        if title.is_empty() {
+            let prompt = match p_ty {
+                // 이전 rollout 형식
+                "user_message" => payload.get("message").and_then(Value::as_str),
+                // 현재 rollout 형식: response_item/message 안의 input_text 블록
+                "message" if payload.get("role").and_then(Value::as_str) == Some("user") => payload
+                    .get("content")
+                    .and_then(Value::as_array)
+                    .and_then(|blocks| {
+                        blocks.iter().find_map(|block| {
+                            (block.get("type").and_then(Value::as_str) == Some("input_text"))
+                                .then(|| block.get("text").and_then(Value::as_str))
+                                .flatten()
+                        })
+                    }),
+                _ => None,
+            };
+            if let Some(m) = prompt.filter(|m| is_human_prompt(m)) {
                 title = first_line(m);
             }
-            continue;
         }
 
         if p_ty != "token_count" {
@@ -1147,6 +1161,23 @@ mod tests {
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].label, "상태 정보를 가져오는데", "첫 줄만, 첫 메시지만");
         assert_eq!(rows[0].branch, "main");
+    }
+
+    #[test]
+    fn session_row_reads_current_response_item_user_message() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("sessions");
+        std::fs::create_dir_all(&root).unwrap();
+        let lines = [
+            r#"{"type":"session_meta","payload":{"id":"current-shape","cwd":"/home/u/projects/api"}}"#,
+            r#"{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"<environment_context>...</environment_context>"}]}}"#,
+            r#"{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"현재 형식의 Codex 제목"}]}}"#,
+            r#"{"timestamp":"2026-08-12T01:00:00.000Z","type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":10,"output_tokens":2,"cached_input_tokens":0}}}}"#,
+        ];
+        std::fs::write(root.join("rollout-current.jsonl"), lines.join("\n")).unwrap();
+        let mut adapter = CodexAdapter::new(vec![dir.path().to_path_buf()]);
+        adapter.scan(DateTime::UNIX_EPOCH);
+        assert_eq!(adapter.sessions()[0].label, "현재 형식의 Codex 제목");
     }
 
     /// 다른 도구가 Claude 대화를 그대로 입력으로 넣은 세션이 실측됐다

@@ -7,7 +7,7 @@
 //! |---|---|---|
 //! | Claude ① | 사용량 API `GET /api/oauth/usage` ([`fetch_claude_usage`]) | 응답 본문 |
 //! | Claude ② 폴백 | `<홈>/.claude.json` ([`read_utilization`]) | `cachedUsageUtilization` |
-//! | Codex ① | 사용량 API `GET /backend-api/codex/usage` ([`fetch_codex_usage`]) | `rate_limit` |
+//! | Codex ① | 사용량 API `GET /backend-api/codex/usage` + `/backend-api/wham/usage` ([`fetch_codex_usage`]) | 한도 + 리셋권 |
 //! | Codex ② 폴백 | rollout 의 `token_count` ([`crate::codex`]) | `payload.rate_limits` |
 //! | Antigravity | **없음** — `quota_manager` 가 서버에서 받아 메모리에만 둔다\* | — |
 //!
@@ -71,7 +71,13 @@
 //! — 프론트의 `resetIsStale`. 여기서 버리지 않는 이유는 "리셋 정보 없음"(agy)과
 //! "리셋 정보가 낡음"(굳은 캐시)이 서로 다른 사실이기 때문이다.
 
-use std::path::{Path, PathBuf};
+use std::{
+    io::{BufRead, BufReader, Write},
+    path::{Path, PathBuf},
+    process::{Command, Stdio},
+    sync::mpsc,
+    time::Duration,
+};
 
 use chrono::{DateTime, Utc};
 use serde::Serialize;
@@ -96,12 +102,23 @@ pub struct PlanMeter {
     pub resets_computed: bool,
 }
 
+/// Codex 에서 보상으로 받은 한도 리셋권. 사용·교환 기능은 이 앱의 범위 밖이라
+/// 잔여 수와 가장 먼저 만료되는 권의 부여·만료 시각만 읽는다.
+#[derive(Clone, Debug, Serialize, PartialEq)]
+pub struct ResetCredits {
+    pub available_count: u32,
+    pub granted_at: Option<DateTime<Utc>>,
+    pub expires_at: Option<DateTime<Utc>>,
+}
+
 #[derive(Clone, Debug, Serialize)]
 pub struct PlanUsage {
     pub source: Source,
     pub meters: Vec<PlanMeter>,
     /// 플랜 종류 등 부가 정보 (예: "free"). 없으면 빈 문자열.
     pub detail: String,
+    /// Codex의 사용 가능한 한도 리셋권. 서버가 이 기능을 주지 않으면 None.
+    pub reset_credits: Option<ResetCredits>,
     pub fetched_at: DateTime<Utc>,
 }
 
@@ -290,7 +307,7 @@ pub fn read_utilization(home: &Path) -> Option<PlanUsage> {
         .map(plan_label)
         .unwrap_or_default();
 
-    Some(PlanUsage { source: Source::Claude, meters, detail, fetched_at })
+    Some(PlanUsage { source: Source::Claude, meters, detail, reset_credits: None, fetched_at })
 }
 
 /// Claude Code 가 로그인 시 남기는 OAuth 자격증명 — `<홈>/.claude/.credentials.json`.
@@ -333,6 +350,8 @@ const CLAUDE_USAGE_URL: &str = "https://api.anthropic.com/api/oauth/usage";
 const OAUTH_BETA: (&str, &str) = ("anthropic-beta", "oauth-2025-04-20");
 /// Codex CLI 가 한도를 받는 것과 같은 엔드포인트 (바이너리 문자열에서 실측 확인).
 const CODEX_USAGE_URL: &str = "https://chatgpt.com/backend-api/codex/usage";
+/// Codex 웹 사용량 화면이 리셋권 현황을 읽는 경로. GET만 하며 교환 요청은 보내지 않는다.
+const CODEX_WHAM_USAGE_URL: &str = "https://chatgpt.com/backend-api/wham/usage";
 
 /// 두 벤더 호출이 공유하는 GET — 클라이언트 설정(10초 제한)을 한 곳에 둔다.
 ///
@@ -384,7 +403,13 @@ pub fn parse_claude_api_usage(
     if meters.is_empty() {
         return None;
     }
-    Some(PlanUsage { source: Source::Claude, meters, detail: plan_label(tier), fetched_at })
+    Some(PlanUsage {
+        source: Source::Claude,
+        meters,
+        detail: plan_label(tier),
+        reset_credits: None,
+        fetched_at,
+    })
 }
 
 /// Codex CLI 의 OAuth 자격증명 — `<홈>/auth.json`, 계정 식별([`crate::accounts`])에
@@ -431,7 +456,123 @@ pub fn fetch_codex_usage(home: &Path, now: DateTime<Utc>) -> Option<PlanUsage> {
         headers.push(("chatgpt-account-id", &auth.account_id));
     }
     let body = http_get(CODEX_USAGE_URL, &headers)?;
-    parse_codex_api_usage(&body, now)
+    let mut usage = parse_codex_api_usage(&body, now)?;
+    // 이 호출은 전부 조회다. 실패해도 한도 미터는 정상 경로의 값으로 계속 보여 준다.
+    usage.reset_credits = http_get(CODEX_WHAM_USAGE_URL, &headers)
+        .as_deref()
+        .and_then(parse_codex_reset_credits);
+    // 웹 API는 계정에 따라 수량만 주거나, 일시적으로 이 필드 자체를 빼기도 한다.
+    // 만료 게이지가 필요한 경우에만 Codex가 지원하는 앱 서버의 읽기 메서드로 보완한다.
+    if !usage.reset_credits.as_ref().is_some_and(|credits| credits.expires_at.is_some()) {
+        if let Some(credits) = fetch_codex_app_server_reset_credits() {
+            usage.reset_credits = Some(credits);
+        }
+    }
+    Some(usage)
+}
+
+/// Codex 앱 서버의 `account/rateLimits/read`를 한 번만 열어 리셋권 상세을 읽는다.
+/// stdin을 열린 채로 둬야 서버가 요청을 취소하지 않으므로, 응답 id=2를 받을 때까지만
+/// 별도 읽기 스레드에서 기다린 뒤 프로세스를 정리한다. 10초가 지나면 조용히 포기한다.
+fn fetch_codex_app_server_reset_credits() -> Option<ResetCredits> {
+    let mut child = Command::new("codex")
+        .args(["app-server", "--stdio"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .ok()?;
+    let mut stdin = child.stdin.take()?;
+    let stdout = child.stdout.take()?;
+    let (tx, rx) = mpsc::sync_channel(1);
+    std::thread::spawn(move || {
+        let mut reader = BufReader::new(stdout);
+        let mut line = String::new();
+        while reader.read_line(&mut line).ok().filter(|n| *n > 0).is_some() {
+            if serde_json::from_str::<Value>(&line)
+                .ok()
+                .and_then(|value| value.get("id").and_then(Value::as_i64))
+                == Some(2)
+            {
+                let _ = tx.send(line);
+                return;
+            }
+            line.clear();
+        }
+    });
+    let init = format!(
+        r#"{{"method":"initialize","id":1,"params":{{"clientInfo":{{"name":"token-chan","title":"Token Chan","version":"{}"}},"capabilities":{{}}}}}}"#,
+        env!("CARGO_PKG_VERSION")
+    );
+    let requests = [
+        init,
+        r#"{"method":"initialized","params":{}}"#.to_string(),
+        r#"{"method":"account/rateLimits/read","id":2}"#.to_string(),
+    ];
+    let sent = requests.iter().all(|request| writeln!(stdin, "{request}").is_ok()) && stdin.flush().is_ok();
+    let body = if sent { rx.recv_timeout(Duration::from_secs(10)).ok() } else { None };
+    drop(stdin);
+    let _ = child.kill();
+    let _ = child.wait();
+    body.as_deref().and_then(parse_codex_reset_credits)
+}
+
+/// `/backend-api/wham/usage` 에서 리셋권만 뽑는다. snake/camel 표기는 웹·앱 서버
+/// 버전 차이여서 둘 다 받되, 없는 필드는 "0개"로 추정하지 않는다.
+fn parse_codex_reset_credits(body: &str) -> Option<ResetCredits> {
+    let v: Value = serde_json::from_str(body).ok()?;
+    let payload = v.get("result").unwrap_or(&v);
+    let credits = payload
+        .get("rate_limit_reset_credits")
+        .or_else(|| payload.get("rateLimitResetCredits"))?;
+    let available_count = credits
+        .get("available_count")
+        .or_else(|| credits.get("availableCount"))?
+        .as_u64()?
+        .try_into()
+        .ok()?;
+    let earliest = credits
+        .get("credits")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter(|credit| {
+            credit
+                .get("status")
+                .and_then(Value::as_str)
+                .map(|status| status == "available")
+                .unwrap_or(true)
+        })
+        .filter_map(|credit| {
+            let expires_at = credit
+                .get("expires_at")
+                .or_else(|| credit.get("expiresAt"))
+                .and_then(Value::as_i64)
+                .and_then(|timestamp| {
+                    if timestamp > 10_000_000_000 {
+                        DateTime::from_timestamp_millis(timestamp)
+                    } else {
+                        DateTime::from_timestamp(timestamp, 0)
+                    }
+                })?;
+            let granted_at = credit
+                .get("granted_at")
+                .or_else(|| credit.get("grantedAt"))
+                .and_then(Value::as_i64)
+                .and_then(|timestamp| {
+                    if timestamp > 10_000_000_000 {
+                        DateTime::from_timestamp_millis(timestamp)
+                    } else {
+                        DateTime::from_timestamp(timestamp, 0)
+                    }
+                });
+            Some((expires_at, granted_at))
+        })
+        .min_by_key(|(expires_at, _)| *expires_at);
+    let (expires_at, granted_at) = earliest.map_or((None, None), |(expires_at, granted_at)| {
+        (Some(expires_at), granted_at)
+    });
+    Some(ResetCredits { available_count, granted_at, expires_at })
 }
 
 /// Codex API 응답 본문 → [`PlanUsage`]. rollout 의 `rate_limits` 와 내용은 같고 필드
@@ -474,6 +615,7 @@ pub fn parse_codex_api_usage(body: &str, fetched_at: DateTime<Utc>) -> Option<Pl
         source: Source::Codex,
         meters: meters.into_iter().map(|(_, m)| m).collect(),
         detail,
+        reset_credits: None,
         fetched_at,
     })
 }
@@ -830,6 +972,39 @@ mod tests {
         assert_eq!(p.meters[0].resets_at.unwrap().timestamp(), 1_787_196_790);
         assert_eq!(p.detail, "Plus");
         assert_eq!(p.fetched_at, now);
+    }
+
+    #[test]
+    fn wham_usage_reads_available_reset_credits_and_expiry() {
+        let credits = parse_codex_reset_credits(
+            r#"{"rate_limit_reset_credits":{"available_count":2,"credits":[
+              {"status":"available","granted_at":1787000000,"expires_at":1789946008838},
+              {"status":"available","granted_at":1786500000,"expires_at":1789000000},
+              {"status":"redeemed","expires_at":1788000000}
+            ]}}"#,
+        )
+        .unwrap();
+        assert_eq!(credits.available_count, 2);
+        assert_eq!(credits.expires_at.unwrap().timestamp(), 1_789_000_000);
+        assert_eq!(credits.granted_at.unwrap().timestamp(), 1_786_500_000);
+    }
+
+    #[test]
+    fn app_server_usage_reads_reset_credit_details() {
+        let credits = parse_codex_reset_credits(
+            r#"{"id":2,"result":{"rateLimitResetCredits":{"availableCount":1,"credits":[
+              {"status":"available","grantedAt":1787354008,"expiresAt":1789946008}
+            ]}}}"#,
+        )
+        .unwrap();
+        assert_eq!(credits.available_count, 1);
+        assert_eq!(credits.granted_at.unwrap().timestamp(), 1_787_354_008);
+        assert_eq!(credits.expires_at.unwrap().timestamp(), 1_789_946_008);
+    }
+
+    #[test]
+    fn absent_reset_credit_data_stays_unknown() {
+        assert!(parse_codex_reset_credits(r#"{"credits":{"has_credits":false}}"#).is_none());
     }
 
     /// 두 창이 오면 짧은 창이 먼저다 — 첫 미터가 "지금 당장 걸리는 한도" (rollout 과 동일).

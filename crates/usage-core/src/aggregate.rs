@@ -227,11 +227,7 @@ pub fn build_summary(
         Default::default();
     let mut per_day_detail_model: std::collections::BTreeMap<(NaiveDate, Source, String), (Totals, f64, bool)> =
         Default::default();
-    // 주간 막대용 (날짜, 소스, 모델) → 토큰. 보존기간이 7일보다 짧으면 그만큼만 본다.
     let week_len = days.min(WEEK_DAYS);
-    let week_start = today - Duration::days(week_len.max(1) as i64 - 1);
-    let mut per_day_model: std::collections::BTreeMap<(NaiveDate, Source, String), (u64, f64)> =
-        Default::default();
 
     for ev in events {
         let d = local_date(ev.ts, offset);
@@ -274,13 +270,6 @@ pub fn build_summary(
         let day = per_day.entry(d).or_default();
         day.0.add_event(ev);
         day.1 += cost.unwrap_or(0.0);
-
-        if week_len > 0 && d >= week_start && d <= today {
-            let e = per_day_model.entry((d, ev.source, ev.model.clone())).or_default();
-            e.0 += ev.total();
-            e.1 += cost.unwrap_or(0.0);
-        }
-
         if d == today {
             today_totals.add_event(ev);
             match parts {
@@ -390,18 +379,27 @@ pub fn build_summary(
         daily_details.push(DailyDetail { date: d.to_string(), sources, models });
     }
 
-    // 주간 막대용 모델 내역 — `daily` 꼬리와 같은 날짜·같은 순서여야 프론트가 붙일 수 있다
-    let mut by_date: std::collections::BTreeMap<NaiveDate, Vec<DayModel>> = Default::default();
-    for ((d, source, model), (tokens, cost)) in per_day_model {
-        by_date.entry(d).or_default().push(DayModel { model, source, tokens, cost });
-    }
-    let mut week_models = vec![];
-    for i in (0..week_len).rev() {
-        let d = today - Duration::days(i as i64);
-        let mut models = by_date.remove(&d).unwrap_or_default();
-        models.sort_by_key(|m| std::cmp::Reverse(m.tokens));
-        week_models.push(DailyModels { date: d.to_string(), models });
-    }
+    // 주간 막대는 일별 상세의 최근 7일을 다시 쓴다. 같은 모델 집계를 두 번 만들면
+    // 날짜 상세와 막대가 어긋날 여지가 생긴다.
+    let week_models = daily_details
+        .iter()
+        .rev()
+        .take(week_len)
+        .rev()
+        .map(|detail| DailyModels {
+            date: detail.date.clone(),
+            models: detail
+                .models
+                .iter()
+                .map(|m| DayModel {
+                    model: m.model.clone(),
+                    source: m.source,
+                    tokens: m.totals.total(),
+                    cost: m.cost,
+                })
+                .collect(),
+        })
+        .collect();
 
     let last_model = events.iter().rev().find(|e| !e.sidechain).map(|e| e.model.clone());
     let observed: std::collections::BTreeSet<String> =
@@ -599,6 +597,23 @@ mod tests {
             let day = s.daily.iter().find(|d| d.date == row.date).unwrap();
             let sum: u64 = row.models.iter().map(|m| m.tokens).sum();
             assert_eq!(sum, day.totals.total(), "{}", row.date);
+        }
+
+        // 날짜 상세도 `daily`와 같은 합계를 가리켜야 선택 카드가 기간 총합과 어긋나지 않는다.
+        for detail in &s.daily_details {
+            let day = s.daily.iter().find(|d| d.date == detail.date).unwrap();
+            assert_eq!(
+                detail.models.iter().map(|m| m.totals.total()).sum::<u64>(),
+                day.totals.total(),
+                "모델 합: {}",
+                detail.date,
+            );
+            assert_eq!(
+                detail.sources.iter().map(|s| s.totals.total()).sum::<u64>(),
+                day.totals.total(),
+                "벤더 합: {}",
+                detail.date,
+            );
         }
 
         // 주 밖의 모델은 안 실린다 (격자에는 남아 있다)
