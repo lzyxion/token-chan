@@ -435,6 +435,34 @@ fn spawn_usage_thread(app: AppHandle) {
     });
 }
 
+/// 지금 도는 세션에 **작업 중으로 처음 본 시각**을 매기고, 다음 회차에 쓸 표를 돌려준다.
+///
+/// `prev` 가 `None` 이면 첫 회차다 — 그때 이미 돌고 있던 세션은 언제 시작했는지 알 길이
+/// 없으므로 [`usage_core::live::LiveSessionView::busy_since`] 를 `None` 으로 둔다.
+/// 지어내면 앱을 켜자마자 "9시간째" 라고 말하게 된다 (프론트의 완료 대사가 같은 이유로
+/// `at = 0` 을 쓰는 것과 같은 규칙).
+///
+/// 도는 동안 값은 **고정**이다. 흐르는 건 프론트가 그릴 때 뺀다 — 회차마다 값이 바뀌면
+/// "변한 게 없으면 안 보낸다"는 아래 비교가 매번 참이 되어 2초마다 emit 이 나간다.
+fn mark_busy_since(
+    sessions: &mut [usage_core::live::LiveSessionView],
+    prev: Option<&std::collections::HashMap<String, i64>>,
+    now_ms: i64,
+) -> std::collections::HashMap<String, i64> {
+    let mut next = std::collections::HashMap::new();
+    // id 가 빈 세션은 추적하지 않는다 — 같은 벤더의 익명 세션 둘이 한 칸에 겹친다
+    for s in sessions.iter_mut().filter(|s| s.status == "busy" && !s.id.is_empty()) {
+        let key = format!("{:?}:{}", s.source, s.id);
+        let at = match prev {
+            None => 0,
+            Some(prev) => prev.get(&key).copied().unwrap_or(now_ms),
+        };
+        next.insert(key, at);
+        s.busy_since = (at > 0).then_some(at);
+    }
+    next
+}
+
 fn spawn_live_thread(app: AppHandle) {
     std::thread::spawn(move || {
         let mut prev = String::new();
@@ -455,6 +483,10 @@ fn spawn_live_thread(app: AppHandle) {
         // 소스별 지식은 프론트가 아니라 여기 남는다.
         let mut claude_prev: std::collections::HashMap<String, String> =
             std::collections::HashMap::new();
+        // 세션별 "작업 중으로 처음 본 시각". `None` = 아직 첫 회차를 안 돌았다 —
+        // 그때 이미 돌고 있던 세션은 시작 시각을 알 수 없으므로 값을 주지 않는다
+        // (지어내면 앱을 켜자마자 "9시간째" 라고 말하게 된다).
+        let mut busy_since: Option<std::collections::HashMap<String, i64>> = None;
         loop {
             // 라이브 세션도 활성 계정의 설치본만 본다 (계정을 끄면 그쪽 세션은 무시)
             let roots = enabled_roots(&app);
@@ -476,6 +508,7 @@ fn spawn_live_thread(app: AppHandle) {
                     name: h.name.clone(),
                     status: "busy".into(),
                     cwd: h.cwd.clone(),
+                    busy_since: None,
                 });
             }
             for id in &poll.completed {
@@ -518,6 +551,7 @@ fn spawn_live_thread(app: AppHandle) {
                         name: id.chars().take(8).collect(),
                         status: "busy".into(),
                         cwd: String::new(),
+                        busy_since: None,
                     });
                 }
                 for id in &poll.completed {
@@ -525,6 +559,15 @@ fn spawn_live_thread(app: AppHandle) {
                         .push(usage_core::live::CompletedSession { source: *source, id: id.clone() });
                 }
             }
+
+            // 작업 중 세션의 시작 시각 — **모든 소스를 다 실은 뒤**에 한 번에 매긴다.
+            // 여기서 다루는 건 소스별 차이가 아니라 회차 간 연속성이라, 세 소스를 같은
+            // 규칙으로 훑는 이 자리가 맞다.
+            busy_since = Some(mark_busy_since(
+                &mut live.sessions,
+                busy_since.as_ref(),
+                now.timestamp_millis(),
+            ));
 
             // 값이 안 바뀌면 안 보낸다. `completed` 는 회차 단위 신호라 이 비교에 걸릴까
             // 싶지만 안 걸린다 — 완료 회차의 직전 회차엔 그 세션이 `sessions` 에 들어 있어
@@ -575,6 +618,83 @@ mod tests {
 
         assert!(!account_enabled(&wsl, &empty), "WSL 계정은 기본 꺼짐");
         assert!(account_enabled(&local, &empty), "로컬 표준 계정은 기본 켜짐");
+    }
+
+    fn view(source: Source, id: &str, status: &str) -> usage_core::live::LiveSessionView {
+        usage_core::live::LiveSessionView {
+            source,
+            id: id.into(),
+            name: id.into(),
+            status: status.into(),
+            cwd: String::new(),
+            busy_since: None,
+        }
+    }
+
+    /// 첫 회차에 이미 돌던 세션은 시작 시각을 **모른다**. 지어내면 앱을 켜자마자
+    /// "9시간째" 라고 말하게 된다.
+    #[test]
+    fn the_first_round_never_claims_to_know_when_a_turn_started() {
+        let mut sessions = vec![view(Source::Claude, "a", "busy")];
+        let table = mark_busy_since(&mut sessions, None, 1_000);
+        assert_eq!(sessions[0].busy_since, None);
+        assert_eq!(table.len(), 1, "그래도 추적은 시작한다");
+    }
+
+    /// 두 번째 회차부터 새로 시작한 세션은 그 시각을 갖는다.
+    #[test]
+    fn a_turn_that_starts_later_gets_its_start_time() {
+        let mut first = vec![];
+        let table = mark_busy_since(&mut first, None, 1_000);
+
+        let mut sessions = vec![view(Source::Claude, "a", "busy")];
+        mark_busy_since(&mut sessions, Some(&table), 2_000);
+        assert_eq!(sessions[0].busy_since, Some(2_000));
+    }
+
+    /// 도는 동안 값은 **고정**이다. 회차마다 바뀌면 "변한 게 없으면 안 보낸다"는
+    /// 비교가 매번 참이 되어 2초마다 emit 이 나간다.
+    #[test]
+    fn the_start_time_does_not_drift_while_the_turn_runs() {
+        let table = mark_busy_since(&mut vec![], None, 1_000);
+        let mut sessions = vec![view(Source::Claude, "a", "busy")];
+        let table = mark_busy_since(&mut sessions, Some(&table), 2_000);
+
+        let mut later = vec![view(Source::Claude, "a", "busy")];
+        mark_busy_since(&mut later, Some(&table), 9_000);
+        assert_eq!(later[0].busy_since, Some(2_000), "처음 본 시각 그대로");
+    }
+
+    /// 끝났다 다시 시작하면 새 턴이다 — 표에서 빠졌다가 새 시각으로 들어온다.
+    #[test]
+    fn a_new_turn_after_an_idle_round_starts_a_new_clock() {
+        let table = mark_busy_since(&mut vec![], None, 1_000);
+        let mut busy = vec![view(Source::Claude, "a", "busy")];
+        let table = mark_busy_since(&mut busy, Some(&table), 2_000);
+
+        // 쉬는 회차 — busy 가 아니면 표에 남지 않는다
+        let mut idle = vec![view(Source::Claude, "a", "idle")];
+        let table = mark_busy_since(&mut idle, Some(&table), 5_000);
+        assert!(idle[0].busy_since.is_none());
+        assert!(table.is_empty());
+
+        let mut again = vec![view(Source::Claude, "a", "busy")];
+        mark_busy_since(&mut again, Some(&table), 8_000);
+        assert_eq!(again[0].busy_since, Some(8_000));
+    }
+
+    /// 같은 id 라도 소스가 다르면 다른 세션이다 — 키에 소스가 들어가는 이유.
+    #[test]
+    fn the_same_id_in_two_sources_is_two_sessions() {
+        let table = mark_busy_since(&mut vec![], None, 1_000);
+        let mut one = vec![view(Source::Claude, "a", "busy")];
+        let table = mark_busy_since(&mut one, Some(&table), 2_000);
+
+        let mut both =
+            vec![view(Source::Claude, "a", "busy"), view(Source::Codex, "a", "busy")];
+        mark_busy_since(&mut both, Some(&table), 7_000);
+        assert_eq!(both[0].busy_since, Some(2_000));
+        assert_eq!(both[1].busy_since, Some(7_000), "Codex 쪽은 방금 시작한 것");
     }
 
     /// 사용자가 켜면 켜진다 — 기본값 규칙이 사용자 지정을 덮으면 안 된다

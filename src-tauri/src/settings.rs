@@ -39,6 +39,17 @@ pub const GAUGE_STYLES: [&str; 3] = ["ring", "bar", "orb"];
 /// 정한 값에 머문다. 이 키가 없던 설정 파일이 원래 방향을 유지하는 것도 같은 이유다.
 pub const GAUGE_FILLS: [&str; 3] = ["auto", "used", "left"];
 
+/// 게이지 라벨을 **언제 펼칠지**. **첫 항목이 기본값**이다.
+///
+/// - `hover` 마우스를 올렸을 때만
+/// - `busy` 작업 중에는 계속 (그 외엔 호버) — 도는 동안 경과 시간이 보인다
+/// - `always` 항상
+///
+/// 불리언 둘(`상시 표시` + `작업 중 펼치기`)로 두다가 합쳤다. 같은 라벨의 표시 시점이라
+/// **겹쳐 켤 이유가 없고**, 겹쳐 켜면 한쪽이 다른 쪽을 삼켜 "켰는데 아무 일도 안 일어나는"
+/// 조합이 생긴다. 서로를 배제하는 선택은 체크박스가 아니라 셀렉터의 일이다.
+pub const GAUGE_LABEL_SHOWS: [&str; 3] = ["hover", "busy", "always"];
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Settings {
@@ -102,9 +113,12 @@ pub struct Settings {
     pub character_rules: Vec<CharacterRule>,
     /// 비활성화한 펫 상태 목록 (working/alert/sleep/exhausted/refreshed/done/poke)
     pub disabled_states: Vec<String>,
-    /// 게이지 라벨(벤더·수치·리셋) 상시 표시 — 끄면 호버할 때만 펼쳐진다.
-    /// 예전 "발밑 미니 라벨" 설정을 전환한 것이라 옛 키를 alias 로 읽는다.
-    #[serde(alias = "showMiniLabel")]
+    /// 게이지 라벨(벤더·수치·리셋)을 언제 펼칠지 — 값은 [`GAUGE_LABEL_SHOWS`] 중 하나
+    pub gauge_label_show: String,
+    /// 불리언이던 시절의 "상시 표시". **읽기만 한다** — [`Settings::migrate`] 가
+    /// `gauge_label_show` 로 접고, 저장할 때는 안 쓴다(다음 저장에 파일에서 사라진다).
+    /// 그 앞 세대인 "발밑 미니 라벨" 키도 여기로 들어온다.
+    #[serde(alias = "showMiniLabel", skip_serializing)]
     pub gauge_labels: bool,
     /// 도넛 게이지 위치 — "right" | "left" | "off"
     pub gauge_side: String,
@@ -180,6 +194,7 @@ impl Default for Settings {
             sleep_after_minutes: 30,
             character_rules: vec![],
             disabled_states: vec![],
+            gauge_label_show: GAUGE_LABEL_SHOWS[0].into(),
             gauge_labels: false,
             gauge_side: "right".into(),
             gauge_style: "ring".into(),
@@ -266,6 +281,19 @@ pub fn config_path() -> Option<PathBuf> {
     dirs::config_dir().map(|d| d.join("token-chan").join("settings.json"))
 }
 
+impl Settings {
+    /// 옛 키를 새 키로 접는다. **읽은 직후 한 번**만 — 다음 저장 때 옛 키가 파일에서
+    /// 사라지므로, 접지 않으면 그 사용자의 선택이 조용히 기본값으로 돌아간다.
+    fn migrate(&mut self) {
+        // 불리언 `gaugeLabels: true` → 셀렉터의 `always`.
+        // 새 키가 이미 있으면 그쪽이 사용자의 **최근** 선택이라 건드리지 않는다.
+        if self.gauge_labels && self.gauge_label_show == GAUGE_LABEL_SHOWS[0] {
+            self.gauge_label_show = "always".into();
+        }
+        self.gauge_labels = false;
+    }
+}
+
 pub fn load() -> Settings {
     let Some(path) = config_path() else { return Settings::default() };
     load_from(&path).unwrap_or_default()
@@ -288,8 +316,11 @@ pub fn save(settings: &Settings) -> Result<(), String> {
 /// 그대로 두면 다음 저장이 덮어써서 무엇이 있었는지 영영 알 수 없다.
 fn load_from(path: &Path) -> Option<Settings> {
     let text = std::fs::read_to_string(path).ok()?;
-    match serde_json::from_str(&text) {
-        Ok(s) => Some(s),
+    match serde_json::from_str::<Settings>(&text) {
+        Ok(mut s) => {
+            s.migrate();
+            Some(s)
+        }
         Err(_) => {
             let _ = std::fs::rename(path, path.with_extension("json.bad"));
             None
@@ -334,11 +365,48 @@ fn save_to(path: &Path, settings: &Settings) -> std::io::Result<()> {
 mod tests {
     use super::*;
 
-    /// "발밑 미니 라벨" 시절 키가 게이지 라벨 설정으로 넘어와야 한다
+    /// 두 세대 전 "발밑 미니 라벨" 키가 셀렉터의 `always` 까지 넘어와야 한다
     #[test]
     fn old_show_mini_label_key_migrates() {
-        let s: super::Settings = serde_json::from_str(r#"{"showMiniLabel": true}"#).unwrap();
-        assert!(s.gauge_labels);
+        let mut s: Settings = serde_json::from_str(r#"{"showMiniLabel": true}"#).unwrap();
+        s.migrate();
+        assert_eq!(s.gauge_label_show, "always");
+    }
+
+    /// 불리언 `gaugeLabels` 시절 파일도 마찬가지 — 켜 뒀던 사람이 호버로 돌아가면 안 된다
+    #[test]
+    fn the_boolean_always_on_setting_becomes_the_always_option() {
+        let mut s: Settings = serde_json::from_str(r#"{"gaugeLabels": true}"#).unwrap();
+        s.migrate();
+        assert_eq!(s.gauge_label_show, "always");
+    }
+
+    /// 꺼 뒀던 사람은 기본값(`hover`) 그대로다 — 마이그레이션이 없는 선택을 만들면 안 된다
+    #[test]
+    fn the_boolean_off_setting_stays_on_hover() {
+        let mut s: Settings = serde_json::from_str(r#"{"gaugeLabels": false}"#).unwrap();
+        s.migrate();
+        assert_eq!(s.gauge_label_show, GAUGE_LABEL_SHOWS[0]);
+    }
+
+    /// 새 키가 이미 있으면 그게 **최근** 선택이다 — 옛 키가 덮어쓰면 안 된다
+    #[test]
+    fn the_new_key_wins_over_the_legacy_boolean() {
+        let mut s: Settings =
+            serde_json::from_str(r#"{"gaugeLabels": true, "gaugeLabelShow": "busy"}"#).unwrap();
+        s.migrate();
+        assert_eq!(s.gauge_label_show, "busy");
+    }
+
+    /// 옛 키는 **다시 저장되지 않는다** — 남겨 두면 다음 실행에 또 접히면서
+    /// 사용자가 그 뒤에 고른 값을 계속 되돌린다
+    #[test]
+    fn the_legacy_boolean_is_not_written_back() {
+        let mut s = Settings::default();
+        s.gauge_label_show = "busy".into();
+        let json = serde_json::to_string(&s).unwrap();
+        assert!(!json.contains("gaugeLabels"), "{json}");
+        assert!(json.contains("gaugeLabelShow"));
     }
 
     /// 채움 방향 설정이 없던 시절의 파일은 `auto` 로 읽혀 **그 모양의 원래 방향**을

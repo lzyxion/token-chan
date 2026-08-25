@@ -16,6 +16,7 @@ import {
   gaugeFillOf,
   GAUGE_STYLES,
   gaugeStyleOf,
+  gaugeLabelShowOf,
   fillsRemaining,
   meterColor,
   meterLevel,
@@ -29,6 +30,7 @@ import type {
   CharacterImages,
   CharacterRule,
   GaugeFill,
+  GaugeLabelShow,
   GaugeSide,
   GaugeStyle,
   LiveSessionView,
@@ -103,7 +105,7 @@ export default function Pet() {
   const [rules, setRules] = useState<CharacterRule[]>([]);
   const [defaultPack, setDefaultPack] = useState<string | null>(null);
   const [disabledStates, setDisabledStates] = useState<string[]>([]);
-  const [gaugeLabels, setGaugeLabels] = useState(false);
+  const [gaugeLabelShow, setGaugeLabelShow] = useState<GaugeLabelShow>("hover");
   const [gaugeSide, setGaugeSide] = useState<GaugeSide>("right");
   const [gaugeStyle, setGaugeStyle] = useState<GaugeStyle>(GAUGE_STYLES[0]);
   /** 채움이 사용량인지 남은 양인지 — "auto" 면 모양의 기본값 */
@@ -134,7 +136,7 @@ export default function Pet() {
       setRules(s.characterRules ?? []);
       setDefaultPack(s.characterPack ?? null);
       setDisabledStates(s.disabledStates ?? []);
-      setGaugeLabels(s.gaugeLabels ?? false);
+      setGaugeLabelShow(gaugeLabelShowOf(s.gaugeLabelShow));
       setGaugeSide(s.gaugeSide ?? "right");
       setGaugeStyle(gaugeStyleOf(s.gaugeStyle));
       setGaugeFill(gaugeFillOf(s.gaugeFill));
@@ -437,6 +439,28 @@ export default function Pet() {
     const h = () => onResizeRef.current();
     window.addEventListener("resize", h);
     return () => window.removeEventListener("resize", h);
+  }, []);
+
+  // 콘텐츠 폭이 바뀌면 창도 따라가야 한다 — **안 따라가면 오른쪽이 잘린다.**
+  //
+  // 게이지 열은 폭이 수시로 변한다: 함께 도는 벤더가 생겨 로고가 하나 더 붙거나,
+  // 라벨이 `작업 중` → `1분 3초` 로 길어지거나. 아래 의존성 목록으로 그걸 세려고 하면
+  // **빠뜨린 하나가 곧 잘림**이 되므로(실제로 그랬다) 상자 크기를 직접 관찰한다.
+  // 백엔드가 2px 이하 변화는 무시하므로(`fit_pet_window`) 자주 불려도 값이 싸다.
+  useEffect(() => {
+    const el = stageRef.current;
+    if (!el || typeof ResizeObserver === "undefined") return;
+    let raf = 0;
+    // 관찰 콜백 안에서 바로 재면 같은 프레임의 레이아웃을 다시 읽게 된다 — 한 프레임 미룬다
+    const ro = new ResizeObserver(() => {
+      cancelAnimationFrame(raf);
+      raf = requestAnimationFrame(() => onResizeRef.current());
+    });
+    ro.observe(el);
+    return () => {
+      cancelAnimationFrame(raf);
+      ro.disconnect();
+    };
   }, []);
 
   // 크기·팩·상태·게이지 위치가 바뀌면 기준값도 바뀌므로 미리 보고해 둔다.
@@ -854,9 +878,39 @@ export default function Pet() {
   // 열 높이는 벤더의 미터 수에 따라 달라진다 — 한도 없는 벤더에 빈 링을 채워
   // 3줄을 고정하는 것보다 짧은 열이 낫다는 판단. 창 크기는 meters.length 가
   // 바뀔 때 다시 맞춘다 (fit effect 의존성).
+  // 게이지가 보는 벤더에서 **가장 오래 도는** 세션의 시작 시각.
+  // 가장 오래된 것을 고르는 이유는 이 값의 쓸모가 "이거 멈춘 거 아냐?" 이기 때문이다 —
+  // 크래시한 Claude 세션은 최대 24시간 작업 중으로 남는데(생존 확인을 안 하므로),
+  // 그게 화면에서는 정상 작업과 똑같이 보인다. 경과 시간이 그 둘을 가르는 유일한 단서다.
+  // 시작 시각을 모르는 세션(앱 켤 때 이미 돌던 것)은 후보에서 빠진다.
+  const busySince = useMemo(() => {
+    if (!active?.busy) return null;
+    let oldest: number | null = null;
+    for (const s of live.sessions) {
+      if (s.status !== "busy" || s.source !== active.source || s.busy_since == null) continue;
+      if (oldest == null || s.busy_since < oldest) oldest = s.busy_since;
+    }
+    return oldest;
+  }, [live.sessions, active?.busy, active?.source]);
+
+  // 흐르는 값이라 스스로 다시 그려야 한다. 보여 줄 게 있을 때만 돈다 —
+  // 펫은 상시 떠 있는 창이라 이유 없는 초당 렌더는 만들지 않는다.
+  const [, tick] = useState(0);
+  useEffect(() => {
+    if (busySince == null) return;
+    const t = setInterval(() => tick((n) => n + 1), 1000);
+    return () => clearInterval(t);
+  }, [busySince]);
+
   const gauges =
     gaugeSide === "off" || active == null ? null : (
-      <div className={`gauge ${gaugeSide}${gaugeLabels ? " labels-on" : ""}`}>
+      <div
+        className={`gauge ${gaugeSide}${
+          gaugeLabelShow === "always" || (gaugeLabelShow === "busy" && active.busy)
+            ? " labels-on"
+            : ""
+        }`}
+      >
         {/* 벤더 로고 — 라벨이 접혀 있으면(기본) 이게 벤더를 밝히는 유일한 수단이다.
             클릭하면 벤더 순환. 펫 전체가 드래그·클릭 반응을 받으므로(.pet * 는
             pointer-events:none) 버튼만 이벤트를 되살리고 전파를 끊는다. */}
@@ -897,7 +951,13 @@ export default function Pet() {
           <span className="gauge-label">
             {SOURCE_SHORT[active.source]}
             {ctx?.model ? ` · ${shortModel(ctx.model)}` : ""}
-            {active.busy ? " · 작업 중" : ""}
+            {/* 도는 동안엔 "작업 중" 대신 경과 시간 — 같은 사실을 더 많이 말한다.
+                시작 시각을 모르면(첫 회차부터 돌던 세션) 원래 문구로 떨어진다. */}
+            {active.busy
+              ? busySince == null
+                ? " · 작업 중"
+                : ` · ${fmtDuration((Date.now() - busySince) / 1000)}`
+              : ""}
             {/* 고정 중 표시 — 글자 대신 핀 아이콘 (이모지는 색을 못 입혀 SVG) */}
             {gaugeVendor !== "auto" && (
               <svg

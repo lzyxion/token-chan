@@ -163,6 +163,14 @@ export interface LiveSessionView {
    */
   status: string;
   cwd: string;
+  /**
+   * 이 세션이 **작업 중으로 관측되기 시작한** 시각 (epoch ms). 도는 세션에만 값이 있다.
+   *
+   * CLI 가 적은 턴 시작 시각이 아니라 우리가 처음 본 시각이라, 세 소스가 같은 정확도
+   * (라이브 스레드 2초 주기)를 갖는다. `null` 은 **모른다** 는 뜻 — 앱을 켠 첫 회차에
+   * 이미 돌고 있던 세션이다. 그때 시각을 지어내면 "9시간째" 라고 거짓말하게 된다.
+   */
+  busy_since: number | null;
 }
 
 /** 이번 회차에 **완료 이벤트로** 끝난 세션. 타임아웃·취소로 끝난 것은 실리지 않는다 */
@@ -285,7 +293,9 @@ export interface AppSettings {
   characterRules: CharacterRule[];
   disabledStates: string[];
   /** 게이지 라벨(벤더·수치·리셋) 상시 표시 — 끄면 호버할 때만 */
-  gaugeLabels: boolean;
+  /** 라벨을 언제 펼칠지. 불리언 둘(`gaugeLabels` + 작업 중 펼치기)을 합친 것 —
+   *  같은 라벨의 표시 시점이라 겹쳐 켤 이유가 없다. 옛 키는 백엔드가 접는다. */
+  gaugeLabelShow: GaugeLabelShow;
   gaugeSide: GaugeSide;
   /** 게이지 모양 — ring(도넛) | bar(RPG HP 바) | orb(물방울) */
   gaugeStyle: GaugeStyle;
@@ -323,6 +333,9 @@ export type GaugeStyle = "ring" | "bar" | "orb";
 /** 게이지 채움이 가리키는 것 — `auto` 는 모양의 기본값을 따른다 (`fillsRemaining`).
  *  백엔드 `settings::GAUGE_FILLS` 와 같은 값이어야 한다. */
 export type GaugeFill = "auto" | "used" | "left";
+
+/** 게이지 라벨을 언제 펼칠지 — 백엔드 `settings::GAUGE_LABEL_SHOWS` 와 같은 값이어야 한다 */
+export type GaugeLabelShow = "hover" | "busy" | "always";
 
 /** 모델 접두사(콤마 구분) → 캐릭터 팩 매핑 규칙 (최장 접두사 우선) */
 export interface CharacterRule {

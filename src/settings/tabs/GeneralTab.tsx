@@ -5,7 +5,10 @@ import {
   fillsRemaining,
   GAUGE_FILL_LABEL,
   GAUGE_FILLS,
+  GAUGE_LABEL_SHOW_LABEL,
+  GAUGE_LABEL_SHOWS,
   gaugeFillOf,
+  gaugeLabelShowOf,
   GAUGE_STYLE_LABEL,
   GAUGE_STYLES,
   gaugeStyleOf,
@@ -34,6 +37,12 @@ export default function GeneralTab({ s, update, accounts }: Props) {
   // 화면 어디에도 없다. 그래서 고른 값을 되풀이하지 않고 **지금 적용되는 방향**을
   // 밝히고, 그게 뜻하는 그림을 덧붙인다.
   const style = gaugeStyleOf(s.gaugeStyle);
+  // 셋 다 "언제 보이나" 가 헷갈릴 수 있어 고른 값의 뜻을 한 줄로 되돌려 준다
+  const labelHint = {
+    hover: "펫에 마우스를 올렸을 때만 펼쳐집니다.",
+    busy: "작업 중에는 계속 펼쳐져 경과 시간이 보입니다. 그 외에는 마우스를 올렸을 때만.",
+    always: "항상 펼쳐 둡니다.",
+  }[gaugeLabelShowOf(s.gaugeLabelShow)];
   const remaining = fillsRemaining(style, s.gaugeFill);
   const fillHint =
     (gaugeFillOf(s.gaugeFill) === "auto"
@@ -154,21 +163,31 @@ export default function GeneralTab({ s, update, accounts }: Props) {
               </select>
             </div>
           )}
+          {s.gaugeSide !== "off" && (
+            <div className="settings-row">
+              <span className="settings-sublabel">라벨</span>
+              <select
+                className="settings-select"
+                value={gaugeLabelShowOf(s.gaugeLabelShow)}
+                onChange={(e) =>
+                  update({
+                    gaugeLabelShow: e.currentTarget.value as AppSettings["gaugeLabelShow"],
+                  })
+                }
+              >
+                {GAUGE_LABEL_SHOWS.map((v) => (
+                  <option key={v} value={v}>
+                    {GAUGE_LABEL_SHOW_LABEL[v]}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
+          {s.gaugeSide !== "off" && (
+            <div className="settings-hint">{labelHint}</div>
+          )}
         </div>
 
-        <label className="settings-check">
-          <input
-            type="checkbox"
-            checked={s.gaugeLabels}
-            onChange={(e) =>
-              update({ gaugeLabels: e.currentTarget.checked })
-            }
-          />
-          게이지 라벨 상시 표시{" "}
-          <span className="settings-hint-inline">
-            (끄면 마우스를 올렸을 때만)
-          </span>
-        </label>
 
         <label className="settings-check">
           <input

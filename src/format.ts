@@ -1,4 +1,12 @@
-import type { Account, CostParts, GaugeFill, GaugeStyle, Source, Totals } from "./types";
+import type {
+  Account,
+  CostParts,
+  GaugeFill,
+  GaugeLabelShow,
+  GaugeStyle,
+  Source,
+  Totals,
+} from "./types";
 
 /** 다루는 소스 전부 — 화면에 늘어놓는 순서이기도 하다 (설정의 홈 목록·게이지 순환).
  *  목록을 화면마다 따로 들면 벤더를 추가할 때 한 곳이 조용히 빠진다. */
@@ -28,6 +36,23 @@ export const GAUGE_FILL_LABEL: Record<GaugeFill, string> = {
 /** 모르는 값을 `auto` 로 떨어뜨린다 (`gaugeStyleOf` 와 같은 이유) */
 export function gaugeFillOf(v: unknown): GaugeFill {
   return GAUGE_FILLS.includes(v as GaugeFill) ? (v as GaugeFill) : GAUGE_FILLS[0];
+}
+
+/** 라벨을 펼칠 시점 — 백엔드 `settings::GAUGE_LABEL_SHOWS` 와 **같은 목록·같은 순서**.
+ *  첫 항목이 기본값이다. */
+export const GAUGE_LABEL_SHOWS: GaugeLabelShow[] = ["hover", "busy", "always"];
+
+export const GAUGE_LABEL_SHOW_LABEL: Record<GaugeLabelShow, string> = {
+  hover: "마우스를 올렸을 때",
+  busy: "작업 중에는 계속",
+  always: "항상",
+};
+
+/** 모르는 값을 `hover` 로 떨어뜨린다 (`gaugeFillOf` 와 같은 이유) */
+export function gaugeLabelShowOf(v: unknown): GaugeLabelShow {
+  return GAUGE_LABEL_SHOWS.includes(v as GaugeLabelShow)
+    ? (v as GaugeLabelShow)
+    : GAUGE_LABEL_SHOWS[0];
 }
 
 /**
