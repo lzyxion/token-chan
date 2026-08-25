@@ -19,7 +19,7 @@
 //! input_tokens 는 cached_input_tokens 를 포함하므로 순수 입력 = input - cached.
 //! output_tokens 는 reasoning 포함(OpenAI 관례)으로 가정.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
@@ -245,19 +245,9 @@ impl crate::adapter::SourceAdapter for CodexAdapter {
 /// (프로세스 생존 확인을 공통 층으로 붙이면 이 안전망을 훨씬 좁힐 수 있다.)
 pub const TURN_STALE_MS: i64 = 5 * 60 * 1000;
 
-/// `history.jsonl` 한 줄. 프롬프트 제출 시점에 append 된다 —
-/// 실측에서 이 `ts` 가 rollout 의 `task_started` 시각과 일치했다.
-#[derive(serde::Deserialize)]
-struct HistoryEntry {
-    session_id: String,
-}
-
 struct SessionTurn {
-    /// 이 세션을 발견한 홈 — rollout 을 나중에 다시 찾을 때 쓴다
-    home: PathBuf,
-    /// 이 세션의 rollout. `history.jsonl` 의 `session_id` 가 파일명에 그대로 들어 있어
-    /// 디렉토리를 훑지 않고도 찾을 수 있다 (한 번 찾으면 캐시).
-    rollout: Option<PathBuf>,
+    /// 이 세션의 rollout. 파일명이 곧 `session_id` 라 발견 시점에 이미 알고 있다.
+    path: PathBuf,
     /// rollout 에서 읽은 지점 — 매 회차 새로 늘어난 부분만 본다
     offset: u64,
     running: bool,
@@ -266,28 +256,45 @@ struct SessionTurn {
 }
 
 /// [`TurnWatcher::poll`] 결과 — agy 와 같은 모양이라 계약 모듈이 정의를 갖는다.
-/// 여기서 `covered` 는 "`history.jsonl` 을 읽을 수 있었는가", `completed` 는
+/// 여기서 `covered` 는 "`sessions/` 를 열 수 있었는가", `completed` 는
 /// "`task_complete` 로 끝났는가"다 (`turn_aborted` 와 안전망 해제는 포함되지 않는다).
 pub use crate::adapter::TurnPoll;
 
 /// Codex 턴 추적.
 ///
-/// **왜 이렇게 하는가** — 크기 변화만 보면 "방금 뭔가 쓰였다"까지만 알 수 있어서 종료를
-/// 45초 창으로 때려 맞춰야 했고, 감시할 rollout 을 사용량 스캔(10초)이 찾아 줄 때까지
-/// 기다려야 했으며, 한 번에 한 세션만 볼 수 있었다. 실측으로 다음이 확인됐다:
+/// **감시 대상은 rollout 파일 목록이 정한다.** 예전에는 `<홈>/history.jsonl` 에 줄이
+/// 붙는 것을 턴 시작으로 삼고 그 `session_id` 로 rollout 을 찾아갔는데, 그 파일은
+/// **TUI 입력창의 프롬프트 이력**이라 터미널로 친 프롬프트만 남는다. 실측(2026-08-25,
+/// 같은 홈의 하루치 rollout 7개):
 ///
-/// - `<홈>/history.jsonl` 은 **고정 경로**이고 프롬프트 제출 때 한 줄 append 된다
-/// - 그 줄의 `session_id` 가 rollout 파일명의 uuid 와 **정확히 같다**
-/// - rollout 에는 `task_started` / `task_complete` / `turn_aborted` 가 짝을 이뤄 들어 있다
-///   (9파일 38턴 실측: 시작 38 = 완료 33 + 중단 5)
+/// ```text
+/// originator    source    history.jsonl 등재
+/// codex-tui     cli       2/2  O
+/// claudian      vscode    0/3  X   (Obsidian 플러그인)
+/// codex_exec    exec      0/2  X
+/// ```
 ///
-/// 그래서 고정 경로로 시작을 잡고 → 이름으로 rollout 을 특정하고 → 꼬리에서 종료를 읽는다.
-/// 세션 id 별로 들고 있으므로 동시 세션도 각각 추적된다.
+/// 그래서 TUI 밖에서 띄운 세션은 **영영 감시 목록에 들어가지 못했다.** 사용량 집계는
+/// rollout 을 직접 훑어 정상이었으므로, "사용량엔 잡히는데 작업 중엔 안 잡힌다"는
+/// 비대칭만 남았다 (Claude 가 겪던 것과 같은 꼴 — [`crate::live`] 모듈 주석).
+///
+/// 지금은 `history.jsonl` 을 아예 보지 않는다. **중복이었기 때문이다** — 프롬프트 제출은
+/// rollout 의 `task_started` 로 이미 적히고(실측에서 두 시각이 일치했다), 그쪽은 진입점을
+/// 가리지 않는다. 색인을 버리고 날짜 폴더를 직접 훑는다.
+///
+/// Claude 와 달리 **버리는** 쪽인 이유: 저쪽 레지스트리는 `status`(판정 자체)와
+/// "지금 살아 있음"을 들고 있어 대체 불가였지만, 이쪽 색인에는 그런 정보가 없다.
 #[derive(Default)]
 pub struct TurnWatcher {
-    /// 홈별 `history.jsonl` 읽은 지점
-    history: HashMap<PathBuf, u64>,
+    /// `session_id` → 상태. **키가 세션 id 인 게 중요하다** — 홈이 둘 이상이고 서로
+    /// 하드링크 미러면(실측: Orca 가 주입한 `CODEX_HOME` 과 `~/.codex`) 같은 rollout 이
+    /// 두 경로로 잡힌다. 경로를 키로 쓰면 한 세션이 둘로 세어져 busy 가 두 배가 되고
+    /// 완료가 두 번 나간다.
     sessions: HashMap<String, SessionTurn>,
+    /// 첫 회차를 돌았는가. 첫 회차에 **이미 있던** rollout 은 과거이므로 끝에서 시작하고,
+    /// 그 뒤에 나타난 파일은 방금 시작한 세션이므로 처음부터 읽는다 — 안 그러면 새 세션의
+    /// `task_started` 를 놓쳐 첫 턴이 통째로 안 잡힌다.
+    seeded: bool,
 }
 
 /// 계약 가입 ([`crate::adapter::TurnWatch`]) — 인헌트 `poll` 에 위임만 한다.
@@ -299,107 +306,72 @@ impl crate::adapter::TurnWatch for TurnWatcher {
 
 impl TurnWatcher {
     pub fn poll(&mut self, homes: &[PathBuf], now: DateTime<Utc>) -> TurnPoll {
-        let mut covered = false;
-
-        for home in homes {
-            let path = home.join("history.jsonl");
-            let Ok(meta) = std::fs::metadata(&path) else { continue };
-            covered = true;
-
-            let size = meta.len();
-            let start = match self.history.get(home).copied() {
-                // **첫 관측은 과거 이력을 되짚지 않는다.** 그러면 예전 세션이 전부
-                // 방금 시작한 것처럼 보인다. 지금 끝을 기준점으로 삼는다.
-                None => size,
-                // 파일이 갈아엎히거나 잘렸으면 처음부터
-                Some(o) if o > size => 0,
-                Some(o) => o,
-            };
-            let (lines, consumed) = crate::live::read_from(&path, start);
-            self.history.insert(home.clone(), start + consumed);
-
-            for line in lines {
-                let Ok(e) = serde_json::from_str::<HistoryEntry>(&line) else { continue };
-                let entry = self.sessions.entry(e.session_id.clone()).or_insert(SessionTurn {
-                    home: home.clone(),
-                    rollout: None,
-                    offset: 0,
-                    running: false,
-                    last_activity: now,
-                });
-                entry.running = true;
-                entry.last_activity = now;
-                if entry.rollout.is_none() {
-                    // 이미 쌓인 rollout 은 **끝에서부터** 본다 — 과거 턴의 완료 이벤트를
-                    // 지금 것으로 읽으면 시작하자마자 끝나 버린다.
-                    // (프롬프트 직후라 아직 파일이 없을 수도 있다. 그건 아래에서 다시 찾는다.)
-                    entry.rollout = find_rollout(home, &e.session_id);
-                    entry.offset = entry
-                        .rollout
-                        .as_ref()
-                        .and_then(|p| std::fs::metadata(p).ok())
-                        .map(|m| m.len())
-                        .unwrap_or(0);
-                }
-            }
-        }
-
-        // 돌고 있는 세션의 rollout 꼬리에서 종료 이벤트를 찾는다
+        let (covered, found) = discover(homes, now);
+        let seeded = self.seeded;
         let mut completed = vec![];
-        for (id, turn) in self.sessions.iter_mut() {
-            if !turn.running {
-                continue;
+        let mut seen = HashSet::new();
+
+        for (id, path) in found {
+            seen.insert(id.clone());
+            let entry = self.sessions.entry(id.clone()).or_insert_with(|| SessionTurn {
+                offset: if seeded {
+                    // 회차 도중에 나타난 파일 = 방금 만들어진 세션. 처음부터 읽는다
+                    0
+                } else {
+                    std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0)
+                },
+                path,
+                running: false,
+                last_activity: now,
+            });
+
+            let size = std::fs::metadata(&entry.path).map(|m| m.len()).unwrap_or(0);
+            if size < entry.offset {
+                entry.offset = 0;
             }
-            let mut finished_cleanly = false;
-            if turn.rollout.is_none() {
-                // 프롬프트 직후엔 파일이 아직 없을 수 있다. 이번에 찾았다면 갓 생긴
-                // 파일이므로 처음부터 읽는다 (건너뛸 과거 턴이 없다).
-                turn.rollout = find_rollout(&turn.home, id);
-                turn.offset = 0;
-            }
-            if let Some(path) = turn.rollout.clone() {
-                let size = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
-                if size < turn.offset {
-                    turn.offset = 0;
-                }
-                let (lines, consumed) = crate::live::read_from(&path, turn.offset);
-                turn.offset += consumed;
+            // 자란 게 없으면 열지도 않는다 — 하루치 rollout 이 수십 개가 되면
+            // 2초마다 그만큼 파일을 여는 셈이 된다
+            if size > entry.offset {
+                let (lines, consumed) = crate::live::read_from(&entry.path, entry.offset);
+                entry.offset += consumed;
                 if consumed > 0 {
-                    turn.last_activity = now;
+                    entry.last_activity = now;
                 }
+                let mut finished_cleanly = false;
                 for line in lines {
                     match turn_boundary(&line) {
                         Some(Boundary::Started) => {
-                            turn.running = true;
+                            entry.running = true;
                             finished_cleanly = false;
                         }
                         // 돌고 있던 턴에 온 완료만 센다 — 중복·유실로 들어온 완료가
                         // 이미 끝난 턴을 한 번 더 알리면 안 된다
                         Some(Boundary::Completed) => {
-                            finished_cleanly = turn.running;
-                            turn.running = false;
+                            finished_cleanly = entry.running;
+                            entry.running = false;
                         }
                         Some(Boundary::Aborted) => {
-                            turn.running = false;
+                            entry.running = false;
                             finished_cleanly = false;
                         }
                         None => {}
                     }
                 }
-            }
-            if finished_cleanly {
-                completed.push(id.clone());
+                if finished_cleanly {
+                    completed.push(id.clone());
+                }
             }
             // 완료 이벤트가 영영 안 오는 경우(크래시)의 안전망.
             // **완료 판정 뒤에 와야 한다** — 앞에 두면 타임아웃이 완료로 샌다.
-            if turn.running && (now - turn.last_activity).num_milliseconds() > TURN_STALE_MS {
-                turn.running = false;
+            // 새 데이터가 없어도 돌아야 하므로 위 `if` 바깥이다.
+            if entry.running && (now - entry.last_activity).num_milliseconds() > TURN_STALE_MS {
+                entry.running = false;
             }
         }
 
-        // 오래 조용한 세션은 잊는다 (메모리 상한)
-        self.sessions
-            .retain(|_, t| t.running || (now - t.last_activity).num_hours() < 24);
+        self.seeded = true;
+        // 날짜 창을 벗어난 세션은 잊는다. 완료로는 안 센다 — 사라지는 것은 완료가 아니다.
+        self.sessions.retain(|id, _| seen.contains(id));
 
         TurnPoll {
             covered,
@@ -412,6 +384,63 @@ impl TurnWatcher {
             completed,
         }
     }
+}
+
+/// 감시할 rollout 들 — 첫 값이 `covered`, 둘째가 `(session_id, 경로)` 목록.
+///
+/// 홈이 여럿이면 같은 rollout 이 여러 경로로 잡힌다(하드링크 미러). `session_id` 로
+/// 접어 **먼저 본 경로 하나만** 쓴다 — 하드링크라 어느 쪽을 읽어도 같은 내용이다.
+fn discover(homes: &[PathBuf], now: DateTime<Utc>) -> (bool, Vec<(String, PathBuf)>) {
+    let mut covered = false;
+    let mut seen = HashSet::new();
+    let mut out = vec![];
+    for home in homes {
+        if home.join("sessions").is_dir() {
+            covered = true;
+        }
+        for dir in day_dirs(home, now) {
+            let Ok(entries) = std::fs::read_dir(&dir) else { continue };
+            for e in entries.filter_map(|e| e.ok()) {
+                let Some(id) = e.file_name().to_str().and_then(session_id_of) else { continue };
+                if seen.insert(id.clone()) {
+                    out.push((id, e.path()));
+                }
+            }
+        }
+    }
+    (covered, out)
+}
+
+/// 오늘·어제의 rollout 폴더.
+///
+/// **어제까지 보는 이유**는 자정을 넘겨 도는 턴이다. 오늘 폴더만 보면 23:59 에 시작해
+/// 00:01 까지 도는 세션이 목록에서 통째로 사라진다.
+///
+/// 날짜는 **로컬 시각**이다 — 파일명이 `rollout-2026-08-25T16-37-33-...` 처럼 로컬 시각이고
+/// 폴더도 그 기준으로 나뉜다. UTC 로 재면 시차만큼 폴더를 헛짚는다.
+fn day_dirs(home: &Path, now: DateTime<Utc>) -> [PathBuf; 2] {
+    let today = now.with_timezone(&chrono::Local).date_naive();
+    let yesterday = today.pred_opt().unwrap_or(today);
+    let dir = |d: chrono::NaiveDate| home.join("sessions").join(d.format("%Y/%m/%d").to_string());
+    [dir(today), dir(yesterday)]
+}
+
+/// `rollout-<로컬시각>-<uuid>.jsonl` 에서 세션 id 를 뽑는다. 아니면 `None`.
+///
+/// 시각 부분의 길이를 세지 않고 **끝에서 36자**를 떼는 이유: uuid 길이는 고정이지만
+/// 시각 표기는 포맷이 바뀔 수 있다. 모양까지 확인해 엉뚱한 파일을 세션으로 읽지 않는다.
+fn session_id_of(file_name: &str) -> Option<String> {
+    let rest = file_name.strip_prefix("rollout-")?.strip_suffix(".jsonl")?;
+    let id = rest.get(rest.len().checked_sub(36)?..)?;
+    is_uuid(id).then(|| id.to_string())
+}
+
+fn is_uuid(s: &str) -> bool {
+    s.len() == 36
+        && s.bytes().enumerate().all(|(i, b)| match i {
+            8 | 13 | 18 | 23 => b == b'-',
+            _ => b.is_ascii_hexdigit(),
+        })
 }
 
 /// 턴 경계 이벤트의 종류. 종료가 두 갈래인 게 핵심이다 — 예전엔 둘을 `false` 하나로
@@ -442,26 +471,6 @@ fn turn_boundary(line: &str) -> Option<Boundary> {
         "turn_aborted" => Some(Boundary::Aborted),
         _ => None,
     }
-}
-
-/// `session_id` 로 rollout 을 찾는다 — 파일명이 `rollout-<시각>-<session_id>.jsonl` 이다.
-/// 세션당 한 번만 부르고 결과를 캐시한다.
-fn find_rollout(home: &Path, session_id: &str) -> Option<PathBuf> {
-    let suffix = format!("-{session_id}.jsonl");
-    for sub in ["sessions", "archived_sessions"] {
-        let root = home.join(sub);
-        if !root.is_dir() {
-            continue;
-        }
-        for e in WalkDir::new(&root).max_depth(4).into_iter().filter_map(|e| e.ok()) {
-            if e.file_type().is_file()
-                && e.file_name().to_str().map(|n| n.ends_with(&suffix)).unwrap_or(false)
-            {
-                return Some(e.into_path());
-            }
-        }
-    }
-    None
 }
 
 /// `payload.rate_limits` → 공식 한도 미터.
@@ -738,22 +747,29 @@ mod turn_tests {
         format!(r#"{{"timestamp":"2026-08-12T04:54:24.000Z","type":"event_msg","payload":{{"type":"{kind}"}}}}"#)
     }
 
-    /// `<홈>/history.jsonl` 과 `<홈>/sessions/2026/08/12/rollout-…-<sid>.jsonl` 을 만든다
-    fn home_with_session(rollout_lines: &[String]) -> tempfile::TempDir {
-        let dir = tempfile::tempdir().unwrap();
-        let day = dir.path().join("sessions").join("2026").join("08").join("12");
-        fs::create_dir_all(&day).unwrap();
-        fs::write(day.join(format!("rollout-2026-08-12T13-52-21-{SID}.jsonl")), rollout_lines.join("\n") + "\n")
-            .unwrap();
-        fs::write(dir.path().join("history.jsonl"), "").unwrap();
-        dir
+    /// `<홈>/sessions/<오늘>/rollout-…-<sid>.jsonl` 을 만든다.
+    ///
+    /// 날짜 폴더를 **로컬 오늘**로 짓는 이유: 감시 범위가 오늘·어제 두 폴더라
+    /// (`day_dirs`) 고정 날짜로 지으면 시간이 지나 테스트가 조용히 아무것도 안 보게 된다.
+    fn rollout_path(home: &Path, sid: &str) -> PathBuf {
+        let today = chrono::Local::now().date_naive();
+        home.join("sessions")
+            .join(today.format("%Y/%m/%d").to_string())
+            .join(format!("rollout-{}T13-52-21-{sid}.jsonl", today.format("%Y-%m-%d")))
     }
 
-    fn submit_prompt(home: &Path, sid: &str) {
-        let mut s = fs::read_to_string(home.join("history.jsonl")).unwrap_or_default();
-        s.push_str(&format!(r#"{{"session_id":"{sid}","ts":1786000000,"text":"hi"}}"#));
-        s.push('\n');
-        fs::write(home.join("history.jsonl"), s).unwrap();
+    fn write_rollout(home: &Path, sid: &str, lines: &[String]) -> PathBuf {
+        let p = rollout_path(home, sid);
+        fs::create_dir_all(p.parent().unwrap()).unwrap();
+        let body = if lines.is_empty() { String::new() } else { lines.join("\n") + "\n" };
+        fs::write(&p, body).unwrap();
+        p
+    }
+
+    fn home_with_session(rollout_lines: &[String]) -> tempfile::TempDir {
+        let dir = tempfile::tempdir().unwrap();
+        write_rollout(dir.path(), SID, rollout_lines);
+        dir
     }
 
     fn append(path: &Path, line: &str) {
@@ -764,34 +780,35 @@ mod turn_tests {
     }
 
     fn rollout_of(home: &Path) -> PathBuf {
-        find_rollout(home, SID).expect("rollout")
+        rollout_path(home, SID)
     }
 
+    /// 턴 시작은 rollout 의 `task_started` 다. 예전에는 `history.jsonl` 에 줄이 붙는
+    /// 것으로 알았는데, 그 파일은 TUI 프롬프트만 남겨서 Obsidian·`exec` 세션이 통째로
+    /// 빠졌다 (`TurnWatcher` 주석의 실측표).
     #[test]
-    fn history_line_starts_a_turn() {
-        let home = home_with_session(&[ev("task_started"), ev("task_complete")]);
+    fn task_started_starts_a_turn() {
+        let home = home_with_session(&[]);
         let mut w = TurnWatcher::default();
         let now = Utc::now();
         let homes = vec![home.path().to_path_buf()];
 
-        // 첫 관측은 기준점만 잡는다 — 과거 이력을 되짚으면 예전 세션이 전부 살아난다
         let first = w.poll(&homes, now);
         assert!(first.covered);
-        assert!(first.running.is_empty(), "첫 관측은 과거 이력을 재생하지 않는다");
+        assert!(first.running.is_empty());
 
-        submit_prompt(home.path(), SID);
-        let second = w.poll(&homes, now);
-        assert_eq!(second.running, vec![SID.to_string()]);
+        append(&rollout_of(home.path()), &ev("task_started"));
+        assert_eq!(w.poll(&homes, now).running, vec![SID.to_string()]);
     }
 
     #[test]
     fn task_complete_ends_the_turn_immediately() {
-        let home = home_with_session(&[ev("task_started"), ev("task_complete")]);
+        let home = home_with_session(&[]);
         let mut w = TurnWatcher::default();
         let now = Utc::now();
         let homes = vec![home.path().to_path_buf()];
         w.poll(&homes, now);
-        submit_prompt(home.path(), SID);
+        append(&rollout_of(home.path()), &ev("task_started"));
         assert!(!w.poll(&homes, now).running.is_empty());
 
         // 새 턴이 끝났다 — 45초 창을 기다리지 않고 바로 풀린다
@@ -805,12 +822,12 @@ mod turn_tests {
     /// 같지만, 그건 완료 신호를 못 받았다는 뜻이지 끝났다는 뜻이 아니다.
     #[test]
     fn stale_timeout_is_not_reported_as_completed() {
-        let home = home_with_session(&[ev("task_started")]);
+        let home = home_with_session(&[]);
         let mut w = TurnWatcher::default();
         let now = Utc::now();
         let homes = vec![home.path().to_path_buf()];
         w.poll(&homes, now);
-        submit_prompt(home.path(), SID);
+        append(&rollout_of(home.path()), &ev("task_started"));
         assert!(!w.poll(&homes, now).running.is_empty());
 
         // 완료 이벤트가 영영 안 온다 (크래시)
@@ -824,12 +841,12 @@ mod turn_tests {
     /// 실측 109파일에서 `turn_aborted` 의 사유는 `interrupted` 한 종류뿐이었다.
     #[test]
     fn aborted_turn_is_not_reported_as_completed() {
-        let home = home_with_session(&[ev("task_started")]);
+        let home = home_with_session(&[]);
         let mut w = TurnWatcher::default();
         let now = Utc::now();
         let homes = vec![home.path().to_path_buf()];
         w.poll(&homes, now);
-        submit_prompt(home.path(), SID);
+        append(&rollout_of(home.path()), &ev("task_started"));
         assert!(!w.poll(&homes, now).running.is_empty());
 
         append(&rollout_of(home.path()), &ev("turn_aborted"));
@@ -838,89 +855,114 @@ mod turn_tests {
         assert!(p.completed.is_empty(), "그러나 완료는 아니다");
     }
 
+    /// **첫 회차는 이미 쌓인 rollout 을 되짚지 않는다** — 안 그러면 오늘 돌았던 세션이
+    /// 전부 방금 시작한 것처럼 살아난다.
     #[test]
-    fn turn_aborted_also_ends_the_turn() {
+    fn the_first_poll_does_not_replay_todays_rollouts() {
         let home = home_with_session(&[ev("task_started")]);
         let mut w = TurnWatcher::default();
-        let now = Utc::now();
-        let homes = vec![home.path().to_path_buf()];
-        w.poll(&homes, now);
-        submit_prompt(home.path(), SID);
-        w.poll(&homes, now);
-
-        append(&rollout_of(home.path()), &ev("turn_aborted"));
-        assert!(w.poll(&homes, now).running.is_empty(), "Ctrl-C 로 끊어도 풀려야 한다");
+        let p = w.poll(&[home.path().to_path_buf()], Utc::now());
+        assert!(p.running.is_empty());
+        assert!(p.completed.is_empty());
     }
 
+    /// 반대로 **첫 회차 뒤에 생긴 파일은 새 세션**이라 처음부터 읽어야 한다.
+    /// 끝에서 시작하면 그 세션의 `task_started` 를 놓쳐 첫 턴이 통째로 안 잡힌다.
     #[test]
-    fn past_turns_in_the_rollout_do_not_end_the_new_one() {
-        // 이미 완료된 턴이 파일에 있는 상태에서 새 프롬프트가 들어온 경우
-        let home = home_with_session(&[ev("task_started"), ev("task_complete")]);
+    fn a_rollout_that_appears_later_is_read_from_the_start() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::create_dir_all(dir.path().join("sessions")).unwrap();
         let mut w = TurnWatcher::default();
         let now = Utc::now();
-        let homes = vec![home.path().to_path_buf()];
+        let homes = vec![dir.path().to_path_buf()];
+        assert!(w.poll(&homes, now).running.is_empty());
+
+        write_rollout(dir.path(), SID, &[ev("task_started")]);
+        assert_eq!(w.poll(&homes, now).running, vec![SID.to_string()], "새 세션의 첫 턴");
+    }
+
+    /// 같은 rollout 이 두 홈에 하드링크로 미러링되는 배치가 실재한다
+    /// (Orca 가 주입한 `CODEX_HOME` + `~/.codex`). **한 세션으로 세야 한다** —
+    /// 둘로 세면 busy 가 두 배가 되고 완료가 두 번 나간다.
+    #[test]
+    fn the_same_session_in_two_homes_is_counted_once() {
+        let a = tempfile::tempdir().unwrap();
+        let b = tempfile::tempdir().unwrap();
+        write_rollout(a.path(), SID, &[]);
+        write_rollout(b.path(), SID, &[]);
+        let homes = vec![a.path().to_path_buf(), b.path().to_path_buf()];
+
+        let mut w = TurnWatcher::default();
+        let now = Utc::now();
         w.poll(&homes, now);
-        submit_prompt(home.path(), SID);
+        // 미러이므로 양쪽에 같은 내용이 붙는다
+        append(&rollout_path(a.path(), SID), &ev("task_started"));
+        append(&rollout_path(b.path(), SID), &ev("task_started"));
 
         let p = w.poll(&homes, now);
-        assert_eq!(p.running, vec![SID.to_string()], "과거 턴의 완료 이벤트를 읽어 바로 끝내면 안 된다");
-    }
+        assert_eq!(p.running.len(), 1, "한 세션이다");
 
-    #[test]
-    fn crashed_turn_is_released_by_the_safety_net() {
-        let home = home_with_session(&[ev("task_started")]);
-        let mut w = TurnWatcher::default();
-        let now = Utc::now();
-        let homes = vec![home.path().to_path_buf()];
-        w.poll(&homes, now);
-        submit_prompt(home.path(), SID);
-        assert!(!w.poll(&homes, now).running.is_empty());
-
-        // 완료 이벤트가 영영 안 온다 (크래시)
-        let later = now + chrono::Duration::milliseconds(TURN_STALE_MS + 1);
-        assert!(w.poll(&homes, later).running.is_empty());
+        append(&rollout_path(a.path(), SID), &ev("task_complete"));
+        append(&rollout_path(b.path(), SID), &ev("task_complete"));
+        let p = w.poll(&homes, now);
+        assert_eq!(p.completed, vec![SID.to_string()], "완료도 한 번만");
     }
 
     #[test]
     fn two_sessions_are_tracked_independently() {
         let other = "019ff361-987f-7d32-940b-7ab6a69ed686";
-        let home = home_with_session(&[ev("task_started")]);
-        let day = home.path().join("sessions").join("2026").join("08").join("12");
-        fs::write(day.join(format!("rollout-2026-08-12T09-31-27-{other}.jsonl")), format!("{}\n", ev("task_started")))
-            .unwrap();
+        let home = home_with_session(&[]);
+        write_rollout(home.path(), other, &[]);
 
         let mut w = TurnWatcher::default();
         let now = Utc::now();
         let homes = vec![home.path().to_path_buf()];
         w.poll(&homes, now);
-        submit_prompt(home.path(), SID);
-        submit_prompt(home.path(), other);
+        append(&rollout_path(home.path(), SID), &ev("task_started"));
+        append(&rollout_path(home.path(), other), &ev("task_started"));
         let p = w.poll(&homes, now);
         assert_eq!(p.running.len(), 2, "동시 세션은 각각 추적된다");
 
         // 한쪽만 끝나도 나머지는 그대로
-        append(&find_rollout(home.path(), other).unwrap(), &ev("task_complete"));
+        append(&rollout_path(home.path(), other), &ev("task_complete"));
         let p = w.poll(&homes, now);
         assert_eq!(p.running, vec![SID.to_string()]);
     }
 
+    /// `sessions/` 자체가 없으면 이 방식이 성립하지 않는다.
+    /// 예전 기준(`history.jsonl` 존재)은 **파일이 있는데 안 자라는** 경우를 못 걸렀다 —
+    /// 이번 버그가 정확히 그 모양이었다.
     #[test]
-    fn no_history_file_is_not_covered() {
+    fn no_sessions_dir_is_not_covered() {
         let dir = tempfile::tempdir().unwrap();
         let mut w = TurnWatcher::default();
         let p = w.poll(&[dir.path().to_path_buf()], Utc::now());
-        assert!(!p.covered, "이력이 없으면 호출자가 폴백해야 한다");
+        assert!(!p.covered);
         assert!(p.running.is_empty());
+    }
+
+    /// 파일명에서 세션 id 를 뽑는 규칙 — 엉뚱한 파일을 세션으로 읽으면 안 된다
+    #[test]
+    fn session_id_comes_from_the_file_name() {
+        assert_eq!(
+            session_id_of("rollout-2026-08-25T16-37-33-01a037da-611b-7541-ad05-52eb54942282.jsonl")
+                .as_deref(),
+            Some("01a037da-611b-7541-ad05-52eb54942282")
+        );
+        // rollout 이 아닌 파일, uuid 가 아닌 꼬리, 확장자 불일치는 전부 거른다
+        assert!(session_id_of("history.jsonl").is_none());
+        assert!(session_id_of("rollout-2026-08-25T16-37-33-not-a-uuid.jsonl").is_none());
+        assert!(session_id_of("rollout-01a037da-611b-7541-ad05-52eb54942282.txt").is_none());
     }
 
     #[test]
     fn half_written_line_is_not_consumed() {
-        let home = home_with_session(&[ev("task_started")]);
+        let home = home_with_session(&[]);
         let mut w = TurnWatcher::default();
         let now = Utc::now();
         let homes = vec![home.path().to_path_buf()];
         w.poll(&homes, now);
-        submit_prompt(home.path(), SID);
+        append(&rollout_of(home.path()), &ev("task_started"));
         w.poll(&homes, now);
 
         // 아직 개행이 안 붙은 줄 — 다음 회차에 온전해지면 그때 읽혀야 한다
