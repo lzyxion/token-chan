@@ -250,6 +250,209 @@ impl crate::adapter::SourceAdapter for ClaudeAdapter {
     }
 }
 
+/// 턴이 끝났다는 이벤트가 영영 오지 않을 때(크래시·강제 종료) 풀어 주는 안전망.
+/// Codex·agy 와 같은 값·같은 이유다 ([`crate::codex::TURN_STALE_MS`]) — 긴 도구 실행
+/// 중에는 트랜스크립트도 몇 분간 조용할 수 있어 넉넉해야 한다.
+pub const TURN_STALE_MS: i64 = 5 * 60 * 1000;
+
+struct SessionTurn {
+    /// 이 세션의 트랜스크립트. `<projects>/<아무 프로젝트 폴더>/<sessionId>.jsonl` —
+    /// 파일명이 곧 세션 id 라 폴더만 훑으면 찾힌다 (한 번 찾으면 캐시).
+    path: Option<PathBuf>,
+    /// 읽은 지점 — 매 회차 새로 늘어난 부분만 본다
+    offset: u64,
+    running: bool,
+    /// 마지막으로 완료를 읽은 응답의 `message.id`. 같은 응답이 콘텐츠 블록 수만큼
+    /// 여러 줄로 적히므로(모듈 주석) `end_turn` 도 그만큼 반복된다 — 실측에서
+    /// `thinking` 줄과 `text` 줄이 15초 간격으로 같은 id 를 달고 나왔다.
+    last_end_id: Option<String>,
+    /// 마지막으로 뭔가 관측한 시각 (안전망 기준)
+    last_activity: DateTime<Utc>,
+}
+
+/// 레지스트리가 상태를 안 주는 Claude 세션의 턴 추적.
+///
+/// **왜 따로 있는가** — 모듈 [`crate::live`] 주석 참고. 요약하면 `status` 는 터미널 UI 가
+/// 쓰는 값이라 SDK 진입점에는 없고, 그렇다고 레지스트리를 버리면 "어느 트랜스크립트가
+/// 살아 있는가"를 mtime 으로 되짚어야 해서 지웠던 유도가 돌아온다. 그래서 감시 대상은
+/// 레지스트리가 정하고([`crate::live::HeadlessSession`]) 여기는 턴 경계만 읽는다.
+///
+/// **왜 [`crate::adapter::TurnWatch`] 를 구현하지 않는가** — 그 계약은 `poll(&[홈])` 이다.
+/// Codex·agy 는 홈만 주면 자기 색인을 찾아가지만 이쪽은 홈이 아니라 **레지스트리가
+/// 골라 준 세션 목록**을 받는다. 입력이 다른 걸 같은 이름으로 덮으면 계약이 거짓말이 된다.
+///
+/// 실측 (Obsidian 플러그인 세션 1개 · 38턴): 사람 메시지 8건에 `end_turn` 14건으로
+/// **완료가 더 많다.** 이 소스의 원래 성질이다 — 응답 1건이 콘텐츠 블록 수만큼 여러 줄로
+/// 적히므로(모듈 주석) 마지막 응답의 `end_turn` 도 그만큼 반복된다. 사용량 집계가
+/// `message.id` 로 dedup 하는 것과 **같은 이유·같은 열쇠**로 여기서도 접는다.
+#[derive(Default)]
+pub struct TurnWatcher {
+    sessions: HashMap<String, SessionTurn>,
+}
+
+impl TurnWatcher {
+    /// `live` 는 이번 회차에 레지스트리가 상태를 안 준 세션들. 목록에서 빠진 세션은
+    /// 잊되 **완료로 세지 않는다** — 부재는 완료가 아니다 ([`crate::live`] 모듈 주석).
+    pub fn poll(
+        &mut self,
+        live: &[crate::live::HeadlessSession],
+        now: DateTime<Utc>,
+    ) -> crate::adapter::TurnPoll {
+        let mut covered = false;
+        let mut completed = vec![];
+        let seen: HashSet<&str> = live.iter().map(|h| h.id.as_str()).collect();
+
+        for h in live {
+            let entry = self.sessions.entry(h.id.clone()).or_insert_with(|| {
+                // **첫 관측은 과거 턴을 되짚지 않는다.** 이미 쌓인 트랜스크립트를 처음부터
+                // 읽으면 지난 대화가 전부 방금 시작한 것처럼 보인다. 지금 끝을 기준점으로
+                // 삼는 대가로, 앱을 켠 순간 이미 돌고 있던 턴은 그 턴이 끝날 때까지
+                // 놓친다 (Codex 가 `history.jsonl` 에서 하는 것과 같은 선택).
+                let path = find_transcript(&h.projects_root, &h.id);
+                let offset = path
+                    .as_ref()
+                    .and_then(|p| std::fs::metadata(p).ok())
+                    .map(|m| m.len())
+                    .unwrap_or(0);
+                SessionTurn {
+                    path,
+                    offset,
+                    running: false,
+                    last_end_id: None,
+                    last_activity: now,
+                }
+            });
+
+            if entry.path.is_none() {
+                // 첫 프롬프트 전이라 파일이 아직 없을 수 있다. 이번에 찾았다면 갓 생긴
+                // 파일이므로 처음부터 읽는다 (건너뛸 과거 턴이 없다).
+                entry.path = find_transcript(&h.projects_root, &h.id);
+                entry.offset = 0;
+            }
+            let Some(path) = entry.path.clone() else { continue };
+            covered = true;
+
+            let size = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+            if size < entry.offset {
+                entry.offset = 0;
+            }
+            let (lines, consumed) = crate::live::read_from(&path, entry.offset);
+            entry.offset += consumed;
+            if consumed > 0 {
+                entry.last_activity = now;
+            }
+
+            let mut finished_cleanly = false;
+            for line in lines {
+                match turn_boundary(&line) {
+                    Some(Boundary::Started) => {
+                        entry.running = true;
+                        finished_cleanly = false;
+                    }
+                    // 돌고 있던 턴에 온 완료만 센다. 같은 응답이 여러 줄로 적히므로
+                    // `message.id` 로 접고, id 를 못 읽어도 이번 회차에 이미 잡은 완료를
+                    // 뒤 줄이 지우지는 못하게 한다 (`|=`) — 새 턴이 시작되면 그때 풀린다.
+                    Some(Boundary::Ended(msg_id)) => {
+                        if msg_id.is_some() && msg_id == entry.last_end_id {
+                            continue;
+                        }
+                        finished_cleanly |= entry.running;
+                        entry.running = false;
+                        entry.last_end_id = msg_id;
+                    }
+                    None => {}
+                }
+            }
+            if finished_cleanly {
+                completed.push(h.id.clone());
+            }
+            // **완료 판정 뒤에 와야 한다** — 앞에 두면 타임아웃이 완료로 샌다.
+            if entry.running && (now - entry.last_activity).num_milliseconds() > TURN_STALE_MS {
+                entry.running = false;
+            }
+        }
+
+        // 레지스트리에서 사라진 세션은 잊는다. 완료로는 안 센다 — 크래시·강제 종료가
+        // 같은 모양이라 가릴 수 없다.
+        self.sessions.retain(|id, _| seen.contains(id.as_str()));
+
+        crate::adapter::TurnPoll {
+            covered,
+            running: self
+                .sessions
+                .iter()
+                .filter(|(_, t)| t.running)
+                .map(|(id, _)| id.clone())
+                .collect(),
+            completed,
+        }
+    }
+}
+
+enum Boundary {
+    Started,
+    /// 끝낸 응답의 `message.id` — 같은 응답의 반복 줄을 접는 열쇠 (없을 수도 있다)
+    Ended(Option<String>),
+}
+
+/// 트랜스크립트 한 줄이 턴 경계인지. 유도가 아니라 **CLI 가 적은 사실**만 본다.
+///
+/// - 시작: `type:"user"` 이면서 도구 결과가 아닌 줄 = 사람이 보낸 메시지
+///   (도구 결과도 `type:"user"` 로 적히지만 그건 턴 **안**의 왕복이다)
+/// - 완료: `type:"assistant"` 의 `stop_reason:"end_turn"`
+///   (도구를 더 부를 때는 `"tool_use"` 라 갈린다 — 실측 64행 중 50/14)
+///
+/// 완료에는 `message.id` 를 함께 실어 보낸다 — 같은 응답의 반복 줄을 호출자가 접는다.
+///
+/// 서브에이전트 줄(`isSidechain`)은 둘 다 무시한다. 그쪽의 시작·완료는 본 세션의 턴
+/// 경계가 아니라 그 턴 **안에서** 일어나는 일이다.
+fn turn_boundary(line: &str) -> Option<Boundary> {
+    let v: serde_json::Value = serde_json::from_str(line).ok()?;
+    if v.get("isSidechain").and_then(|b| b.as_bool()).unwrap_or(false) {
+        return None;
+    }
+    match v.get("type")?.as_str()? {
+        "user" => {
+            // 시스템이 끼워 넣은 줄(명령 캐비엇 등)은 사람 메시지가 아니다
+            if v.get("isMeta").and_then(|b| b.as_bool()).unwrap_or(false) {
+                return None;
+            }
+            let content = v.get("message")?.get("content")?;
+            let is_prompt = match content {
+                serde_json::Value::String(_) => true,
+                serde_json::Value::Array(blocks) => blocks
+                    .iter()
+                    .any(|b| b.get("type").and_then(|t| t.as_str()) != Some("tool_result")),
+                _ => false,
+            };
+            is_prompt.then_some(Boundary::Started)
+        }
+        "assistant" => {
+            let msg = v.get("message")?;
+            (msg.get("stop_reason")?.as_str()? == "end_turn").then(|| {
+                Boundary::Ended(msg.get("id").and_then(|i| i.as_str()).map(str::to_string))
+            })
+        }
+        _ => None,
+    }
+}
+
+/// `<projects>/<프로젝트 폴더>/<sessionId>.jsonl` 을 찾는다.
+///
+/// 프로젝트 폴더 이름은 cwd 를 인코딩한 것이지만 **그 규칙을 되짚지 않는다** — 규칙이
+/// 공개된 적 없고, 틀리면 조용히 못 찾는다. 대신 폴더 목록을 훑어 파일명이 맞는지만
+/// 본다: readdir 한 번 + 폴더 수만큼 stat 이고, 세션당 한 번만 하고 캐시한다.
+fn find_transcript(projects_root: &Path, id: &str) -> Option<PathBuf> {
+    let file = format!("{id}.jsonl");
+    for e in std::fs::read_dir(projects_root).ok()?.filter_map(|e| e.ok()) {
+        let candidate = e.path().join(&file);
+        if candidate.is_file() {
+            return Some(candidate);
+        }
+    }
+    None
+}
+
 /// `message.content` 에서 사람이 읽는 텍스트만 뽑는다.
 /// 문자열로 오기도 하고 블록 배열(`{type:"text"|"tool_result"|…}`)로 오기도 한다.
 fn user_text(content: &serde_json::Value) -> String {
@@ -471,6 +674,245 @@ pub(crate) fn conformance_roots() -> (Vec<tempfile::TempDir>, Vec<PathBuf>) {
 
 #[cfg(test)]
 mod tests {
+    // ── 턴 감시기 — 레지스트리가 상태를 안 주는 세션만 여기로 온다 ──
+    //
+    // 줄 모양은 전부 실측(Obsidian 플러그인 세션 1개 · 38턴)에서 가져왔다.
+
+    const PROMPT: &str = r#"{"type":"user","message":{"role":"user","content":"사람이 보낸 말"}}"#;
+    const TOOL_RESULT: &str =
+        r#"{"type":"user","message":{"role":"user","content":[{"type":"tool_result","content":"..."}]}}"#;
+    const TOOL_USE: &str = r#"{"type":"assistant","message":{"stop_reason":"tool_use"}}"#;
+    const END_TURN: &str =
+        r#"{"type":"assistant","message":{"id":"msg_a","stop_reason":"end_turn"}}"#;
+    /// 같은 응답이 콘텐츠 블록 수만큼 여러 줄로 적힌 실측 모양 — `id` 가 같다
+    const END_DUP_THINKING: &str = r#"{"type":"assistant","message":{"id":"msg_dup","stop_reason":"end_turn","content":[{"type":"thinking"}]}}"#;
+    const END_DUP_TEXT: &str = r#"{"type":"assistant","message":{"id":"msg_dup","stop_reason":"end_turn","content":[{"type":"text","text":"끝"}]}}"#;
+
+    fn at(iso: &str) -> super::DateTime<super::Utc> {
+        iso.parse().unwrap()
+    }
+
+    /// (수명 가드, 트랜스크립트 경로, 감시 대상)
+    fn fixture(id: &str) -> (tempfile::TempDir, super::PathBuf, crate::live::HeadlessSession) {
+        let dir = tempfile::tempdir().unwrap();
+        let projects = dir.path().join("projects");
+        let proj = projects.join("-home-u-vault");
+        std::fs::create_dir_all(&proj).unwrap();
+        let file = proj.join(format!("{id}.jsonl"));
+        let live = crate::live::HeadlessSession {
+            id: id.into(),
+            name: format!("obsidian-{id}"),
+            cwd: "/home/u/vault".into(),
+            projects_root: projects,
+        };
+        (dir, file, live)
+    }
+
+    fn append(path: &super::Path, lines: &[&str]) {
+        use std::io::Write;
+        let mut f =
+            std::fs::OpenOptions::new().create(true).append(true).open(path).unwrap();
+        for l in lines {
+            writeln!(f, "{l}").unwrap();
+        }
+    }
+
+    /// 사람 메시지로 시작하고 `end_turn` 으로 끝난다 — 유도 없이 파일에 적힌 것만 읽는다.
+    #[test]
+    fn a_prompt_starts_a_turn_and_end_turn_finishes_it() {
+        use super::*;
+        let (_g, file, live) = fixture("s1");
+        let mut w = TurnWatcher::default();
+        let t0 = at("2026-08-25T00:00:00Z");
+        // 실제 순서 — 세션이 레지스트리에 뜨는 게 먼저고, 사람이 말하는 건 그 뒤다.
+        // 이 기준점 회차가 없으면 아래 append 가 "첫 관측 시점에 이미 있던 과거"가 된다.
+        w.poll(std::slice::from_ref(&live), t0);
+
+        append(&file, &[PROMPT, TOOL_USE]);
+        let p = w.poll(std::slice::from_ref(&live), t0);
+        assert!(p.covered);
+        assert_eq!(p.running, vec!["s1"]);
+        assert!(p.completed.is_empty(), "아직 안 끝났다");
+
+        // 도구 왕복은 턴 안의 일이라 상태를 바꾸지 않는다
+        append(&file, &[TOOL_RESULT, TOOL_USE]);
+        let p = w.poll(std::slice::from_ref(&live), t0);
+        assert_eq!(p.running, vec!["s1"]);
+
+        append(&file, &[END_TURN]);
+        let p = w.poll(std::slice::from_ref(&live), t0);
+        assert!(p.running.is_empty());
+        assert_eq!(p.completed, vec!["s1"], "완료는 양(+)의 신호가 있을 때만");
+    }
+
+    /// 도구 결과도 `type:"user"` 로 적히지만 새 턴이 아니다 — 이걸 시작으로 읽으면
+    /// 끝난 세션이 도구 한 번에 되살아난다.
+    #[test]
+    fn a_tool_result_is_not_a_new_turn() {
+        use super::*;
+        let (_g, file, live) = fixture("s2");
+        let mut w = TurnWatcher::default();
+        let t0 = at("2026-08-25T00:00:00Z");
+        // 실제 순서 — 세션이 레지스트리에 뜨는 게 먼저고, 사람이 말하는 건 그 뒤다.
+        // 이 기준점 회차가 없으면 아래 append 가 "첫 관측 시점에 이미 있던 과거"가 된다.
+        w.poll(std::slice::from_ref(&live), t0);
+
+        append(&file, &[PROMPT, END_TURN]);
+        w.poll(std::slice::from_ref(&live), t0);
+
+        append(&file, &[TOOL_RESULT]);
+        let p = w.poll(std::slice::from_ref(&live), t0);
+        assert!(p.running.is_empty());
+        assert!(p.completed.is_empty());
+    }
+
+    /// **첫 관측은 과거를 되짚지 않는다.** 안 그러면 지난 대화가 전부 방금 시작한
+    /// 것처럼 보인다. 대가로 앱을 켠 순간 돌던 턴은 놓친다 — 알려진 한계.
+    #[test]
+    fn the_first_poll_does_not_replay_history() {
+        use super::*;
+        let (_g, file, live) = fixture("s3");
+        append(&file, &[PROMPT, TOOL_USE, END_TURN, PROMPT]);
+
+        let mut w = TurnWatcher::default();
+        let p = w.poll(std::slice::from_ref(&live), at("2026-08-25T00:00:00Z"));
+        assert!(p.running.is_empty(), "쌓여 있던 턴을 지금 것으로 읽지 않는다");
+        assert!(p.completed.is_empty());
+    }
+
+    /// 첫 프롬프트 전엔 파일이 없다. 나중에 생기면 **처음부터** 읽는다 —
+    /// 갓 생긴 파일이라 건너뛸 과거가 없다.
+    #[test]
+    fn a_transcript_created_later_is_read_from_the_start() {
+        use super::*;
+        let (_g, file, live) = fixture("s4");
+        let mut w = TurnWatcher::default();
+        let t0 = at("2026-08-25T00:00:00Z");
+
+        let p = w.poll(std::slice::from_ref(&live), t0);
+        assert!(!p.covered, "읽을 파일이 없으면 이 방식은 성립하지 않는다");
+
+        append(&file, &[PROMPT]);
+        let p = w.poll(std::slice::from_ref(&live), t0);
+        assert_eq!(p.running, vec!["s4"]);
+    }
+
+    /// 실측에서 마지막 응답의 `end_turn` 이 블록 수만큼 반복됐다 (사람 메시지 8건에
+    /// `end_turn` 14건 — `thinking` 줄과 `text` 줄이 같은 `message.id`).
+    /// 사용량 집계와 같은 열쇠로 접어 완료는 한 번만 나간다.
+    #[test]
+    fn a_duplicated_end_turn_completes_only_once() {
+        use super::*;
+        let (_g, file, live) = fixture("s5");
+        let mut w = TurnWatcher::default();
+        let t0 = at("2026-08-25T00:00:00Z");
+        // 실제 순서 — 세션이 레지스트리에 뜨는 게 먼저고, 사람이 말하는 건 그 뒤다.
+        // 이 기준점 회차가 없으면 아래 append 가 "첫 관측 시점에 이미 있던 과거"가 된다.
+        w.poll(std::slice::from_ref(&live), t0);
+
+        append(&file, &[PROMPT]);
+        w.poll(std::slice::from_ref(&live), t0);
+
+        append(&file, &[END_DUP_THINKING, END_DUP_TEXT]);
+        let p = w.poll(std::slice::from_ref(&live), t0);
+        assert_eq!(p.completed, vec!["s5"], "겹쳐 적힌 완료가 두 번 세지면 안 된다");
+
+        // 회차가 갈려 들어와도 마찬가지 — 같은 응답이다
+        append(&file, &[END_DUP_TEXT]);
+        let p = w.poll(std::slice::from_ref(&live), t0);
+        assert!(p.completed.is_empty());
+
+        // 다만 **다음 턴의** 완료는 새 응답이라 그대로 잡힌다 — 접는 게 너무 끈끈하면
+        // 두 번째 턴부터 완료를 영영 못 알린다
+        append(&file, &[PROMPT]);
+        assert_eq!(w.poll(std::slice::from_ref(&live), t0).running, vec!["s5"]);
+        append(&file, &[END_TURN]);
+        assert_eq!(w.poll(std::slice::from_ref(&live), t0).completed, vec!["s5"]);
+    }
+
+    /// 서브에이전트 줄은 본 세션의 턴 경계가 아니다 — 그 턴 **안에서** 일어나는 일이다.
+    #[test]
+    fn sidechain_lines_are_ignored() {
+        use super::*;
+        let (_g, file, live) = fixture("s6");
+        let mut w = TurnWatcher::default();
+        let t0 = at("2026-08-25T00:00:00Z");
+        // 실제 순서 — 세션이 레지스트리에 뜨는 게 먼저고, 사람이 말하는 건 그 뒤다.
+        // 이 기준점 회차가 없으면 아래 append 가 "첫 관측 시점에 이미 있던 과거"가 된다.
+        w.poll(std::slice::from_ref(&live), t0);
+
+        append(&file, &[PROMPT]);
+        w.poll(std::slice::from_ref(&live), t0);
+
+        let side_end = r#"{"type":"assistant","isSidechain":true,"message":{"stop_reason":"end_turn"}}"#;
+        append(&file, &[side_end]);
+        let p = w.poll(std::slice::from_ref(&live), t0);
+        assert_eq!(p.running, vec!["s6"], "서브에이전트가 끝난 건 본 턴의 완료가 아니다");
+        assert!(p.completed.is_empty());
+    }
+
+    /// 완료 이벤트가 영영 안 오는 경우(크래시)의 안전망. 풀리되 **완료로는 안 센다** —
+    /// 그게 크래시와 완료를 가르는 유일한 선이다.
+    #[test]
+    fn the_safety_net_releases_a_stuck_turn_without_completing_it() {
+        use super::*;
+        let (_g, file, live) = fixture("s7");
+        let mut w = TurnWatcher::default();
+        let t0 = at("2026-08-25T00:00:00Z");
+        // 실제 순서 — 세션이 레지스트리에 뜨는 게 먼저고, 사람이 말하는 건 그 뒤다.
+        // 이 기준점 회차가 없으면 아래 append 가 "첫 관측 시점에 이미 있던 과거"가 된다.
+        w.poll(std::slice::from_ref(&live), t0);
+
+        append(&file, &[PROMPT]);
+        assert_eq!(w.poll(std::slice::from_ref(&live), t0).running, vec!["s7"]);
+
+        let later = t0 + chrono::Duration::milliseconds(TURN_STALE_MS + 1);
+        let p = w.poll(std::slice::from_ref(&live), later);
+        assert!(p.running.is_empty());
+        assert!(p.completed.is_empty(), "타임아웃은 완료가 아니다");
+    }
+
+    /// 레지스트리에서 사라진 세션은 잊는다 — 부재는 완료가 아니므로 알리지 않는다.
+    #[test]
+    fn a_session_that_leaves_the_registry_is_forgotten_not_completed() {
+        use super::*;
+        let (_g, file, live) = fixture("s8");
+        let mut w = TurnWatcher::default();
+        let t0 = at("2026-08-25T00:00:00Z");
+        // 실제 순서 — 세션이 레지스트리에 뜨는 게 먼저고, 사람이 말하는 건 그 뒤다.
+        // 이 기준점 회차가 없으면 아래 append 가 "첫 관측 시점에 이미 있던 과거"가 된다.
+        w.poll(std::slice::from_ref(&live), t0);
+
+        append(&file, &[PROMPT]);
+        assert_eq!(w.poll(std::slice::from_ref(&live), t0).running, vec!["s8"]);
+
+        let p = w.poll(&[], t0);
+        assert!(p.running.is_empty());
+        assert!(p.completed.is_empty(), "사라진 것은 완료가 아니다");
+    }
+
+    /// 동시 세션은 각각 추적된다 — 레지스트리가 준 id 별로 상태를 들고 있다.
+    #[test]
+    fn concurrent_sessions_are_tracked_separately() {
+        use super::*;
+        let (_g1, f1, l1) = fixture("a");
+        let (_g2, f2, l2) = fixture("b");
+        let mut w = TurnWatcher::default();
+        let t0 = at("2026-08-25T00:00:00Z");
+        let both = [l1, l2];
+        w.poll(&both, t0);
+
+        append(&f1, &[PROMPT]);
+        append(&f2, &[PROMPT]);
+        let p = w.poll(&both, t0);
+        assert_eq!(p.running.len(), 2);
+
+        append(&f1, &[END_TURN]);
+        let p = w.poll(&both, t0);
+        assert_eq!(p.running, vec!["b"]);
+        assert_eq!(p.completed, vec!["a"]);
+    }
+
     /// `cache_creation` 내역이 있으면 1시간 몫을 뽑고, 없으면 0 (= 전액 5분 단가).
     #[test]
     fn parses_cache_creation_ttl_breakdown() {

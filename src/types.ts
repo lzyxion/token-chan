@@ -157,6 +157,9 @@ export interface LiveSessionView {
    * Claude 는 레지스트리 값 그대로(`busy`/`shell`/`idle`/`waiting`),
    * Codex·agy 는 턴 감시기가 도는 세션에만 `busy`.
    * 셋 다 파일에서 직접 읽은 값이라 **유도값(`active`)은 없다.**
+   *
+   * 터미널 UI 없이 뜬 Claude 세션(Obsidian 플러그인 등)은 레지스트리가 상태를 주지
+   * 않아서, Codex·agy 와 똑같이 **턴 감시기가 돌고 있다고 말할 때만** `busy` 로 실린다.
    */
   status: string;
   cwd: string;

@@ -440,11 +440,16 @@ fn spawn_live_thread(app: AppHandle) {
         let mut prev = String::new();
         // 턴 추적 — 파일에 적힌 턴 경계를 직접 읽는다. 소스마다 파일이 달라 추적기도
         // 따로지만 계약([`usage_core::TurnWatch`])이 같아 목록으로 돈다.
-        // Claude 가 여기 없는 건 방식이 달라서다 — 레지스트리 status 직독 (아래).
+        // Claude 가 여기 없는 건 입력이 달라서다 — 홈이 아니라 **레지스트리가 골라 준
+        // 세션 목록**을 받는다 (아래 `claude_turns`).
         let mut watchers: Vec<(Source, Box<dyn TurnWatch>)> = vec![
             (Source::Codex, Box::new(usage_core::codex::TurnWatcher::default())),
             (Source::Antigravity, Box::new(usage_core::antigravity::TurnWatcher::default())),
         ];
+        // 레지스트리가 status 를 안 주는 Claude 세션(TUI 없이 뜬 것)의 턴 추적.
+        // 나머지 Claude 세션은 지금처럼 레지스트리 값이 권위를 갖는다 — 이건 그 값이
+        // **없는 자리만** 메운다.
+        let mut claude_turns = usage_core::claude::TurnWatcher::default();
         // Claude 세션의 직전 회차 status. 저쪽은 턴 감시기가 아니라 레지스트리를 읽으므로
         // 완료를 여기서 가려낸다 — 세 소스를 프론트에 **같은 모양**으로 내보내기 위한 변환이고,
         // 소스별 지식은 프론트가 아니라 여기 남는다.
@@ -457,7 +462,30 @@ fn spawn_live_thread(app: AppHandle) {
             let now = Utc::now();
             let mut live = read_live_state(&roots.sessions, now.timestamp_millis());
 
-            // Claude 완료 판정 — **레지스트리에 남아 있으면서** status 가 허용목록으로
+            // 레지스트리가 침묵한 세션은 트랜스크립트에서 읽는다. Codex·agy 와 같은
+            // 규칙이라 **돌고 있는 것만** 목록에 올린다 — 다만 이름·cwd 는 레지스트리가
+            // 줬으므로 uuid 조각 대신 그대로 쓴다.
+            let poll = claude_turns.poll(&live.headless, now);
+            for id in &poll.running {
+                let Some(h) = live.headless.iter().find(|h| &h.id == id) else { continue };
+                live.busy = true;
+                live.busy_count += 1;
+                live.sessions.push(usage_core::live::LiveSessionView {
+                    source: Source::Claude,
+                    id: h.id.clone(),
+                    name: h.name.clone(),
+                    status: "busy".into(),
+                    cwd: h.cwd.clone(),
+                });
+            }
+            for id in &poll.completed {
+                live.completed
+                    .push(usage_core::live::CompletedSession { source: Source::Claude, id: id.clone() });
+            }
+
+            // Claude 완료 판정 — 레지스트리가 status 를 주는 세션만 해당한다 (감시기가
+            // 보는 세션은 위에서 자기 `completed` 로 이미 알렸다).
+            // **레지스트리에 남아 있으면서** status 가 허용목록으로
             // 바뀐 세션만 완료다. 목록에서 사라진 것은 완료가 아니다: 레지스트리가
             // `<pid>.json` 이라 프로세스가 끝나면 파일째 사라지고, 크래시도 (신선도로
             // 밀려나) 같은 모양이 된다. 둘 다 "턴이 끝났다"는 뜻이 아니다.
