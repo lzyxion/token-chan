@@ -402,8 +402,7 @@ mod tests {
     /// 사용자가 그 뒤에 고른 값을 계속 되돌린다
     #[test]
     fn the_legacy_boolean_is_not_written_back() {
-        let mut s = Settings::default();
-        s.gauge_label_show = "busy".into();
+        let s = Settings { gauge_label_show: "busy".into(), ..Default::default() };
         let json = serde_json::to_string(&s).unwrap();
         assert!(!json.contains("gaugeLabels"), "{json}");
         assert!(json.contains("gaugeLabelShow"));

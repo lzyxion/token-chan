@@ -656,7 +656,7 @@ mod tests {
     /// 비교가 매번 참이 되어 2초마다 emit 이 나간다.
     #[test]
     fn the_start_time_does_not_drift_while_the_turn_runs() {
-        let table = mark_busy_since(&mut vec![], None, 1_000);
+        let table = mark_busy_since(&mut [], None, 1_000);
         let mut sessions = vec![view(Source::Claude, "a", "busy")];
         let table = mark_busy_since(&mut sessions, Some(&table), 2_000);
 
@@ -668,7 +668,7 @@ mod tests {
     /// 끝났다 다시 시작하면 새 턴이다 — 표에서 빠졌다가 새 시각으로 들어온다.
     #[test]
     fn a_new_turn_after_an_idle_round_starts_a_new_clock() {
-        let table = mark_busy_since(&mut vec![], None, 1_000);
+        let table = mark_busy_since(&mut [], None, 1_000);
         let mut busy = vec![view(Source::Claude, "a", "busy")];
         let table = mark_busy_since(&mut busy, Some(&table), 2_000);
 
@@ -686,7 +686,7 @@ mod tests {
     /// 같은 id 라도 소스가 다르면 다른 세션이다 — 키에 소스가 들어가는 이유.
     #[test]
     fn the_same_id_in_two_sources_is_two_sessions() {
-        let table = mark_busy_since(&mut vec![], None, 1_000);
+        let table = mark_busy_since(&mut [], None, 1_000);
         let mut one = vec![view(Source::Claude, "a", "busy")];
         let table = mark_busy_since(&mut one, Some(&table), 2_000);
 
