@@ -5,6 +5,23 @@ use tauri::tray::TrayIconBuilder;
 use tauri::{AppHandle, Manager};
 use usage_core::model::Source;
 
+fn english(app: &AppHandle) -> bool {
+    app.state::<crate::AppState>()
+        .settings
+        .lock()
+        .unwrap()
+        .language
+        == "en"
+}
+
+fn text<'a>(english: bool, ko: &'a str, en: &'a str) -> &'a str {
+    if english {
+        en
+    } else {
+        ko
+    }
+}
+
 /// "연결된 계정" 서브메뉴 — **켜고 끄는 것만** 한다. 같은 계정의 설치본은 한 줄로 묶여
 /// 나오고, 체크가 곧 집계 포함 여부다.
 ///
@@ -13,6 +30,7 @@ use usage_core::model::Source;
 ///
 /// `prefix` 는 펫 우클릭 메뉴에서 트레이와 id 가 겹치지 않게 붙이는 접두사.
 fn accounts_submenu(app: &AppHandle, prefix: &str) -> tauri::Result<Submenu<tauri::Wry>> {
+    let en = english(app);
     let (accounts, overrides) = {
         let state = app.state::<crate::AppState>();
         // 두 락을 겹쳐 잡지 않는다
@@ -26,7 +44,7 @@ fn accounts_submenu(app: &AppHandle, prefix: &str) -> tauri::Result<Submenu<taur
         items.push(Box::new(MenuItem::with_id(
             app,
             format!("{prefix}acctnone"),
-            "발견된 계정 없음",
+            text(en, "발견된 계정 없음", "No accounts found"),
             false,
             None::<&str>,
         )?));
@@ -51,13 +69,19 @@ fn accounts_submenu(app: &AppHandle, prefix: &str) -> tauri::Result<Submenu<taur
     items.push(Box::new(MenuItem::with_id(
         app,
         format!("{prefix}acctsettings"),
-        "계정 설정…",
+        text(en, "계정 설정…", "Account settings…"),
         true,
         None::<&str>,
     )?));
 
     let refs: Vec<&dyn IsMenuItem<tauri::Wry>> = items.iter().map(|b| b.as_ref()).collect();
-    Submenu::with_id_and_items(app, format!("{prefix}accounts"), "연결된 계정", true, &refs)
+    Submenu::with_id_and_items(
+        app,
+        format!("{prefix}accounts"),
+        text(en, "연결된 계정", "Connected accounts"),
+        true,
+        &refs,
+    )
 }
 
 /// 계정 목록이 바뀌면 트레이 메뉴를 다시 만든다 (트레이는 시작 시 한 번만 만들어져서
@@ -67,30 +91,60 @@ pub fn refresh_menu(app: &AppHandle) {
     if let Ok(menu) = build_tray_menu(app) {
         let _ = tray.set_menu(Some(menu));
     }
+    let _ = tray.set_tooltip(Some(text(
+        english(app),
+        "토큰쨩 — AI 토큰 사용량",
+        "TokenChan — AI token usage",
+    )));
 }
 
 fn build_tray_menu(app: &AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
+    let en = english(app);
     let click_through = {
         let state = app.state::<crate::AppState>();
         let s = state.settings.lock().unwrap();
         s.click_through
     };
-    let show = MenuItem::with_id(app, "show", "펫 보이기/숨기기", true, None::<&str>)?;
-    let panel = MenuItem::with_id(app, "panel", "사용량 패널 열기/닫기", true, None::<&str>)?;
+    let show = MenuItem::with_id(
+        app,
+        "show",
+        text(en, "펫 보이기/숨기기", "Show/hide pet"),
+        true,
+        None::<&str>,
+    )?;
+    let panel = MenuItem::with_id(
+        app,
+        "panel",
+        text(en, "사용량 패널 열기/닫기", "Open/close usage panel"),
+        true,
+        None::<&str>,
+    )?;
     let accounts = accounts_submenu(app, "")?;
     // 클릭 통과를 켜면 펫이 마우스를 전혀 받지 않아 우클릭으로 되돌릴 수 없다
     // → 해제 경로인 이 트레이 항목이 유일한 출구이므로 반드시 여기 있어야 한다.
     let ct = CheckMenuItem::with_id(
         app,
         "clickthrough",
-        "클릭 통과 모드",
+        text(en, "클릭 통과 모드", "Click-through mode"),
         true,
         click_through,
         None::<&str>,
     )?;
-    let studio = MenuItem::with_id(app, "studio", "캐릭터 스튜디오…", true, None::<&str>)?;
-    let settings_item = MenuItem::with_id(app, "settings", "설정…", true, None::<&str>)?;
-    let quit = MenuItem::with_id(app, "quit", "종료", true, None::<&str>)?;
+    let studio = MenuItem::with_id(
+        app,
+        "studio",
+        text(en, "캐릭터 스튜디오…", "Character Studio…"),
+        true,
+        None::<&str>,
+    )?;
+    let settings_item = MenuItem::with_id(
+        app,
+        "settings",
+        text(en, "설정…", "Settings…"),
+        true,
+        None::<&str>,
+    )?;
+    let quit = MenuItem::with_id(app, "quit", text(en, "종료", "Quit"), true, None::<&str>)?;
     let menu =
         Menu::with_items(app, &[&show, &panel, &accounts, &ct, &studio, &settings_item, &quit])?;
     // 메뉴를 다시 만들 때마다 새 체크 항목으로 교체 — 옛 항목을 붙들고 있으면
@@ -101,10 +155,11 @@ fn build_tray_menu(app: &AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
 
 pub fn create(app: &AppHandle) -> tauri::Result<()> {
     let menu = build_tray_menu(app)?;
+    let tooltip = text(english(app), "토큰쨩 — AI 토큰 사용량", "TokenChan — AI token usage");
 
     TrayIconBuilder::with_id("main")
         .icon(app.default_window_icon().expect("기본 아이콘 없음").clone())
-        .tooltip("토큰쨩 — AI 토큰 사용량")
+        .tooltip(tooltip)
         .menu(&menu)
         .show_menu_on_left_click(true)
         .on_menu_event(|app, event| handle_action(app, event.id.as_ref()))
@@ -200,27 +255,58 @@ pub fn popup_pet_menu(app: &AppHandle) -> tauri::Result<()> {
     let Some(pet) = app.get_webview_window("pet") else {
         return Ok(());
     };
+    let en = english(app);
     let click_through = {
         let state = app.state::<crate::AppState>();
         let s = state.settings.lock().unwrap();
         s.click_through
     };
-    let hide = MenuItem::with_id(app, "petmenu:show", "펫 숨기기", true, None::<&str>)?;
-    let panel = MenuItem::with_id(app, "petmenu:panel", "사용량 패널 열기/닫기", true, None::<&str>)?;
+    let hide = MenuItem::with_id(
+        app,
+        "petmenu:show",
+        text(en, "펫 숨기기", "Hide pet"),
+        true,
+        None::<&str>,
+    )?;
+    let panel = MenuItem::with_id(
+        app,
+        "petmenu:panel",
+        text(en, "사용량 패널 열기/닫기", "Open/close usage panel"),
+        true,
+        None::<&str>,
+    )?;
     // 켜는 순간 펫이 마우스를 받지 않으므로 이 메뉴로는 다시 끌 수 없다 → 해제는 트레이에서
     let ct = CheckMenuItem::with_id(
         app,
         "petmenu:clickthrough",
-        "클릭 통과 모드",
+        text(en, "클릭 통과 모드", "Click-through mode"),
         true,
         click_through,
         None::<&str>,
     )?;
     let accounts = accounts_submenu(app, "petmenu:")?;
-    let studio = MenuItem::with_id(app, "petmenu:studio", "캐릭터 스튜디오…", true, None::<&str>)?;
-    let settings_item = MenuItem::with_id(app, "petmenu:settings", "설정…", true, None::<&str>)?;
+    let studio = MenuItem::with_id(
+        app,
+        "petmenu:studio",
+        text(en, "캐릭터 스튜디오…", "Character Studio…"),
+        true,
+        None::<&str>,
+    )?;
+    let settings_item = MenuItem::with_id(
+        app,
+        "petmenu:settings",
+        text(en, "설정…", "Settings…"),
+        true,
+        None::<&str>,
+    )?;
     let sep = PredefinedMenuItem::separator(app)?;
-    let quit = MenuItem::with_id(app, "petmenu:quit", "종료", true, None::<&str>)?;
+    let quit = MenuItem::with_id(
+        app,
+        "petmenu:quit",
+        text(en, "종료", "Quit"),
+        true,
+        None::<&str>,
+    )?;
     let menu = Menu::with_items(
         app,
         &[&hide, &panel, &accounts, &ct, &studio, &settings_item, &sep, &quit],

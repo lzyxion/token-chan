@@ -27,6 +27,7 @@ import {
   fmtCost,
   fmtRemaining,
   fmtTokens,
+  meterLabel,
   meterLevel,
   resetIsStale,
   retentionLabel,
@@ -39,6 +40,7 @@ import {
   type AlertThresholds,
   type Currency,
 } from "../format";
+import { useI18n } from "../i18n";
 import type { ContextState, DailyDetail, PlanMeter, PlanUsage, Source, SourceSummary } from "../types";
 import "./panel.css";
 
@@ -68,6 +70,7 @@ function MeterRow({
   computed?: boolean;
   title?: string;
 }) {
+  const { language, t } = useI18n();
   return (
     <div className="vendor-row" title={title}>
       <span className="vendor-key">{label}</span>
@@ -80,9 +83,9 @@ function MeterRow({
           그냥 비우면 왜 사라졌는지 알 수 없고, "0분" 은 지금 막 리셋된다는 거짓말이다. */}
       <span className={`vendor-reset${stale ? " stale" : ""}`}>
         {resetAt
-          ? `${computed ? "~" : ""}${fmtRemaining(resetAt)}`
+          ? `${computed ? "~" : ""}${fmtRemaining(resetAt, language)}`
           : stale
-            ? "낡음"
+            ? t("낡음", "Stale")
             : (aside ?? "")}
       </span>
     </div>
@@ -129,6 +132,7 @@ function VendorCard({
   currency: Currency;
   thresholds: AlertThresholds;
 }) {
+  const { language, t } = useI18n();
   const total = totalOf(s.today);
   const pct = context ? Math.round(context.used_pct) : null;
   const showsContext = pct != null && context != null;
@@ -158,12 +162,12 @@ function VendorCard({
       </div>
       {showsContext && (
         <MeterRow
-          label="컨텍스트"
+          label={t("컨텍스트", "Context")}
           pct={pct}
           danger={thresholds.context}
           aside={fmtTokens(context.tokens).replace(/\.0([KMB])$/, "$1")}
-          title={`${context.tokens.toLocaleString()} / ${context.window.toLocaleString()} 토큰${
-            context.interim ? " (정리 중)" : ""
+          title={`${context.tokens.toLocaleString()} / ${context.window.toLocaleString()} ${t("토큰", "tokens")}${
+            context.interim ? t(" (정리 중)", " (finalizing)") : ""
           }`}
         />
       )}
@@ -171,7 +175,7 @@ function VendorCard({
       {meters.map((m) => (
         <MeterRow
           key={m.label}
-          label={m.label}
+          label={meterLabel(m.label, language)}
           pct={m.used_pct}
           danger={thresholds.plan}
           resetAt={meterReset(m)}
@@ -180,26 +184,28 @@ function VendorCard({
           title={
             m.resets_at
               ? meterIsStale(m)
-                ? `${new Date(m.resets_at).toLocaleString()} 에 리셋됐어야 하는데 값이 그대로다` +
-                  ` — CLI 가 캐시를 갱신하지 않았고, 활동이 끊겨 계산으로도 메울 수 없다` +
-                  (plan ? ` (받아온 시각 ${new Date(plan.fetched_at).toLocaleString()})` : "")
+                ? t(
+                    `${new Date(m.resets_at).toLocaleString()} 에 리셋됐어야 하는데 값이 그대로다 — CLI 가 캐시를 갱신하지 않았고, 활동이 끊겨 계산으로도 메울 수 없다${plan ? ` (받아온 시각 ${new Date(plan.fetched_at).toLocaleString()})` : ""}`,
+                    `This value should have reset at ${new Date(m.resets_at).toLocaleString()}, but the CLI cache was not refreshed and there is not enough recent activity to estimate it${plan ? ` (fetched ${new Date(plan.fetched_at).toLocaleString()})` : ""}`,
+                  )
                 : m.resets_computed
-                  ? `${new Date(m.resets_at).toLocaleString()} — 공식 캐시가 굳어(${
-                      plan ? new Date(plan.fetched_at).toLocaleString() : "?"
-                    } 이후 정지) 트랜스크립트에서 계산한 값이다. 왼쪽 %는 여전히 옛 창의 것이라 실제보다 높다`
+                  ? t(
+                      `${new Date(m.resets_at).toLocaleString()} — 공식 캐시가 굳어(${plan ? new Date(plan.fetched_at).toLocaleString() : "?"} 이후 정지) 트랜스크립트에서 계산한 값이다. 왼쪽 %는 여전히 옛 창의 것이라 실제보다 높다`,
+                      `${new Date(m.resets_at).toLocaleString()} — estimated from transcripts because the official cache stopped updating after ${plan ? new Date(plan.fetched_at).toLocaleString() : "?"}. The percentage still belongs to the previous window and may be too high.`,
+                    )
                   : new Date(m.resets_at).toLocaleString()
               : ""
           }
         />
       ))}
       {resetCredits && resetCredits.available_count > 0 && (
-        <div className={`vendor-reset-credits ${resetExpiry?.tone ?? "neutral"}`} title={resetCredits.expires_at ? `가장 이른 만료: ${new Date(resetCredits.expires_at).toLocaleString()}` : "만료 시각 정보 없음"}>
-          <span className="vendor-key">리셋권</span>
+        <div className={`vendor-reset-credits ${resetExpiry?.tone ?? "neutral"}`} title={resetCredits.expires_at ? t(`가장 이른 만료: ${new Date(resetCredits.expires_at).toLocaleString()}`, `Earliest expiry: ${new Date(resetCredits.expires_at).toLocaleString()}`) : t("만료 시각 정보 없음", "Expiry time unavailable")}>
+          <span className="vendor-key">{t("리셋권", "Resets")}</span>
           <span className="reset-credit-track">
             <i style={{ width: `${resetExpiry?.pct ?? 0}%` }} />
           </span>
           <span className="reset-credit-days">{resetExpiry ? `D-${resetExpiry.days}` : "—"}</span>
-          <b>{resetCredits.available_count}개</b>
+          <b>{resetCredits.available_count}{t("개", "")}</b>
         </div>
       )}
       {/* 한도 미터가 없어도 아무 말도 안 한다. 예전엔 "공식 한도 없음" 을 적었는데,
@@ -224,7 +230,12 @@ const SHORT_VENDOR: Record<Source, string> = {
   antigravity: "AGY",
 };
 
-const PAGE_TITLES = ["현황", "최근 세션", "통계·사용량", "사용 기록"];
+const PAGE_TITLES = [
+  ["현황", "Overview"],
+  ["최근 세션", "Recent sessions"],
+  ["통계·사용량", "Stats & usage"],
+  ["사용 기록", "Activity history"],
+] as const;
 const PAGE = { STATUS: 0, SESSIONS: 1, STATS: 2, HISTORY: 3 } as const;
 
 function localMonthDay(iso: string): string {
@@ -245,6 +256,7 @@ function resetCreditExpiry(credit: NonNullable<PlanUsage["reset_credits"]>) {
 
 /** 독립 창으로 뜨는 사용량 패널 — 펫 우클릭 또는 트레이 메뉴로 토글 */
 export default function UsagePanel() {
+  const { language, t } = useI18n();
   const summary = useSummary();
   const live = useLive();
   const plans = usePlans();
@@ -282,7 +294,7 @@ export default function UsagePanel() {
       <div className="panel-root">
         <ResizeGrips />
         <div className="card">
-          <div className="loading">사용량 스캔 중…</div>
+          <div className="loading">{t("사용량 스캔 중…", "Scanning usage…")}</div>
         </div>
       </div>
     );
@@ -374,7 +386,7 @@ export default function UsagePanel() {
     >
       {options.map((d) => (
         <option key={d} value={d}>
-          {retentionLabel(d)}
+          {retentionLabel(d, language)}
         </option>
       ))}
     </select>
@@ -387,7 +399,7 @@ export default function UsagePanel() {
         {/* 닫기는 드래그 영역(.head) 밖 — 헤더 안에 두면 드래그와 클릭이 얽힌다 */}
         <button
           className="panel-close"
-          title="닫기 (Esc)"
+          title={t("닫기 (Esc)", "Close (Esc)")}
           onClick={() => void getCurrentWindow().hide()}
         >
           ✕
@@ -395,7 +407,7 @@ export default function UsagePanel() {
         {/* 비용은 통계 페이지의 토큰 총합 옆으로 옮겼다 — 헤더에 두면 어느 페이지에서든
             떠 있어서 벤더별 비용과 헷갈린다 */}
         <div className="head" data-tauri-drag-region="deep">
-          <span className="title">{PAGE_TITLES[page]}</span>
+          <span className="title">{PAGE_TITLES[page][language === "en" ? 1 : 0]}</span>
           <span className="date">{summary.today_date.slice(5).replace("-", "/")}</span>
         </div>
 
@@ -403,7 +415,7 @@ export default function UsagePanel() {
           {page === PAGE.STATUS && (
             <>
               <div className="today-overview">
-                <span className="today-overview-label">오늘 누적</span>
+                <span className="today-overview-label">{t("오늘 누적", "Today")}</span>
                 <div className="today-overview-values">
                   <span className="today-overview-tokens">{fmtTokens(totalOf(summary.today))}</span>
                   <span className="today-overview-cost">
@@ -411,8 +423,8 @@ export default function UsagePanel() {
                   </span>
                 </div>
                 <span className="today-trend-label">
-                  최근 7일 토큰
-                  {todayDelta != null && ` · 평균 대비 ${todayDelta >= 0 ? "+" : ""}${todayDelta}%`}
+                  {t("최근 7일 토큰", "Tokens · last 7 days")}
+                  {todayDelta != null && t(` · 평균 대비 ${todayDelta >= 0 ? "+" : ""}${todayDelta}%`, ` · ${todayDelta >= 0 ? "+" : ""}${todayDelta}% vs avg`)}
                 </span>
                 <ModelToday models={shownModels} />
               </div>
@@ -455,11 +467,11 @@ export default function UsagePanel() {
                     aria-selected={tab === "all"}
                     className={tab === "all" ? "on" : ""}
                     onClick={() => setTab("all")}
-                    title="전체"
+                    title={t("전체", "All")}
                   >
                     {/* 벤더 탭과 같은 요소로 감싼다 — 라벨 처리(말줄임)를 한 규칙이
                         맡게 하려면 맨 텍스트로 두면 안 된다. */}
-                    <span className="vtab-name">전체</span>
+                    <span className="vtab-name">{t("전체", "All")}</span>
                   </button>
                   {vendorTabs.map((v) => (
                     <button
@@ -480,39 +492,39 @@ export default function UsagePanel() {
               {tab === "all" ? (
                 <div className="overall-total">
                   <div className="overall-total-head">
-                    <span className="overall-total-label">전체 사용량</span>
+                    <span className="overall-total-label">{t("전체 사용량", "Total usage")}</span>
                     {periodSelect}
                   </div>
                   <div className="overall-total-values">
                     <span className="overall-total-tokens">{fmtTokens(periodTotal)}</span>
                     <span className="overall-total-cost">{fmtCost(periodCost, false, currency)}</span>
                   </div>
-                  <span className="overall-total-recorded">기록 {recorded}일</span>
+                  <span className="overall-total-recorded">{t(`기록 ${recorded}일`, `${recorded} recorded days`)}</span>
                 </div>
               ) : picked ? (
                 <div className="overall-total">
                   <div className="overall-total-head">
-                    <span className="overall-total-label">{SOURCE_LABEL[picked.source]} 사용량</span>
+                    <span className="overall-total-label">{SOURCE_LABEL[picked.source]} {t("사용량", "usage")}</span>
                     {periodSelect}
                   </div>
                   <div className="overall-total-values">
                     <span className="overall-total-tokens">{fmtTokens(totalOf(picked.period))}</span>
                     <span className="overall-total-cost">{fmtCost(picked.period_cost, false, currency)}</span>
                   </div>
-                  <span className="overall-total-recorded">기록 {recorded}일</span>
+                  <span className="overall-total-recorded">{t(`기록 ${recorded}일`, `${recorded} recorded days`)}</span>
                 </div>
               ) : null}
 
               {tab === "all" && priorAverageCost != null && (
                 <div className="chart-block">
-                  <div className="chart-title">비용 페이스</div>
+                  <div className="chart-title">{t("비용 페이스", "Cost pace")}</div>
                   <div className="cost-pace">
                     <div className="cost-pace-item">
-                      <span>최근 {priorDays.length}일 일평균</span>
+                      <span>{t(`최근 ${priorDays.length}일 일평균`, `${priorDays.length}-day daily average`)}</span>
                       <b>{fmtCost(priorAverageCost, false, currency)}</b>
                     </div>
                     <div className="cost-pace-item">
-                      <span>30일 환산</span>
+                      <span>{t("30일 환산", "30-day projection")}</span>
                       <b>{fmtCost(priorAverageCost * 30, false, currency)}</b>
                     </div>
                   </div>
@@ -523,7 +535,7 @@ export default function UsagePanel() {
                   내려간다. 이 줄은 벤더 상세로 들어가는 문이기도 하다. */}
               {tab === "all" && vendorTabs.length > 1 && (
                 <div className="chart-block">
-                  <div className="chart-title">벤더별 비용 · {recorded}일</div>
+                  <div className="chart-title">{t(`벤더별 비용 · ${recorded}일`, `Cost by provider · ${recorded} days`)}</div>
                   <VendorShare
                     sources={vendorTabs}
                     currency={currency}
@@ -537,14 +549,14 @@ export default function UsagePanel() {
                 <>
                   {shownPeriodModels.some((m) => m.cost_known) && (
                     <div className="chart-block">
-                      <div className="chart-title">모델별 비용 · {recorded}일</div>
+                      <div className="chart-title">{t(`모델별 비용 · ${recorded}일`, `Cost by model · ${recorded} days`)}</div>
                       <ModelMix models={shownPeriodModels} basis="cost" currency={currency} />
                     </div>
                   )}
                   <div className="cost-analysis">
-                    <div className="chart-title">비용 분석 · {recorded}일</div>
+                    <div className="chart-title">{t(`비용 분석 · ${recorded}일`, `Cost analysis · ${recorded} days`)}</div>
                     <div className="cost-analysis-section">
-                      <span className="cost-analysis-title">항목별 비용</span>
+                      <span className="cost-analysis-title">{t("항목별 비용", "Cost by token type")}</span>
                       <CostBreakdown
                         totals={picked.period}
                         parts={picked.period_parts ?? EMPTY_PARTS}
@@ -552,7 +564,7 @@ export default function UsagePanel() {
                       />
                     </div>
                     <div className="cost-analysis-section">
-                      <span className="cost-analysis-title">캐시 효율</span>
+                      <span className="cost-analysis-title">{t("캐시 효율", "Cache efficiency")}</span>
                       <Efficiency
                         totals={picked.period}
                         parts={picked.period_parts ?? EMPTY_PARTS}
@@ -565,7 +577,7 @@ export default function UsagePanel() {
 
               {tab === "all" && (
               <div className="chart-block">
-                <div className="chart-title">모델별 토큰 · 최근 7일</div>
+                <div className="chart-title">{t("모델별 토큰 · 최근 7일", "Tokens by model · last 7 days")}</div>
                 <WeekBars
                   daily={summary.daily}
                   weekModels={summary.week_models ?? []}
@@ -583,7 +595,7 @@ export default function UsagePanel() {
           {page === PAGE.SESSIONS && (
             <div className="sessions">
               {summary.sessions.length === 0 ? (
-                <div className="empty-hint">최근 세션이 없습니다</div>
+                <div className="empty-hint">{t("최근 세션이 없습니다", "No recent sessions")}</div>
               ) : (
                 summary.sessions.map((r) => {
                   const active = runningKeys.has(`${r.source}:${r.id}`);
@@ -593,7 +605,7 @@ export default function UsagePanel() {
                           한 세션만 돌아도 그 벤더의 지난 세션까지 전부 깜빡였다 */}
                       <VendorIcon source={r.source} size={12} className={active ? "busy" : ""} />
                       <span className="session-label">{r.label}</span>
-                      <span className="session-ago">{fmtAgo(r.at)}</span>
+                      <span className="session-ago">{fmtAgo(r.at, language)}</span>
                       <span className="session-meta">
                         {shortModel(r.model)}
                         {r.branch && ` · ${r.branch}`}
@@ -610,26 +622,26 @@ export default function UsagePanel() {
             <div className="history-page">
               <div className="history-summary">
                 <div className="history-summary-head">
-                  <span className="history-summary-label">활동 요약</span>
+                  <span className="history-summary-label">{t("활동 요약", "Activity summary")}</span>
                   <div className="history-period">
                     {periodSelect}
                   </div>
                 </div>
                 <div className="history-summary-items">
                   <span>
-                    <i>기록 시작</i>
+                    <i>{t("기록 시작", "First record")}</i>
                     <b>{summary.first_event_ts ? localMonthDay(summary.first_event_ts) : "—"}</b>
                   </span>
                   <span>
-                    <i>활동일</i>
-                    <b>{activeHistoryDays.length}일</b>
+                    <i>{t("활동일", "Active days")}</i>
+                    <b>{activeHistoryDays.length}{t("일", "")}</b>
                   </span>
                   <span>
-                    <i>연속</i>
-                    <b>{currentStreak}일</b>
+                    <i>{t("연속", "Streak")}</i>
+                    <b>{currentStreak}{t("일", " days")}</b>
                   </span>
                   <span>
-                    <i>최다 사용</i>
+                    <i>{t("최다 사용", "Busiest")}</i>
                     <b>{busiestHistoryDay ? busiestHistoryDay.date.slice(5) : "—"}</b>
                   </span>
                 </div>
@@ -647,7 +659,7 @@ export default function UsagePanel() {
                   {selectedHistoryDetail && selectedHistoryTotal && (
                     <div className="history-day-detail">
                       <div className="history-day-head">
-                        <span>선택한 날짜</span>
+                        <span>{t("선택한 날짜", "Selected date")}</span>
                         <b>{selectedHistoryDetail.date}</b>
                       </div>
                       <div className="history-day-total">
@@ -668,7 +680,7 @@ export default function UsagePanel() {
                       )}
                       {selectedHistoryDetail.models.length > 0 && (
                         <div className="history-day-models">
-                          <span className="history-day-models-title">모델별 토큰</span>
+                          <span className="history-day-models-title">{t("모델별 토큰", "Tokens by model")}</span>
                           <ModelMix models={selectedHistoryDetail.models} basis="tokens" currency={currency} />
                         </div>
                       )}
@@ -676,27 +688,27 @@ export default function UsagePanel() {
                   )}
                 </>
               ) : (
-                <div className="empty-hint">사용 기록은 최근 28일 이상에서 볼 수 있습니다</div>
+                <div className="empty-hint">{t("사용 기록은 최근 28일 이상에서 볼 수 있습니다", "Activity history requires a period of at least 28 days")}</div>
               )}
             </div>
           )}
         </div>
 
         <div className="page-nav">
-          <button className="nav-btn" onClick={prev} title="이전">
+          <button className="nav-btn" onClick={prev} title={t("이전", "Previous")}>
             ◀
           </button>
           <div className="dots">
-            {PAGE_TITLES.map((t, i) => (
+            {PAGE_TITLES.map((title, i) => (
               <button
-                key={t}
+                key={title[0]}
                 className={`dot-btn ${i === page ? "on" : ""}`}
                 onClick={() => setPage(i)}
-                title={t}
+                title={title[language === "en" ? 1 : 0]}
               />
             ))}
           </div>
-          <button className="nav-btn" onClick={next} title="다음">
+          <button className="nav-btn" onClick={next} title={t("다음", "Next")}>
             ▶
           </button>
         </div>

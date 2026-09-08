@@ -7,6 +7,8 @@ import type {
   Source,
   Totals,
 } from "./types";
+import type { Language } from "./i18n";
+import { tr } from "./i18n";
 
 /** 다루는 소스 전부 — 화면에 늘어놓는 순서이기도 하다 (설정의 홈 목록·게이지 순환).
  *  목록을 화면마다 따로 들면 벤더를 추가할 때 한 곳이 조용히 빠진다. */
@@ -27,11 +29,13 @@ export function defaultFill(style: GaugeStyle): Exclude<GaugeFill, "auto"> {
 }
 
 /** 채움 방향 → 설정 화면 표기 */
-export const GAUGE_FILL_LABEL: Record<GaugeFill, string> = {
-  auto: "기본값",
-  used: "사용량",
-  left: "잔여량",
-};
+export function gaugeFillLabel(fill: GaugeFill, language: Language): string {
+  return {
+    auto: tr(language, "기본값", "Default"),
+    used: tr(language, "사용량", "Used"),
+    left: tr(language, "잔여량", "Remaining"),
+  }[fill];
+}
 
 /** 모르는 값을 `auto` 로 떨어뜨린다 (`gaugeStyleOf` 와 같은 이유) */
 export function gaugeFillOf(v: unknown): GaugeFill {
@@ -42,11 +46,13 @@ export function gaugeFillOf(v: unknown): GaugeFill {
  *  첫 항목이 기본값이다. */
 export const GAUGE_LABEL_SHOWS: GaugeLabelShow[] = ["hover", "busy", "always"];
 
-export const GAUGE_LABEL_SHOW_LABEL: Record<GaugeLabelShow, string> = {
-  hover: "마우스를 올렸을 때",
-  busy: "작업 중에는 계속",
-  always: "항상",
-};
+export function gaugeLabelShowLabel(show: GaugeLabelShow, language: Language): string {
+  return {
+    hover: tr(language, "마우스를 올렸을 때", "On hover"),
+    busy: tr(language, "작업 중에는 계속", "While working"),
+    always: tr(language, "항상", "Always"),
+  }[show];
+}
 
 /** 모르는 값을 `hover` 로 떨어뜨린다 (`gaugeFillOf` 와 같은 이유) */
 export function gaugeLabelShowOf(v: unknown): GaugeLabelShow {
@@ -79,11 +85,13 @@ export function fillsRemaining(style: GaugeStyle, pref: unknown = "auto"): boole
 }
 
 /** 게이지 모양 → 설정 화면 표기 */
-export const GAUGE_STYLE_LABEL: Record<GaugeStyle, string> = {
-  ring: "도넛 링",
-  bar: "HP 바 (RPG)",
-  orb: "물방울",
-};
+export function gaugeStyleLabel(style: GaugeStyle, language: Language): string {
+  return {
+    ring: tr(language, "도넛 링", "Donut ring"),
+    bar: tr(language, "HP 바 (RPG)", "HP bar (RPG)"),
+    orb: tr(language, "물방울", "Water orb"),
+  }[style];
+}
 
 /**
  * 모르는 값을 기본 모양으로 떨어뜨린다. 설정 파일은 사람이 고치는 JSON 이고, 옛
@@ -126,8 +134,8 @@ export const RETENTION_OPTIONS = [7, 30, 90, 0] as const;
 export const DEFAULT_RETENTION_DAYS = 90;
 
 /** 조회 기간 → 화면 표기 */
-export function retentionLabel(days: number): string {
-  return days === 0 ? "전체" : `최근 ${days}일`;
+export function retentionLabel(days: number, language: Language = "en"): string {
+  return days === 0 ? tr(language, "전체", "All time") : tr(language, `최근 ${days}일`, `Last ${days} days`);
 }
 
 /**
@@ -332,17 +340,21 @@ export function fmtMinutes(min: number): string {
  * 끝난다 — 초를 버리면 거의 모든 턴이 "0분"이 된다.
  * 말풍선에 들어가는 값이라 폭보다 읽기 쉬움을 택해 단위를 한글로 쓴다.
  */
-export function fmtDuration(sec: number): string {
+export function fmtDuration(sec: number, language: Language = "en"): string {
   const total = Math.max(0, Math.round(sec));
-  if (total < 60) return `${total}초`;
+  if (total < 60) return tr(language, `${total}초`, `${total}s`);
   const min = Math.floor(total / 60);
   if (min < 60) {
     const s = total % 60;
-    return s ? `${min}분 ${s}초` : `${min}분`;
+    return s
+      ? tr(language, `${min}분 ${s}초`, `${min}m ${s}s`)
+      : tr(language, `${min}분`, `${min}m`);
   }
   const h = Math.floor(min / 60);
   const m = min % 60;
-  return m ? `${h}시간 ${m}분` : `${h}시간`;
+  return m
+    ? tr(language, `${h}시간 ${m}분`, `${h}h ${m}m`)
+    : tr(language, `${h}시간`, `${h}h`);
 }
 
 /**
@@ -368,34 +380,56 @@ export function resetIsStale(target: Date, now: Date = new Date()): boolean {
  * 리셋까지 남은 시간 — 절대 시각(`9/10 10:46`)보다 행동에 가깝고 폭도 절반이라
  * 좁은 카드에 들어간다. 창 길이가 5시간부터 30일까지라 단위를 눈금에 맞춰 바꾼다.
  */
-export function fmtRemaining(target: Date, now: Date = new Date()): string {
+export function fmtRemaining(
+  target: Date,
+  language: Language = "en",
+  now: Date = new Date(),
+): string {
   const min = Math.max(0, Math.round((target.getTime() - now.getTime()) / 60000));
-  if (min < 60) return `${min}분`;
+  if (min < 60) return tr(language, `${min}분`, `${min}m`);
   const h = Math.floor(min / 60);
   if (h < 24) {
     const m = min % 60;
-    return m ? `${h}시간 ${m}분` : `${h}시간`;
+    return m
+      ? tr(language, `${h}시간 ${m}분`, `${h}h ${m}m`)
+      : tr(language, `${h}시간`, `${h}h`);
   }
   const d = Math.floor(h / 24);
   const rh = h % 24;
   // 일 단위가 커지면 시간은 노이즈다 (월간 창에서 "29일 3시간"은 읽을 이유가 없다)
-  if (d >= 7 || !rh) return `${d}일`;
-  return `${d}일 ${rh}시간`;
+  if (d >= 7 || !rh) return tr(language, `${d}일`, `${d}d`);
+  return tr(language, `${d}일 ${rh}시간`, `${d}d ${rh}h`);
 }
 
 /** 얼마나 지났는지 — 세션 로그는 "언제였나"보다 "얼마나 전인가"가 읽기 쉽다 */
-export function fmtAgo(at: string, now: Date = new Date()): string {
+export function fmtAgo(at: string, language: Language = "en", now: Date = new Date()): string {
   const d = new Date(at);
   const min = Math.floor((now.getTime() - d.getTime()) / 60000);
-  if (min < 1) return "방금";
-  if (min < 60) return `${min}분 전`;
+  if (min < 1) return tr(language, "방금", "Just now");
+  if (min < 60) return tr(language, `${min}분 전`, `${min}m ago`);
   const h = Math.floor(min / 60);
-  if (h < 24) return `${h}시간 전`;
+  if (h < 24) return tr(language, `${h}시간 전`, `${h}h ago`);
   // 하루가 넘어가면 상대 표기가 오히려 헷갈린다 ("3일 전"이 며칠인지 세게 됨)
   const days = Math.floor(h / 24);
-  if (days === 1) return "어제";
-  if (days < 7) return `${days}일 전`;
+  if (days === 1) return tr(language, "어제", "Yesterday");
+  if (days < 7) return tr(language, `${days}일 전`, `${days}d ago`);
   return `${d.getMonth() + 1}/${d.getDate()}`;
+}
+
+/** usage-core가 보내는 한국어 한도 라벨을 영어 UI에서만 번역한다. */
+export function meterLabel(label: string, language: Language): string {
+  if (language === "ko") return label;
+  return label
+    .replace(/^5시간/, "5-hour")
+    .replace(/^1시간/, "1-hour")
+    .replace(/^일간/, "Daily")
+    .replace(/^주간/, "Weekly")
+    .replace(/^월간/, "Monthly")
+    .replace(/^(\d+)주/, "$1-week")
+    .replace(/^(\d+)일/, "$1-day")
+    .replace(/^(\d+)시간/, "$1-hour")
+    .replace(/^(\d+)분/, "$1-minute")
+    .replace(/^한도/, "Limit");
 }
 
 /** 모델 ID를 짧은 표시명으로 (claude-opus-4-8 → opus-4-8) */

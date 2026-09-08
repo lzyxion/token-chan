@@ -268,6 +268,8 @@ export type PetState =
 
 /** Rust settings::Settings (serde camelCase) */
 export interface AppSettings {
+  /** 화면 언어. 알 수 없는 값은 영어로 처리한다. */
+  language: "ko" | "en";
   petPos: [number, number] | null;
   retentionDays: number;
   /** 공식 한도 경고 임계값 (0..1) — 5시간·주간·월간을 가리지 않고 모두 이 값 */

@@ -27,13 +27,21 @@ const PLAN_INTERVAL: Duration = Duration::from_secs(30);
 const RECENT_SESSIONS: usize = 8;
 
 /// 리셋 임박 기본 문구 — 프론트 speech.ts `DEFAULT_LINES.resetNotify` 와 동일하게 유지.
-/// 여기서 치환하는 변수는 `{분}`·`{시각}` 뿐이다.
-const DEFAULT_RESET_NOTIFY: &[&str] = &[
+/// 한국어 변수(`{분}`·`{시각}`)와 영문 별칭(`{minutes}`·`{time}`)을 모두 치환한다.
+const DEFAULT_RESET_NOTIFY_KO: &[&str] = &[
     "{분}분 뒤에 블록이 리셋돼! ({시각})",
     "{분}분만 버티면 리셋이야 ({시각})",
     "곧 리셋! {시각}에 새 블록이 열려",
     "{시각} 리셋까지 {분}분 남았어",
     "리셋 임박! {분}분 뒤에 충전돼 ({시각})",
+];
+
+const DEFAULT_RESET_NOTIFY_EN: &[&str] = &[
+    "This window resets in {minutes}m! ({time})",
+    "Just {minutes}m until the reset ({time})",
+    "Reset soon! A new window opens at {time}.",
+    "{minutes}m left until the {time} reset.",
+    "Reset approaching! Recharged in {minutes}m ({time}).",
 ];
 
 /// 설정의 추가 스캔 경로
@@ -266,7 +274,7 @@ fn spawn_plan_thread(app: AppHandle) {
                 // 리셋 임박 — OS 알림 대신 캐릭터가 직접 말한다.
                 // 문구는 활성 캐릭터 팩의 speech.json → 기본 문구 → 내장 순
                 // (대사는 캐릭터의 속성 — 프론트 Pet 의 폴백 체인과 동일 규칙)
-                let (notify_min, custom_lines) = {
+                let (notify_min, custom_lines, language) = {
                     let state = app.state::<AppState>();
                     let model = state
                         .summary
@@ -301,7 +309,7 @@ fn spawn_plan_thread(app: AppHandle) {
                         .and_then(|mut sp| sp.remove("resetNotify"))
                         .filter(|v| v.iter().any(|l| !l.trim().is_empty()));
                     let lines = pack_lines.or_else(|| s.speech_lines.get("resetNotify").cloned());
-                    (s.reset_notify_minutes, lines)
+                    (s.reset_notify_minutes, lines, s.language.clone())
                 };
                 if notify_min > 0 {
                     // 첫 미터 = 가장 짧은 창 = 지금 당장 걸리는 한도
@@ -324,7 +332,12 @@ fn spawn_plan_thread(app: AppHandle) {
                                 .filter(|l| !l.is_empty())
                                 .collect();
                             let lines = if lines.is_empty() {
-                                DEFAULT_RESET_NOTIFY.iter().map(|l| l.to_string()).collect()
+                                let defaults = if language == "en" {
+                                    DEFAULT_RESET_NOTIFY_EN
+                                } else {
+                                    DEFAULT_RESET_NOTIFY_KO
+                                };
+                                defaults.iter().map(|l| l.to_string()).collect()
                             } else {
                                 lines
                             };
@@ -332,7 +345,9 @@ fn spawn_plan_thread(app: AppHandle) {
                             last_notify_line = Some(template.clone());
                             let text = template
                                 .replace("{분}", &remain.num_minutes().max(1).to_string())
+                                .replace("{minutes}", &remain.num_minutes().max(1).to_string())
                                 .replace("{시각}", &reset.format("%H:%M").to_string())
+                                .replace("{time}", &reset.format("%H:%M").to_string())
                                 .replace('|', "\n");
                             crate::commands::show_speech(app.clone(), text);
                         }

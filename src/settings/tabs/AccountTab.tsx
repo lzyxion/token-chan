@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import type { Account, AppSettings, PlanUsage } from "../../types";
 import { SOURCE_LABEL, SOURCES } from "../../format";
 import VendorIcon from "../../components/VendorIcon";
+import { useI18n } from "../../i18n";
 
 interface Props {
   s: AppSettings;
@@ -15,11 +16,22 @@ interface Props {
 
 /** 계정 — 연결된 계정 켜고 끄기·추가 홈 경로·공식 플랜 */
 export default function AccountTab({ s, accounts, plans, rescanning, setRescanning }: Props) {
+  const { language, t } = useI18n();
+  const accountDetail = (detail: string) => {
+    if (language !== "en") return detail;
+    return {
+      "Claude 로그인": "Claude sign-in",
+      "ChatGPT 로그인": "ChatGPT sign-in",
+      "Google 로그인": "Google sign-in",
+      "로그에 로그인 기록 없음": "No sign-in record in logs",
+      "계정 정보 없음": "Account information unavailable",
+    }[detail] ?? detail;
+  };
   return (
     <>
         <div className="settings-group">
           <div className="settings-label row">
-            연결된 계정
+            {t("연결된 계정", "Connected accounts")}
             <button
               className="settings-btn"
               disabled={rescanning}
@@ -27,18 +39,17 @@ export default function AccountTab({ s, accounts, plans, rescanning, setRescanni
                 setRescanning(true);
                 void invoke("rescan_accounts");
               }}
-              title="표준 위치 + 마커 스캔 + WSL 배포판을 다시 훑습니다"
+              title={t("표준 위치 + 마커 스캔 + WSL 배포판을 다시 훑습니다", "Rescan standard locations, marker matches, and WSL distributions")}
             >
-              {rescanning ? "검색 중…" : "다시 검색"}
+              {rescanning ? t("검색 중…", "Scanning…") : t("다시 검색", "Rescan")}
             </button>
           </div>
 
           {accounts == null ? (
-            <div className="settings-hint">불러오는 중…</div>
+            <div className="settings-hint">{t("불러오는 중…", "Loading…")}</div>
           ) : accounts.length === 0 ? (
             <div className="settings-hint">
-              발견된 계정이 없습니다. CLI 를 한 번도 실행하지 않았거나, 홈이 표준
-              위치 밖에 있을 수 있습니다 — 아래에서 홈을 직접 추가해 보세요.
+              {t("발견된 계정이 없습니다. CLI를 한 번도 실행하지 않았거나, 홈이 표준 위치 밖에 있을 수 있습니다 — 아래에서 홈을 직접 추가해 보세요.", "No accounts were found. The CLI may not have been run yet, or its home may be outside the standard location. Add the home directory below.")}
             </div>
           ) : (
             accounts.map((a) => {
@@ -89,9 +100,10 @@ export default function AccountTab({ s, accounts, plans, rescanning, setRescanni
                       <span
                         className="account-badge warn"
                         title={
-                          `${a.wsl_distro} 안의 계정입니다. 켜면 사용량을 읽으려고 이 배포판의 ` +
-                          `파일을 몇 초마다 열어야 해서, wsl --shutdown 으로 꺼도 곧 다시 켜집니다. ` +
-                          `그래서 기본적으로 집계에서 빠집니다 — WSL 을 잠재워 두려면 꺼 두세요.`
+                          t(
+                            `${a.wsl_distro} 안의 계정입니다. 켜면 사용량을 읽으려고 이 배포판의 파일을 몇 초마다 열어야 해서, wsl --shutdown으로 꺼도 곧 다시 켜집니다. 그래서 기본적으로 집계에서 빠집니다 — WSL을 잠재워 두려면 꺼 두세요.`,
+                            `This account is inside ${a.wsl_distro}. When enabled, TokenChan reads its files every few seconds, which can restart the distribution after wsl --shutdown. It is excluded by default; leave it off to keep WSL asleep.`,
+                          )
                         }
                       >
                         WSL: {a.wsl_distro}
@@ -102,9 +114,9 @@ export default function AccountTab({ s, accounts, plans, rescanning, setRescanni
                     {!a.standard && (
                       <span
                         className="account-badge warn"
-                        title="표준 위치가 아니라 마커 스캔으로만 발견됐습니다. 오래된 백업일 수 있어 기본적으로 집계에서 빠집니다."
+                        title={t("표준 위치가 아니라 마커 스캔으로만 발견됐습니다. 오래된 백업일 수 있어 기본적으로 집계에서 빠집니다.", "Found only by marker scan, not in a standard location. It may be an old backup, so it is excluded by default.")}
                       >
-                        스캔으로 발견
+                        {t("스캔으로 발견", "Scanned")}
                       </span>
                     )}
                     {planText && (
@@ -112,12 +124,12 @@ export default function AccountTab({ s, accounts, plans, rescanning, setRescanni
                         className={`account-badge plan${ambiguous ? " dim" : ""}`}
                         title={
                           ambiguous
-                            ? "이 소스에 계정이 여럿이라 어느 계정의 플랜인지 구분할 수 없습니다 — CLI 가 지금 로그인된 계정 기준입니다."
+                            ? t("이 소스에 계정이 여럿이라 어느 계정의 플랜인지 구분할 수 없습니다 — CLI가 지금 로그인된 계정 기준입니다.", "This provider has multiple accounts, so the plan cannot be attributed to one account. It reflects the account currently signed in to the CLI.")
                             : a.plan
-                              ? "이 계정의 설정 파일에 적힌 플랜입니다."
+                              ? t("이 계정의 설정 파일에 적힌 플랜입니다.", "Plan reported by this account's configuration file.")
                               : fromSource
-                                ? "CLI 가 지금 로그인된 계정 기준입니다."
-                                : "Antigravity 는 플랜 구분이 없습니다."
+                                ? t("CLI가 지금 로그인된 계정 기준입니다.", "Based on the account currently signed in to the CLI.")
+                                : t("Antigravity는 플랜 구분이 없습니다.", "Antigravity does not expose plan tiers.")
                         }
                       >
                         {/* "?" 는 값이 아니라 **출처에 대한 표시**다 — 이 줄의 계정이
@@ -130,14 +142,14 @@ export default function AccountTab({ s, accounts, plans, rescanning, setRescanni
                     )}
                   </label>
 
-                  {a.detail && <div className="account-detail">{a.detail}</div>}
+                  {a.detail && <div className="account-detail">{accountDetail(a.detail)}</div>}
 
                   <div className="account-homes">
                     {a.installs.map((i) => (
                       <div className="account-home" key={i.home} title={i.home}>
                         <span className="account-home-path">{i.home}</span>
                         <span className="account-badge">
-                          {i.discovered ? "스캔" : "표준"}
+                          {i.discovered ? t("스캔", "Scanned") : t("표준", "Standard")}
                         </span>
                       </div>
                     ))}
@@ -149,11 +161,9 @@ export default function AccountTab({ s, accounts, plans, rescanning, setRescanni
         </div>
 
         <div className="settings-group">
-          <div className="settings-label">직접 추가한 홈</div>
+          <div className="settings-label">{t("직접 추가한 홈", "Manually added homes")}</div>
           <div className="settings-hint">
-            자동 탐지는 앱을 어떻게 띄웠는지에 좌우됩니다. 위 목록에 빠진 설치본이
-            있으면 홈을 직접 지정하세요 — Claude 는 <code>.claude</code> 를 담고 있는
-            폴더, Codex·Antigravity 는 홈 폴더 자체입니다.
+            {t("자동 탐지는 앱을 어떻게 띄웠는지에 좌우됩니다. 위 목록에 빠진 설치본이 있으면 홈을 직접 지정하세요 — Claude는", "Automatic discovery depends on how the app was launched. If an installation is missing above, specify its home manually. For Claude, choose the directory containing")} <code>.claude</code>{t("를 담고 있는 폴더, Codex·Antigravity는 홈 폴더 자체입니다.", "; for Codex and Antigravity, choose the home directory itself.")}
           </div>
 
           {SOURCES.map((src) => {
@@ -172,11 +182,11 @@ export default function AccountTab({ s, accounts, plans, rescanning, setRescanni
                     className="settings-btn"
                     onClick={() => void invoke("add_home", { source: src })}
                   >
-                    홈 추가…
+                    {t("홈 추가…", "Add home…")}
                   </button>
                 </div>
                 {list.filter((p) => p.trim()).length === 0 ? (
-                  <div className="home-empty">없음 (자동 탐지만 사용)</div>
+                  <div className="home-empty">{t("없음 (자동 탐지만 사용)", "None (automatic discovery only)")}</div>
                 ) : (
                   list
                     .filter((p) => p.trim())
@@ -188,7 +198,7 @@ export default function AccountTab({ s, accounts, plans, rescanning, setRescanni
                           onClick={() =>
                             void invoke("remove_home", { source: src, path: p })
                           }
-                          title="이 경로를 스캔 대상에서 제거"
+                          title={t("이 경로를 스캔 대상에서 제거", "Remove this path from scanning")}
                         >
                           ✕
                         </button>

@@ -57,6 +57,9 @@ pub fn set_settings(app: AppHandle, state: State<'_, AppState>, mut new_settings
     if new_settings.currency != "krw" {
         new_settings.currency = "usd".into();
     }
+    if !settings::LANGUAGES.contains(&new_settings.language.as_str()) {
+        new_settings.language = settings::LANGUAGES[0].into();
+    }
     // 통화와 같은 이유 — 사람이 고치는 JSON 이라 모르는 값이면 기본 모양으로
     if !settings::GAUGE_STYLES.contains(&new_settings.gauge_style.as_str()) {
         new_settings.gauge_style = settings::GAUGE_STYLES[0].into();
@@ -89,10 +92,32 @@ pub fn set_settings(app: AppHandle, state: State<'_, AppState>, mut new_settings
         let _ = app.emit("pet-scale", new_settings.pet_scale);
     }
 
+    let language_changed = old.language != new_settings.language;
     save_settings(&app, &new_settings);
     *state.settings.lock().unwrap() = new_settings.clone();
+    if language_changed {
+        apply_language(&app, &new_settings.language);
+    }
     use tauri::Emitter;
     let _ = app.emit("settings-changed", &new_settings);
+}
+
+/// 네이티브 창 제목과 트레이 메뉴는 웹 UI 밖에 있으므로 언어 변경을 별도로 적용한다.
+pub(crate) fn apply_language(app: &AppHandle, language: &str) {
+    let english = language == "en";
+    let titles = [
+        ("pet", "토큰쨩", "TokenChan"),
+        ("bubble", "토큰쨩 대사", "TokenChan Speech"),
+        ("panel", "토큰쨩 사용량", "TokenChan Usage"),
+        ("settings", "토큰쨩 설정", "TokenChan Settings"),
+        ("studio", "토큰쨩 캐릭터 스튜디오", "TokenChan Character Studio"),
+    ];
+    for (label, ko, en) in titles {
+        if let Some(window) = app.get_webview_window(label) {
+            let _ = window.set_title(if english { en } else { ko });
+        }
+    }
+    crate::tray::refresh_menu(app);
 }
 
 /// 게이지 벤더 전환 — 펫의 로고 클릭용 빠른 경로 (설정 창을 안 거친다)

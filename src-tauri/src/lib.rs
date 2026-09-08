@@ -157,6 +157,7 @@ pub fn run() {
             });
 
             tray::create(app.handle())?;
+            commands::apply_language(app.handle(), &loaded.language);
             monitor::spawn(app.handle().clone());
             eprintln!("[boot] setup done");
             Ok(())

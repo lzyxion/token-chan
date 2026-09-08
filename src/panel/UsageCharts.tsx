@@ -17,6 +17,7 @@ import type {
   SourceSummary,
   Totals,
 } from "../types";
+import { useI18n } from "../i18n";
 
 /** 주간 막대가 덮는 일수 — 백엔드 `aggregate::WEEK_DAYS` 와 같아야 날짜가 맞물린다 */
 const WEEK_DAYS = 7;
@@ -106,6 +107,7 @@ export function UsageHeatmap({
   selectedDate?: string | null;
   onSelect?: (date: string) => void;
 }) {
+  const { t } = useI18n();
   if (daily.length === 0) return null;
   const days = daily;
   const val = (d: DailyRow) => basisOf(basis, d.totals, d.cost);
@@ -142,7 +144,7 @@ export function UsageHeatmap({
           const total = val(d);
           if (started != null && localDate(d.date).getTime() < started) {
             return (
-              <span className="grass-cell nodata" key={d.date} title={`${d.date} · 기록 없음`} />
+              <span className="grass-cell nodata" key={d.date} title={t(`${d.date} · 기록 없음`, `${d.date} · no records`)} />
             );
           }
           return (
@@ -159,14 +161,16 @@ export function UsageHeatmap({
       <div className="grass-legend">
         {/* 격자는 91칸이지만 기록은 그중 일부뿐일 수 있다 — 둘을 같이 밝힌다 */}
         <span>
-          {recorded < days.length ? `기록 ${recorded}일 / ${days.length}일` : `${days.length}일`}
+          {recorded < days.length
+            ? t(`기록 ${recorded}일 / ${days.length}일`, `${recorded} recorded / ${days.length} days`)
+            : t(`${days.length}일`, `${days.length} days`)}
         </span>
         <span className="grass-scale">
-          적음
+          {t("적음", "Less")}
           {Array.from({ length: LEVELS + 1 }, (_, i) => (
             <span className={`grass-cell lv${i}`} key={i} />
           ))}
-          많음
+          {t("많음", "More")}
         </span>
       </div>
     </div>
@@ -197,6 +201,7 @@ export function ModelMix({
   basis: Basis;
   currency: Currency;
 }) {
+  const { t } = useI18n();
   // 비용 기준일 때 단가 미등록 모델은 0 이라 막대에서 사라진다. 조용히 빼면 "안 썼다"로
   // 읽히므로 세어 두고 아래에 밝힌다 — 토큰 기준에서는 멀쩡히 보이던 모델이다.
   const usable = basis === "cost" ? models.filter((m) => m.cost_known) : models;
@@ -221,7 +226,7 @@ export function ModelMix({
   });
   const rest = sorted.slice(MIX_MAX).reduce((s, m) => s + val(m), 0);
   if (rest > 0) {
-    parts.push({ key: "rest", label: "기타", tone: "rest", tokens: rest });
+    parts.push({ key: "rest", label: t("기타", "Other"), tone: "rest", tokens: rest });
   }
 
   const pct = (n: number) => Math.round((n / total) * 100);
@@ -246,7 +251,11 @@ export function ModelMix({
           </span>
         ))}
       </div>
-      {hidden > 0 && <div className="mix-note">단가 미등록 {hidden}개 제외</div>}
+      {hidden > 0 && (
+        <div className="mix-note">
+          {t(`단가 미등록 ${hidden}개 제외`, `${hidden} unpriced models excluded`)}
+        </div>
+      )}
     </div>
   );
 }
@@ -271,6 +280,7 @@ export function WeekBars({
   currency: Currency;
   basis: Basis;
 }) {
+  const { t, language } = useI18n();
   const days = daily.slice(-WEEK_DAYS);
   if (days.length === 0) return null;
   // 막대 높이와 조각이 **같은 기준**이어야 한다 — 높이만 비용으로 바꾸고 조각을 토큰으로
@@ -278,7 +288,9 @@ export function WeekBars({
   const dayVal = (d: DailyRow) => basisOf(basis, d.totals, d.cost);
   const segVal = (m: DayModel) => (basis === "tokens" ? m.tokens : m.cost);
   const max = Math.max(...days.map(dayVal), 1);
-  const labels = ["일", "월", "화", "수", "목", "금", "토"];
+  const labels = language === "en"
+    ? ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
+    : ["일", "월", "화", "수", "목", "금", "토"];
 
   const byDate = new Map(weekModels.map((w) => [w.date, w.models]));
   const keyOf = (m: DayModel) => `${m.source}-${m.model}`;
@@ -315,7 +327,7 @@ export function WeekBars({
   const toneOf = new Map(legend.map((l) => [l.key, l.tone]));
   const restTokens = ranked.slice(WEEK_MODEL_MAX).reduce((s, [, v]) => s + v.tokens, 0);
   if (restTokens > 0) {
-    legend.push({ key: "rest", tone: "rest", label: "기타", tokens: restTokens });
+    legend.push({ key: "rest", tone: "rest", label: t("기타", "Other"), tokens: restTokens });
   }
 
   return (
@@ -389,6 +401,7 @@ const TODAY_MAX = 3;
  * 「opus-5 100%」 한 마디로 끝나고, 섞은 날은 두 이름이 나란히 서서 눈에 띈다.
  */
 export function ModelToday({ models }: { models: ModelRow[] }) {
+  const { t } = useI18n();
   const total = models.reduce((s2, m) => s2 + totalOf(m.totals), 0);
   // 오늘 아직 안 썼으면 줄 자체를 내지 않는다 — 총합이 이미 0 을 보여준다
   if (total === 0) return null;
@@ -399,8 +412,8 @@ export function ModelToday({ models }: { models: ModelRow[] }) {
   const rest = sorted.length - TODAY_MAX;
   return (
     <div className="mix-today">
-      오늘 · {head.join(" · ")}
-      {rest > 0 && ` · 외 ${rest}개`}
+      {t("오늘", "Today")} · {head.join(" · ")}
+      {rest > 0 && t(` · 외 ${rest}개`, ` · ${rest} more`)}
     </div>
   );
 }
@@ -448,10 +461,10 @@ export function VendorShare({
 
 /** 구성 분해의 한 줄이 담는 것 — 토큰과 비용을 **둘 다** 들고 있어야 괴리가 보인다. */
 const PART_ROWS = [
-  { key: "cache_read", label: "캐시읽기" },
-  { key: "cache_write", label: "캐시쓰기" },
-  { key: "output", label: "출력" },
-  { key: "input", label: "입력" },
+  { key: "cache_read", ko: "캐시읽기", en: "Cache read" },
+  { key: "cache_write", ko: "캐시쓰기", en: "Cache write" },
+  { key: "output", ko: "출력", en: "Output" },
+  { key: "input", ko: "입력", en: "Input" },
 ] as const;
 
 /**
@@ -470,6 +483,7 @@ export function CostBreakdown({
   parts: CostParts;
   currency: Currency;
 }) {
+  const { t } = useI18n();
   const cost = parts.input + parts.output + parts.cache_write + parts.cache_read;
   const tok = totalOf(totals);
   if (cost <= 0) return null;
@@ -477,12 +491,12 @@ export function CostBreakdown({
     <div className="breakdown">
       {PART_ROWS.map((r) => {
         const c = parts[r.key];
-        const t = totals[r.key];
+        const tokens = totals[r.key];
         const cp = (c / cost) * 100;
-        const tp = tok > 0 ? (t / tok) * 100 : 0;
+        const tp = tok > 0 ? (tokens / tok) * 100 : 0;
         return (
           <div className="bd-row" key={r.key}>
-            <span className="bd-name">{r.label}</span>
+            <span className="bd-name">{t(r.ko, r.en)}</span>
             <span className="bd-bar">
               <span className={`bd-fill ${r.key}`} style={{ width: `${cp}%` }} />
             </span>
@@ -517,6 +531,7 @@ export function Efficiency({
   parts: CostParts;
   currency: Currency;
 }) {
+  const { t } = useI18n();
   const cost = parts.input + parts.output + parts.cache_write + parts.cache_read;
   if (cost <= 0) return null;
   const readable = totals.input + totals.cache_write + totals.cache_read;
@@ -527,27 +542,27 @@ export function Efficiency({
     <div className="eff">
       {reuse !== null ? (
         <div className="eff-row">
-          <span className="eff-name">캐시 재사용</span>
-          <span className="eff-val">{reuse.toFixed(1)}배</span>
+          <span className="eff-name">{t("캐시 재사용", "Cache reuse")}</span>
+          <span className="eff-val">{reuse.toFixed(1)}{t("배", "×")}</span>
           {/* 적재는 1.25~2배를 먼저 내고 읽기에서 0.1배로 돌려받는다 — 2~3회는 읽어야 남는다 */}
-          <span className="eff-note">손익분기 2~3회</span>
+          <span className="eff-note">{t("손익분기 2~3회", "Break-even: 2–3 reads")}</span>
         </div>
       ) : (
         <div className="eff-row muted">
-          <span className="eff-name">캐시 재사용</span>
-          <span className="eff-note">캐시 적재 미기록</span>
+          <span className="eff-name">{t("캐시 재사용", "Cache reuse")}</span>
+          <span className="eff-note">{t("캐시 적재 미기록", "Cache writes not recorded")}</span>
         </div>
       )}
       <div className="eff-row">
-        <span className="eff-name">캐시 히트율</span>
+        <span className="eff-name">{t("캐시 히트율", "Cache hit rate")}</span>
         <span className="eff-val">{hit.toFixed(1)}%</span>
       </div>
       {save !== null && (
         <div className="eff-row">
-          <span className="eff-name">캐시 절감</span>
-          <span className="eff-val">{save.toFixed(1)}배</span>
+          <span className="eff-name">{t("캐시 절감", "Cache savings")}</span>
+          <span className="eff-val">{save.toFixed(1)}{t("배", "×")}</span>
           <span className="eff-note">
-            없었다면 {fmtCost(parts.uncached, false, currency)}
+            {t("없었다면", "Without cache")} {fmtCost(parts.uncached, false, currency)}
           </span>
         </div>
       )}

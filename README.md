@@ -1,154 +1,210 @@
-# 토큰쨩 (TokenChan)
+<p align="right">
+  <strong>English</strong> · <a href="README.ko.md">한국어</a>
+</p>
 
-AI CLI 의 토큰 사용량을 **바탕화면 위 데스크톱 펫**으로 보여주는 Tauri 2 앱.
-**Claude Code · Codex CLI · Antigravity CLI** 를 지원합니다.
+# TokenChan (토큰쨩)
 
-캐릭터가 바탕화면에 떠 있다가, 한도가 차거나 작업이 끝나면 말풍선으로 알려줍니다.
-로그인 같은 건 필요 없습니다 — 이미 깔려 있는 CLI 의 기록을 읽습니다.
+A desktop pet that turns your AI CLI's **token usage, rate limits, and activity** into an always-visible character.
 
-## 이렇게 씁니다
+TokenChan supports **Claude Code · Codex CLI · Antigravity CLI**. It reacts when a task finishes and warns you when context or rate limits are running low.
 
-| 동작 | 미리보기 | 결과 |
+<p align="center">
+  <img src="docs/demo/main.gif" alt="TokenChan reacting to AI CLI activity and displaying token usage through gauges and speech bubbles" width="900" />
+</p>
+
+<p align="center">
+  <a href="https://github.com/lzyxion/token-chan/releases"><strong>Download the latest release</strong></a>
+</p>
+
+## Features
+
+- **Live activity detection** — See when a CLI is working and when its latest task has finished.
+- **At-a-glance gauges** — Track context usage, official rate limits, and time until reset.
+- **Unified usage panel** — Review today's usage, period statistics, model breakdowns, and recent sessions.
+- **State-aware alerts** — Get speech-bubble notifications for completed tasks, limit warnings, exhaustion, resets, and inactivity.
+- **Character customization** — Replace state images and dialogue, or assign a different character to each model.
+- **Multi-account aggregation** — Choose which locally discovered CLI accounts to include in usage totals.
+
+No TokenChan account or additional sign-in is required. TokenChan uses the records and configuration of CLI tools that are already signed in on your computer.
+
+## Installation
+
+Download the appropriate package from [GitHub Releases](https://github.com/lzyxion/token-chan/releases).
+
+| Operating system | Package | Availability |
 | --- | --- | --- |
-| **클릭 · 드래그** | <img src="docs/demo/click-drag.gif" alt="펫을 클릭해 사용량을 확인하고 드래그해 위치를 옮기는 모습" width="240" /> | 클릭하면 현재 사용량을 말풍선으로 알려주고, 드래그하면 펫을 원하는 위치로 옮기며 놓은 자리를 기억합니다. |
-| **더블클릭** | <img src="docs/demo/double-click.gif" alt="더블클릭으로 사용량 패널을 여는 모습" width="240" /> | 사용량 패널을 열고 벤더별 사용량을 확인할 수 있습니다. |
-| **게이지 로고 클릭** | <img src="docs/demo/vender-pin.gif" alt="게이지에 표시할 벤더를 고정하는 모습" width="240" /> | 게이지에 표시할 벤더를 전환하거나 고정합니다. |
-| **우클릭** | <img src="docs/demo/right-click.gif" alt="우클릭 메뉴를 여는 모습" width="240" /> | 숨기기·패널·계정·스튜디오·설정 메뉴를 엽니다. |
+| Windows | `.msi` | Prebuilt installer |
+| macOS | `.dmg` | Prebuilt installer |
+| Linux | Source build | No prebuilt package |
 
-## 설치
+> [!WARNING]
+> Release packages are currently unsigned.
+> On **Windows**, choose `More info → Run anyway` in SmartScreen. On **macOS**, right-click the app and choose `Open`.
 
-[Releases](https://github.com/lzyxion/token-chan/releases) 에서 받습니다 — Windows `.msi`, macOS `.dmg`.
+Before launching TokenChan, install and sign in to at least one supported tool: Claude Code, Codex CLI, or Antigravity CLI.
 
-> 코드 서명이 없어서 첫 실행에 OS 경고가 뜹니다.
-> **Windows**: SmartScreen → 추가 정보 → 실행 · **macOS**: 우클릭 → 열기
+## Quick controls
 
-## 조작
+| Action | Result |
+| --- | --- |
+| Click | Makes the character react and report current usage in a speech bubble. |
+| Double-click | Opens or closes the usage panel. |
+| Drag | Moves the character and remembers where it was placed. |
+| Click the gauge logo | Switches between automatic selection, Claude, Codex, and Antigravity, and pins the selected provider. |
+| Right-click | Opens the pet menu for visibility, usage, accounts, Character Studio, and settings. |
+| Tray icon | Opens the pet menu. This is also where you disable click-through mode. |
 
+## Character states
 
-| 동작        | 결과                                          |
-| --------- | ------------------------------------------- |
-| 드래그       | 펫 이동 (놓은 자리를 기억)                            |
-| 클릭        | 폴짝 뛰며 지금 사용량을 말풍선으로                         |
-| 더블클릭      | 사용량 패널 열기/닫기                                |
-| 우클릭       | 펫 메뉴 (숨기기 · 패널 · 계정 · 스튜디오 · 설정)            |
-| 게이지 로고 클릭 | 볼 벤더 전환 (자동 → Claude → Codex → Antigravity) |
-| 트레이 아이콘   | 위와 같은 메뉴. **클릭 통과 모드**를 끄는 유일한 출구           |
+| State | Trigger |
+| --- | --- |
+| Idle | No current event |
+| Working | A CLI is generating a response |
+| Done | A task in a session has just finished |
+| Alert | Context or an official rate limit exceeds the warning threshold — 80% by default |
+| Exhausted | The current session limit reaches 100% |
+| Refreshed | A new rate-limit window opens |
+| Sleeping | No activity for the configured period — 30 minutes by default |
+| Poked | The character is clicked |
 
+When the state changes, TokenChan displays the corresponding character image and dialogue. It can also warn you shortly before a rate-limit reset regardless of the current state; the default lead time is 15 minutes.
 
-## 캐릭터가 알려주는 것
+## Reading the gauges
 
+The rings next to the character show values for one selected provider. The logo at the top identifies that provider and blinks while a task is running.
 
-| 상태    | 언제                                |
-| ----- | --------------------------------- |
-| 평상시   | 아무 일도 없을 때                        |
-| 작업    | CLI 가 지금 돌고 있을 때                  |
-| 작업 완료 | 세션 하나가 막 끝났을 때 (세션마다)             |
-| 경고    | 공식 한도나 컨텍스트가 위험 한도(기본 80%)를 넘었을 때 |
-| 소진    | 세션 한도 100%                        |
-| 초기화   | 한도 블록이 새로 열렸을 때                   |
-| 잠     | 30분 동안 아무 활동이 없을 때                |
-| 클릭    | 펫을 클릭했을 때                         |
+| Default | On hover |
+| :---: | :---: |
+| <img src="docs/demo/no-hover.png" alt="Collapsed TokenChan gauges showing only the provider logo and usage rings" width="280" /> | <img src="docs/demo/hover.png" alt="Expanded TokenChan gauges showing the model, context usage, rate limits, and reset time" width="280" /> |
 
+- In automatic mode, TokenChan selects a provider in this order: `currently working → most recently used session → highest usage today`.
+- Click the logo or use `Settings → General → Gauge` to pin a provider.
+- A dotted ring does not mean 0%; it means **the value is not currently available**.
+- Gauge labels can appear `on hover`, `while working`, or `always`.
+- While a task is running, the label reports elapsed time, such as `Claude · opus-5 · 4m 12s`.
 
-상태가 바뀌면 대사도 같이 나옵니다. 리셋이 임박하면(기본 15분 전) 상태와 무관하게 한마디 합니다.
+Open the usage panel to compare all providers at once.
 
-## 게이지
+## Usage panel
 
-캐릭터 옆 링 3개는 **벤더 하나**의 값입니다 — 위에서부터 컨텍스트, 공식 한도(짧은 창부터).
-맨 위 로고가 지금 보고 있는 벤더고, 작업 중이면 깜빡입니다.
+Double-click the character or open the panel from the tray menu. Move between pages with the mouse wheel or the `◀` and `▶` buttons.
 
-```
-  [logo]                        [logo] Claude · fable-5 · 작업 중
-   ◕      마우스를 올리면 →      ◕ 컨텍스트 16%
-   ◔                             ◔ 5시간 15% · 리셋 4h 22m
-   ○                             ○ 주간 26%
-```
+| Overview | Stats & usage | Activity history |
+| :---: | :---: | :---: |
+| <img src="docs/demo/panel-now.png" alt="Usage overview showing context and official rate limits by provider" width="250" /> | <img src="docs/demo/panel-usage.png" alt="Usage statistics showing token totals, cost, provider share, and model breakdowns" width="250" /> | <img src="docs/demo/usage-grass.png" alt="Activity history showing daily activity and usage by provider and model" width="250" /> |
 
-- 벤더는 `작업 중 → 마지막으로 쓴 세션 → 오늘 사용량 1위` 순으로 자동 선택됩니다. 고정하려면 로고를 클릭하거나 설정 → 게이지에서 고릅니다.
-- **점선 링은 0% 가 아니라 "아직 모르는 값"** 입니다.
-- 라벨이 언제 펼쳐질지는 설정 → 일반 → 게이지 → **라벨** 에서 고릅니다: `마우스를 올렸을 때`(기본) · `작업 중에는 계속` · `항상`.
-- 작업 중이면 라벨이 `Claude · opus-5 · 4분 12초` 처럼 **경과 시간**을 말합니다. 앱을 켤 때 이미 돌고 있던 턴은 시작 시각을 알 수 없어 그냥 `작업 중` 으로 둡니다.
-- 벤더끼리 비교하려면 사용량 패널을 씁니다.
+| Page | Contents |
+| --- | --- |
+| Overview | Context, official rate limits, and time until reset for each provider |
+| Recent sessions | Project, session title, and token usage by session |
+| Stats & usage | Usage and cost by period, daily averages, provider share, and recent model totals |
+| Activity history | Activity calendar and provider/model usage for the selected day |
 
-## 사용량 패널
+## Settings
 
-더블클릭 또는 트레이로 엽니다. 휠이나 ◀▶ 로 3페이지를 넘깁니다.
+| Tab | Options |
+| --- | --- |
+| General | Interface language (English by default, Korean available), currency and exchange rate, gauge shape, position, fill direction and labels, start hidden, launch at login |
+| Alerts | Context and official-limit thresholds, reset warning lead time, completion dialogue, sleep delay |
+| Character | Default character, size, speech bubble, model rules, Character Studio |
+| Accounts | Discovered CLI accounts, inclusion in totals, additional CLI home directories |
 
+| Alert settings | Character settings |
+| :---: | :---: |
+| <img src="docs/demo/settings-alert.png" alt="Settings for warning thresholds, resets, task completion, and sleep behavior" width="300" /> | <img src="docs/demo/settings-character.png" alt="Settings for character selection, size, speech bubbles, and model-specific rules" width="300" /> |
 
-| 페이지       | 내용                                      |
-| --------- | --------------------------------------- |
-| **현황**    | 벤더당 카드 하나 — 컨텍스트·공식 한도·리셋까지 남은 시간       |
-| **통계**    | 오늘 / 기간 합계, 일별 사용량 잔디, 최근 7일, 오늘 모델 구성비 |
-| **최근 세션** | 어느 프로젝트에서 얼마나 썼는지 (제목은 그 세션의 첫 메시지)     |
+Settings are stored in `<OS config directory>/token-chan/settings.json`.
 
+## Character customization
 
-## 설정
+Open `Settings → Character → Open Character Studio` (`설정 → 캐릭터 → 캐릭터 스튜디오 열기`) to create a character and edit its state images and dialogue. Drop images onto state cards to import them, then use `▶ Test` to preview the result on the desktop pet.
 
+<p align="center">
+  <img src="docs/demo/character-studio.png" alt="Character Studio for editing and testing state images and dialogue" width="720" />
+</p>
 
-| 탭       | 항목                                                              |
-| ------- | --------------------------------------------------------------- |
-| **일반**  | 통화(USD/KRW·환율), 게이지 모양·위치·채움 방향·라벨 표시 시점, 시작 시 숨김, 로그인 시 자동 시작 |
-| **알림**  | 위험 한도(컨텍스트·공식), 리셋 임박 대사 시점, 작업 완료 대사, 잠자기 진입 시간                |
-| **캐릭터** | 기본 캐릭터 선택, 크기(50~250%), 말풍선, 모델별 캐릭터 규칙, 캐릭터 스튜디오 열기            |
-| **계정**  | 이 머신에서 찾은 CLI 계정 목록 — 계정 단위로 집계 포함 여부를 켜고 끕니다                   |
+Character packs are stored in the following structure:
 
-
-설정 파일은 `<설정폴더>/token-chan/settings.json` 입니다.
-
-## 캐릭터 바꾸기
-
-**설정 → 캐릭터 → 캐릭터 스튜디오 열기**. 왼쪽이 캐릭터 목록, 오른쪽이 상태별 이미지와 대사입니다.
-이미지는 카드에 끌어다 놓아도 등록되고, ▶ 테스트를 누르면 펫이 그 상태로 서서 대사를 말해 봅니다.
-
-결과는 아래 폴더에 그대로 저장되므로 폴더를 직접 만들어도 됩니다:
-
-```
-<설정폴더>/token-chan/characters/
+```text
+<OS config directory>/token-chan/characters/
 └─ my-cat/
-   ├─ idle.gif        # 필수 — 나머지는 없으면 idle 로 대체
-   ├─ working.gif  alert.gif  sleep.gif  exhausted.gif
-   ├─ refreshed.gif  done.gif  poke.gif
-   ├─ speech.json     # 선택 — 이 캐릭터의 대사
-   └─ pack.json       # 선택 — 끈 상태 목록
+   ├─ idle.gif        # Required — used when another state image is missing
+   ├─ working.gif
+   ├─ alert.gif
+   ├─ sleep.gif
+   ├─ exhausted.gif
+   ├─ refreshed.gif
+   ├─ done.gif
+   ├─ poke.gif
+   ├─ speech.json     # Optional — character dialogue
+   └─ pack.json       # Optional — disabled states
 ```
 
-- 형식은 **`.gif` · `.webp` · `.apng` · `.png` · `.svg`** 5가지, 파일당 20MB. 같은 상태에 여러 개면 이 순서로 먼저 찾은 하나를 씁니다. 영상(mp4 등)은 안 됩니다.
-- **투명 배경**, 발이 **하단 중앙**에 오게, 긴 변 512px 이상 권장. 8장을 같은 캔버스·같은 배율로 맞추면 상태가 바뀔 때 크기가 안 흔들립니다.
-- 숨쉬기·흔들림·폴짝 같은 모션과 소품 배지(`z` `!` `🪫` `✨`)는 앱이 그림 위에 얹어 줍니다 — 그림에 또 그리면 겹칩니다.
-- 팩 폴더를 통째로 공유하면 그림·말투·상태 구성이 함께 갑니다.
+- Supported formats: `.gif`, `.webp`, `.apng`, `.png`, `.svg`
+- Maximum size: 20MB per file
+- A transparent background and a longest edge of at least 512px are recommended.
+- Keep every state on the same canvas and at the same scale to avoid visual jumps between states.
+- Breathing, swaying, hopping, and the `z`, `!`, `🪫`, and `✨` badges are added by the app.
+- Copy the entire character directory to share its images, dialogue, and state configuration.
 
-### 대사
+### Writing dialogue
 
-스튜디오에서 편집하며, 캐릭터 폴더의 `speech.json` 에 저장됩니다:
+Dialogue is stored in the character pack's `speech.json` file.
 
 ```json
 {
-  "enter.working": ["코딩 시작!|화이팅", "일하러 가자~"],
-  "poke": ["오늘 {오늘토큰} 썼어"]
+  "enter.working": ["Let's code!|You've got this", "Time to work~"],
+  "poke": ["You've used {todayTokens} today"]
 }
 ```
 
-- 한 상황에 여러 줄을 넣으면 그중 하나가 무작위로 나옵니다.
-- `|` 는 말풍선 안 줄바꿈, `{변수}` 는 표시 시점 값으로 바뀝니다 (`{오늘토큰}` `{세션}` `{컨텍스트}` `{리셋}` `{모델}` `{벤더}` 등 — 편집기에서 칩으로 골라 넣습니다).
-- 값을 모르는 변수가 든 줄은 통째로 건너뜁니다.
+- When an event has multiple lines, TokenChan chooses one at random.
+- `|` inserts a line break inside the speech bubble.
+- Variables such as `{todayTokens}`, `{session}`, `{context}`, `{resetIn}`, `{model}`, and `{provider}` are replaced with their current values. Korean variable names remain supported for existing dialogue files.
+- A line is skipped when it contains a variable whose value is unavailable.
 
-### 모델별 캐릭터
+### Model-specific characters
 
-설정 → 모델별 캐릭터 규칙에서 접두사 → 캐릭터를 매핑하면 쓰는 모델에 따라 자동으로 바뀝니다.
-`claude` 는 Claude 전체, `claude-opus` 는 Opus 만 (더 긴 접두사가 우선), 콤마로 여러 접두사를 적을 수 있습니다.
+Use `Settings → Character → Model-specific character rules` to map model prefixes to characters.
 
-## 소스에서 빌드
+For example, `claude` matches every Claude model, while `claude-opus` matches only Opus models. When multiple rules match, the longest prefix wins.
 
-Rust(stable) + pnpm 이 필요합니다. Linux 는 Tauri 시스템 의존성도 필요합니다.
+## Data and privacy
+
+- Token and session statistics are calculated from CLI session records stored on your computer.
+- Conversation content and usage statistics are not uploaded to a TokenChan server.
+- To refresh official Claude and Codex rate limits, TokenChan makes read-only requests to each provider's usage API.
+- Those requests use authentication already stored locally by the corresponding CLI.
+- TokenChan has no account system, remote database, or analytics telemetry.
+- User settings and custom characters remain in your operating system's configuration directory.
+
+Changes to CLI record formats or usage APIs may temporarily prevent some values from appearing. Antigravity CLI does not expose official rate-limit information, so TokenChan only displays values available from its local records.
+
+## Building from source
+
+Prerequisites:
+
+- Node.js 22
+- pnpm
+- Rust stable
+- Tauri system libraries on Linux
 
 ```sh
 pnpm install
-pnpm tauri dev      # 실행
-pnpm tauri build    # 패키징
+pnpm tauri dev      # Run in development mode
+pnpm tauri build    # Build installable packages
 ```
 
+On Ubuntu-based distributions, install the system libraries first:
 
+```sh
+sudo apt-get install -y \
+  libwebkit2gtk-4.1-dev libxdo-dev libssl-dev \
+  libayatana-appindicator3-dev librsvg2-dev
+```
 
-&nbsp;
+The frontend is built with React and TypeScript, the desktop application uses Tauri 2, and usage parsing and aggregation are implemented in Rust.
 
-&nbsp;
+## License
+
+[MIT License](LICENSE)

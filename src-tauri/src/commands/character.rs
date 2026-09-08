@@ -19,6 +19,21 @@ const CHAR_MAX_BYTES: u64 = 20 * 1024 * 1024;
 const CHAR_STATES: [&str; 8] =
     ["idle", "working", "alert", "sleep", "exhausted", "refreshed", "done", "poke"];
 
+fn text<'a>(app: &AppHandle, ko: &'a str, en: &'a str) -> &'a str {
+    if app
+        .state::<AppState>()
+        .settings
+        .lock()
+        .unwrap()
+        .language
+        == "en"
+    {
+        en
+    } else {
+        ko
+    }
+}
+
 fn find_state_file(pack_dir: &std::path::Path, state: &str) -> Option<std::path::PathBuf> {
     CHAR_EXTS
         .iter()
@@ -80,16 +95,31 @@ pub fn set_character_config(app: AppHandle, pack: String, config: settings::Pack
 /// 새 팩 폴더 생성. idle 이미지를 넣기 전까지 펫에서는 선택 불가(목록 필터)지만,
 /// 스튜디오에서는 `list_character_dirs` 로 보여 이어서 채울 수 있다.
 #[tauri::command]
-pub fn create_character_pack(name: String) -> Result<(), String> {
+pub fn create_character_pack(app: AppHandle, name: String) -> Result<(), String> {
     let name = name.trim().to_string();
     let Some(root) = settings::characters_dir() else {
-        return Err("설정 폴더를 찾을 수 없습니다".into());
+        return Err(text(
+            &app,
+            "설정 폴더를 찾을 수 없습니다",
+            "The settings directory is unavailable",
+        )
+        .into());
     };
     let Some(dir) = settings::pack_dir(&name) else {
-        return Err("팩 이름에 쓸 수 없는 문자가 있습니다".into());
+        return Err(text(
+            &app,
+            "팩 이름에 쓸 수 없는 문자가 있습니다",
+            "The pack name contains invalid characters",
+        )
+        .into());
     };
     if dir.exists() {
-        return Err("이미 있는 팩 이름입니다".into());
+        return Err(text(
+            &app,
+            "이미 있는 팩 이름입니다",
+            "A pack with this name already exists",
+        )
+        .into());
     }
     let _ = std::fs::create_dir_all(root);
     std::fs::create_dir(&dir).map_err(|e| e.to_string())
@@ -102,16 +132,26 @@ pub fn rename_character_pack(app: AppHandle, old: String, new: String) -> Result
     let new = new.trim().to_string();
     let (Some(old_dir), Some(new_dir)) = (settings::pack_dir(&old), settings::pack_dir(&new))
     else {
-        return Err("팩 이름에 쓸 수 없는 문자가 있습니다".into());
+        return Err(text(
+            &app,
+            "팩 이름에 쓸 수 없는 문자가 있습니다",
+            "The pack name contains invalid characters",
+        )
+        .into());
     };
     if old == new {
         return Ok(());
     }
     if !old_dir.is_dir() {
-        return Err("이미 없는 팩입니다".into());
+        return Err(text(&app, "이미 없는 팩입니다", "This pack no longer exists").into());
     }
     if new_dir.exists() {
-        return Err("이미 있는 팩 이름입니다".into());
+        return Err(text(
+            &app,
+            "이미 있는 팩 이름입니다",
+            "A pack with this name already exists",
+        )
+        .into());
     }
     std::fs::rename(&old_dir, &new_dir).map_err(|e| e.to_string())?;
 
@@ -140,10 +180,10 @@ pub fn rename_character_pack(app: AppHandle, old: String, new: String) -> Result
 #[tauri::command]
 pub fn delete_character_pack(app: AppHandle, pack: String) -> Result<(), String> {
     let Some(dir) = settings::pack_dir(&pack) else {
-        return Err("잘못된 팩 이름입니다".into());
+        return Err(text(&app, "잘못된 팩 이름입니다", "Invalid pack name").into());
     };
     if !dir.is_dir() {
-        return Err("이미 없는 팩입니다".into());
+        return Err(text(&app, "이미 없는 팩입니다", "This pack no longer exists").into());
     }
     trash::delete(&dir).map_err(|e| e.to_string())?;
     use tauri::Emitter;
@@ -215,12 +255,13 @@ pub fn import_state_image(app: AppHandle, pack: String, state: String) {
         return;
     }
     let Some(dir) = settings::pack_dir(&pack) else { return };
+    let filter_name = text(&app, "이미지", "Images").to_string();
     use tauri_plugin_dialog::DialogExt;
     std::thread::spawn(move || {
         let picked = app
             .dialog()
             .file()
-            .add_filter("이미지", &CHAR_EXTS)
+            .add_filter(filter_name, &CHAR_EXTS)
             .blocking_pick_file();
         let Some(picked) = picked else { return };
         let Ok(src) = picked.into_path() else { return };
@@ -240,16 +281,18 @@ pub fn import_state_image_from_path(
     path: String,
 ) -> Result<(), String> {
     if !CHAR_STATES.contains(&state.as_str()) {
-        return Err("알 수 없는 상태입니다".into());
+        return Err(text(&app, "알 수 없는 상태입니다", "Unknown character state").into());
     }
     let Some(dir) = settings::pack_dir(&pack) else {
-        return Err("잘못된 팩 이름입니다".into());
+        return Err(text(&app, "잘못된 팩 이름입니다", "Invalid pack name").into());
     };
     if !copy_state_image(&dir, &state, std::path::Path::new(&path)) {
-        return Err(
-            "이미지 파일이 아니거나 20MB 를 넘거나 복사에 실패했습니다 (gif·webp·apng·png·svg)"
-                .into(),
-        );
+        return Err(text(
+            &app,
+            "이미지 파일이 아니거나 20MB 를 넘거나 복사에 실패했습니다 (gif·webp·apng·png·svg)",
+            "The file is not a supported image, exceeds 20MB, or could not be copied (gif, webp, apng, png, svg)",
+        )
+        .into());
     }
     use tauri::Emitter;
     let _ = app.emit("character-images-changed", &pack);

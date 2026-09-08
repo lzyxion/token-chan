@@ -10,6 +10,7 @@ import AccountTab from "./tabs/AccountTab";
 import AlertsTab from "./tabs/AlertsTab";
 import CharacterTab from "./tabs/CharacterTab";
 import GeneralTab from "./tabs/GeneralTab";
+import { useI18n } from "../i18n";
 import "./settings.css";
 
 /** 설정 탭 — 일반(비용·게이지·시스템) / 알림(한도·리셋·작업 완료·잠자기) /
@@ -17,14 +18,10 @@ import "./settings.css";
  *  상태 사용·이미지·대사 편집은 캐릭터 스튜디오(전용 창)가 맡는다. */
 
 type Tab = "general" | "alerts" | "character" | "account";
-const TABS: [Tab, string][] = [
-  ["general", "일반"],
-  ["alerts", "알림"],
-  ["character", "캐릭터"],
-  ["account", "계정"],
-];
+const TABS: Tab[] = ["general", "alerts", "character", "account"];
 
 export default function SettingsPanel() {
+  const { t } = useI18n();
   const [s, setS] = useState<AppSettings | null>(null);
   const [packs, setPacks] = useState<string[]>([]);
   const [observedModels, setObservedModels] = useState<string[]>([]);
@@ -101,7 +98,7 @@ export default function SettingsPanel() {
     });
     // 트레이의 "계정 설정…" 으로 열면 그 탭으로 바로 간다
     const unTab = listen<string>("settings-tab", (e) => {
-      if (alive && TABS.some(([k]) => k === e.payload)) setTab(e.payload as Tab);
+      if (alive && TABS.includes(e.payload as Tab)) setTab(e.payload as Tab);
     });
     invoke<string | null>("get_save_error")
       .then((v) => {
@@ -136,7 +133,7 @@ export default function SettingsPanel() {
     return (
       <div className="settings-root">
         <ResizeGrips />
-        <div className="settings-card">불러오는 중…</div>
+        <div className="settings-card">{t("불러오는 중…", "Loading…")}</div>
       </div>
     );
   }
@@ -165,13 +162,14 @@ export default function SettingsPanel() {
       {saveError && !saveErrorDismissed && (
         <div className="settings-save-error" role="alert">
           <span className="settings-save-error-text">
-            ⚠️ 설정 저장 실패: {saveError} — 변경 사항이 파일에 반영되지 않고
-            있습니다. 디스크 공간·권한을 확인한 뒤 아무 설정이나 바꾸면 다시
-            저장을 시도합니다.
+            {t(
+              `⚠️ 설정 저장 실패: ${saveError} — 변경 사항이 파일에 반영되지 않고 있습니다. 디스크 공간·권한을 확인한 뒤 아무 설정이나 바꾸면 다시 저장을 시도합니다.`,
+              `⚠️ Failed to save settings: ${saveError} — changes are not being written. Check disk space and permissions, then change any setting to retry.`,
+            )}
           </span>
           <button
             className="settings-save-error-close"
-            title="닫기 (같은 오류가 지속되는 동안 다시 띄우지 않음)"
+            title={t("닫기 (같은 오류가 지속되는 동안 다시 띄우지 않음)", "Dismiss until a new error occurs")}
             onClick={() => setSaveErrorDismissed(true)}
           >
             ✕
@@ -180,7 +178,7 @@ export default function SettingsPanel() {
       )}
       <div className="settings-card">
         <div className="settings-head" data-tauri-drag-region>
-          <span data-tauri-drag-region>설정</span>
+          <span data-tauri-drag-region>{t("설정", "Settings")}</span>
           <button
             className="settings-close"
             onClick={() => void getCurrentWindow().hide()}
@@ -190,13 +188,18 @@ export default function SettingsPanel() {
         </div>
 
         <div className="settings-tabs">
-          {TABS.map(([key, label]) => (
+          {TABS.map((key) => (
             <button
               key={key}
               className={`settings-tab${tab === key ? " active" : ""}`}
               onClick={() => setTab(key)}
             >
-              {label}
+              {{
+                general: t("일반", "General"),
+                alerts: t("알림", "Alerts"),
+                character: t("캐릭터", "Character"),
+                account: t("계정", "Accounts"),
+              }[key]}
             </button>
           ))}
         </div>

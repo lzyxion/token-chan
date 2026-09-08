@@ -8,6 +8,7 @@ import ResizeGrips from "../components/ResizeGrips";
 import { SpeechField } from "../components/SpeechEditor";
 import { useWindowPersist } from "../hooks/useWindowPersist";
 import { DEFAULT_PACK_IMAGES } from "../pet/defaultPack";
+import { useI18n } from "../i18n";
 import "../settings/settings.css";
 import "./studio.css";
 
@@ -48,6 +49,29 @@ const STATES: {
 /** 상태에 안 딸린 대사 — 리셋 임박은 시각 기준이라 어떤 상태에서도 나올 수 있다 */
 const EXTRA_SPEECH: [string, string][] = [["resetNotify", "리셋 임박 (변수: {분}·{시각}만)"]];
 
+const STATE_LABEL_EN: Record<string, string> = {
+  idle: "Idle",
+  working: "Working",
+  done: "Task complete",
+  alert: "Alert",
+  sleep: "Sleep",
+  exhausted: "Exhausted",
+  refreshed: "Reset",
+  poke: "Click",
+};
+
+const SPEECH_LABEL_EN: Record<string, string> = {
+  "enter.working": "Task started",
+  done: "Task complete (per session)",
+  "enter.alert": "Limit warning",
+  "enter.sleep": "Falling asleep",
+  "leave.sleep": "Waking up",
+  "enter.exhausted": "Tokens exhausted",
+  "enter.refreshed": "Limit window reset",
+  poke: "On click (usage report)",
+  resetNotify: "Upcoming reset ({minutes} and {time} only)",
+};
+
 /** 대사 상황 → 그때 펫이 서 있는 상태. `enter.X` 는 X 로 들어가는 순간이고
  *  `leave.X` 는 이미 빠져나온 뒤라 idle 이다. 상태 이름 그대로인 상황(done·poke)은
  *  자기 상태, 어느 상태에도 안 붙은 상황(resetNotify)은 포즈를 바꾸지 않는다(null). */
@@ -61,6 +85,7 @@ const stateOfSpeech = (key: string): string | null => {
  *  "기본 캐릭터"(내장 팩)도 같은 자리에서 관리한다: 상태 사용은 전역 설정,
  *  대사는 기본 문구(settings.speechLines), 이미지는 내장이라 편집 불가. */
 export default function CharacterStudio() {
+  const { t } = useI18n();
   const [s, setS] = useState<AppSettings | null>(null);
   /** 모든 팩 폴더 (idle 없는 미완성 포함) / idle 이 있어 펫이 쓸 수 있는 팩 */
   const [dirs, setDirs] = useState<string[]>([]);
@@ -213,7 +238,7 @@ export default function CharacterStudio() {
     return (
       <div className="studio-root">
         <ResizeGrips />
-        <div className="studio-card">불러오는 중…</div>
+        <div className="studio-card">{t("불러오는 중…", "Loading…")}</div>
       </div>
     );
   }
@@ -288,8 +313,13 @@ export default function CharacterStudio() {
       const at = new Date(Date.now() + min * 60000);
       t = t
         .replace(/\{분\}/g, String(min))
+        .replace(/\{minutes\}/g, String(min))
         .replace(
           /\{시각\}/g,
+          `${String(at.getHours()).padStart(2, "0")}:${String(at.getMinutes()).padStart(2, "0")}`,
+        )
+        .replace(
+          /\{time\}/g,
           `${String(at.getHours()).padStart(2, "0")}:${String(at.getMinutes()).padStart(2, "0")}`,
         );
     }
@@ -335,7 +365,7 @@ export default function CharacterStudio() {
       <ResizeGrips />
       <div className="studio-card">
         <div className="settings-head" data-tauri-drag-region>
-          <span data-tauri-drag-region>캐릭터 스튜디오</span>
+          <span data-tauri-drag-region>{t("캐릭터 스튜디오", "Character Studio")}</span>
           <button
             className="settings-close"
             onClick={() => void getCurrentWindow().hide()}
@@ -351,8 +381,8 @@ export default function CharacterStudio() {
               onClick={() => setSelected("")}
             >
               <div className="studio-pack-info">
-                기본 캐릭터
-                <span className="studio-pack-sub">내장 · 토큰짱</span>
+                {t("기본 캐릭터", "Default character")}
+                <span className="studio-pack-sub">{t("내장 · 토큰짱", "Built in · TokenChan")}</span>
               </div>
             </div>
             {dirs.map((d) =>
@@ -379,12 +409,12 @@ export default function CharacterStudio() {
                   <div className="studio-pack-info">
                     {d}
                     {!validPacks.includes(d) && (
-                      <span className="studio-pack-sub warn">idle 이미지 필요</span>
+                      <span className="studio-pack-sub warn">{t("idle 이미지 필요", "idle image required")}</span>
                     )}
                   </div>
                   <button
                     className="studio-pack-del"
-                    title="이름 변경"
+                    title={t("이름 변경", "Rename")}
                     onClick={(e) => {
                       e.stopPropagation();
                       setRenaming({ pack: d, value: d });
@@ -396,7 +426,7 @@ export default function CharacterStudio() {
                   </button>
                   <button
                     className="studio-pack-del"
-                    title="캐릭터 삭제"
+                    title={t("캐릭터 삭제", "Delete character")}
                     onClick={(e) => {
                       e.stopPropagation();
                       deletePack(d);
@@ -416,7 +446,7 @@ export default function CharacterStudio() {
             <div className="studio-side-bottom">
               <input
                 className="settings-input"
-                placeholder="새 캐릭터 이름"
+                placeholder={t("새 캐릭터 이름", "New character name")}
                 value={newName}
                 onChange={(e) => setNewName(e.currentTarget.value)}
                 onKeyDown={(e) => {
@@ -424,7 +454,7 @@ export default function CharacterStudio() {
                 }}
               />
               <button className="settings-btn" onClick={createPack}>
-                + 만들기
+                {t("+ 만들기", "+ Create")}
               </button>
               {error && <div className="settings-hint warn-b">{error}</div>}
               <div className="settings-row">
@@ -432,12 +462,12 @@ export default function CharacterStudio() {
                   className="settings-btn studio-grow"
                   onClick={() => void invoke("open_characters_dir")}
                 >
-                  폴더 열기
+                  {t("폴더 열기", "Open folder")}
                 </button>
                 <button
                   className="settings-btn"
                   onClick={refreshAll}
-                  title="폴더에서 직접 바꾼 내용 다시 읽기 (펫에도 바로 반영)"
+                  title={t("폴더에서 직접 바꾼 내용 다시 읽기 (펫에도 바로 반영)", "Reload folder changes and apply them to the pet")}
                 >
                   ↻
                 </button>
@@ -448,21 +478,18 @@ export default function CharacterStudio() {
           <main className="studio-main">
             <div className="settings-group">
               <div className="settings-label">
-                상태별 이미지 · 대사{" "}
+                {t("상태별 이미지 · 대사", "State images and dialogue")}{" "}
                 <span className="settings-hint-inline">
-                  (상태를 끄거나 이미지가 없으면 평상시(idle)로 대신합니다)
+                  {t("(상태를 끄거나 이미지가 없으면 평상시(idle)로 대신합니다)", "(disabled or missing states fall back to idle)")}
                 </span>
               </div>
               <div className="settings-hint">
-                대사는 한 줄에 문구 하나 — 여러 줄이면 무작위, 비우면 흐린
-                글씨의 문구로 폴백{" "}
+                {t("대사는 한 줄에 문구 하나 — 여러 줄이면 무작위, 비우면 흐린 글씨의 문구로 폴백", "Enter one phrase per line. Multiple lines are chosen at random; an empty field falls back to the dimmed text.")}{" "}
                 {selected
-                  ? `· characters/${selected}/speech.json 에 저장`
-                  : "· 기본 문구(모든 캐릭터의 폴백)를 편집 중"}
+                  ? t(`· characters/${selected}/speech.json 에 저장`, `· saved to characters/${selected}/speech.json`)
+                  : t("· 기본 문구(모든 캐릭터의 폴백)를 편집 중", "· editing the default fallback dialogue")}
                 <br />
-                문구 칸을 클릭하면 넣을 수 있는 {"{변수}"} 칩이 아래에 뜹니다
-                (클릭 = 커서 위치에 삽입) · | 는 말풍선 줄바꿈 · ▶ 테스트를
-                누르면 펫이 실제로 말해봅니다
+                {t("문구 칸을 클릭하면 넣을 수 있는", "Click a dialogue field to reveal")} {"{variable}"} {t("칩이 아래에 뜹니다 (클릭 = 커서 위치에 삽입) · | 는 말풍선 줄바꿈 · ▶ 테스트를 누르면 펫이 실제로 말해봅니다", "chips below; click one to insert it at the cursor. | adds a speech-bubble line break. ▶ Test previews it on the pet.")}
               </div>
 
               {STATES.map(({ key, label, toggleable, speech }) => {
@@ -485,22 +512,22 @@ export default function CharacterStudio() {
                             checked={enabled}
                             onChange={(e) => toggleState(key, e.currentTarget.checked)}
                           />
-                          {label}
+                           {t(label, STATE_LABEL_EN[key] ?? label)}
                         </label>
                       ) : (
                         <span className="settings-check">
-                          {label}
-                          <span className="settings-hint-inline">(필수)</span>
+                          {t(label, STATE_LABEL_EN[key] ?? label)}
+                          <span className="settings-hint-inline">{t("(필수)", "(required)")}</span>
                         </span>
                       )}
                       <div
                         className={`studio-thumb${has ? "" : " fallback"}${enabled ? "" : " off"}`}
-                        title={has ? undefined : "자기 이미지 없음 — idle 폴백"}
+                        title={has ? undefined : t("자기 이미지 없음 — idle 폴백", "No state image — using idle fallback")}
                       >
                         {shown ? (
                           <img src={shown} alt="" />
                         ) : (
-                          <span>이미지 필요</span>
+                          <span>{t("이미지 필요", "Image required")}</span>
                         )}
                       </div>
                       {selected ? (
@@ -514,7 +541,7 @@ export default function CharacterStudio() {
                               })
                             }
                           >
-                            {has ? "교체…" : "+ 이미지…"}
+                            {has ? t("교체…", "Replace…") : t("+ 이미지…", "+ Image…")}
                           </button>
                           {has && key !== "idle" && (
                             <button
@@ -531,21 +558,20 @@ export default function CharacterStudio() {
                           )}
                         </div>
                       ) : (
-                        <span className="settings-hint-inline">내장 이미지</span>
+                        <span className="settings-hint-inline">{t("내장 이미지", "Built-in image")}</span>
                       )}
                     </div>
                     <div className="studio-state-speech">
                       {speech.length === 0 ? (
                         <div className="settings-hint studio-idle-hint">
-                          평상시 전용 대사는 없습니다 — 상황이 생길 때만
-                          말합니다
+                          {t("평상시 전용 대사는 없습니다 — 상황이 생길 때만 말합니다", "Idle has no dedicated dialogue; the character speaks when an event occurs.")}
                         </div>
                       ) : (
                         speech.map(([sk, sl]) => (
                           <SpeechField
                             key={sk}
                             situationKey={sk}
-                            label={sl}
+                             label={t(sl, SPEECH_LABEL_EN[sk] ?? sl)}
                             lines={selected ? packSpeech : (s.speechLines ?? {})}
                             baseLines={selected ? (s.speechLines ?? {}) : null}
                             onChange={updateSpeech}
@@ -561,14 +587,14 @@ export default function CharacterStudio() {
               {/* 상태에 안 딸린 대사 — 이미지 열 없이 문구만 */}
               <div className="studio-card-row">
                 <div className="studio-state-side">
-                  <span className="settings-check">기타</span>
+                  <span className="settings-check">{t("기타", "Other")}</span>
                 </div>
                 <div className="studio-state-speech">
                   {EXTRA_SPEECH.map(([sk, sl]) => (
                     <SpeechField
                       key={sk}
                       situationKey={sk}
-                      label={sl}
+                       label={t(sl, SPEECH_LABEL_EN[sk] ?? sl)}
                       lines={selected ? packSpeech : (s.speechLines ?? {})}
                       baseLines={selected ? (s.speechLines ?? {}) : null}
                       onChange={updateSpeech}
@@ -580,8 +606,7 @@ export default function CharacterStudio() {
 
               {selected !== "" && (
                 <div className="settings-hint">
-                  이미지는 gif · webp · apng · png · svg — 투명 배경 권장, 하단
-                  중앙이 발 기준점 · 파일을 상태 카드에 끌어다 놓아도 등록됩니다
+                  {t("이미지는 gif · webp · apng · png · svg — 투명 배경 권장, 하단 중앙이 발 기준점 · 파일을 상태 카드에 끌어다 놓아도 등록됩니다", "Images may be gif, webp, apng, png, or svg. Transparent backgrounds are recommended; bottom center is the foot anchor. You can also drop a file onto a state card.")}
                 </div>
               )}
             </div>

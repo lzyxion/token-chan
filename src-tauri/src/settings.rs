@@ -50,9 +50,14 @@ pub const GAUGE_FILLS: [&str; 3] = ["auto", "used", "left"];
 /// 조합이 생긴다. 서로를 배제하는 선택은 체크박스가 아니라 셀렉터의 일이다.
 pub const GAUGE_LABEL_SHOWS: [&str; 3] = ["hover", "busy", "always"];
 
+/// 화면에 표시할 수 있는 언어. 첫 항목이 언어 설정이 없는 사용자에게 적용되는 기본값이다.
+pub const LANGUAGES: [&str; 2] = ["en", "ko"];
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Settings {
+    /// 화면 언어 — `ko` | `en`.
+    pub language: String,
     /// 펫 창 위치 (물리 픽셀)
     pub pet_pos: Option<(i32, i32)>,
     /// 사용량 스캔 기간 (일). **`0` 은 제한 없음**(=전체).
@@ -171,6 +176,7 @@ pub struct Settings {
 impl Default for Settings {
     fn default() -> Self {
         Self {
+            language: LANGUAGES[0].into(),
             pet_pos: None,
             retention_days: 90,
             alert_threshold: 0.8,
@@ -285,6 +291,9 @@ impl Settings {
     /// 옛 키를 새 키로 접는다. **읽은 직후 한 번**만 — 다음 저장 때 옛 키가 파일에서
     /// 사라지므로, 접지 않으면 그 사용자의 선택이 조용히 기본값으로 돌아간다.
     fn migrate(&mut self) {
+        if !LANGUAGES.contains(&self.language.as_str()) {
+            self.language = LANGUAGES[0].into();
+        }
         // 불리언 `gaugeLabels: true` → 셀렉터의 `always`.
         // 새 키가 이미 있으면 그쪽이 사용자의 **최근** 선택이라 건드리지 않는다.
         if self.gauge_labels && self.gauge_label_show == GAUGE_LABEL_SHOWS[0] {
@@ -304,10 +313,18 @@ pub fn load() -> Settings {
 pub fn save(settings: &Settings) -> Result<(), String> {
     // 배너 확인용 강제 실패 스위치 — 실제 저장은 시도하지 않는다
     if std::env::var_os("TOKENCHAN_FAIL_SAVE").is_some() {
-        return Err("강제 실패 (TOKENCHAN_FAIL_SAVE)".into());
+        return Err(if settings.language == "en" {
+            "Forced failure (TOKENCHAN_FAIL_SAVE)".into()
+        } else {
+            "강제 실패 (TOKENCHAN_FAIL_SAVE)".into()
+        });
     }
     let Some(path) = config_path() else {
-        return Err("설정 폴더를 찾을 수 없습니다".into());
+        return Err(if settings.language == "en" {
+            "The settings directory is unavailable".into()
+        } else {
+            "설정 폴더를 찾을 수 없습니다".into()
+        });
     };
     save_to(&path, settings).map_err(|e| e.to_string())
 }
@@ -414,6 +431,40 @@ mod tests {
     fn a_file_without_the_fill_key_follows_its_shape() {
         let s: Settings = serde_json::from_str(r#"{"gaugeStyle": "orb"}"#).unwrap();
         assert_eq!(s.gauge_fill, "auto");
+    }
+
+    #[test]
+    fn a_file_without_the_language_key_defaults_to_english() {
+        let s: Settings = serde_json::from_str("{}").unwrap();
+        assert_eq!(s.language, "en");
+    }
+
+    #[test]
+    fn an_unknown_language_falls_back_to_english() {
+        let mut s: Settings = serde_json::from_str(r#"{"language": "unknown"}"#).unwrap();
+        s.migrate();
+        assert_eq!(s.language, "en");
+    }
+
+    #[test]
+    fn an_explicit_korean_choice_is_preserved() {
+        let mut s: Settings = serde_json::from_str(r#"{"language": "ko"}"#).unwrap();
+        s.migrate();
+        assert_eq!(s.language, "ko");
+    }
+
+    #[test]
+    fn the_selected_language_survives_a_round_trip() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        let settings = Settings {
+            language: "en".into(),
+            ..Default::default()
+        };
+
+        save_to(&path, &settings).unwrap();
+
+        assert_eq!(load_from(&path).unwrap().language, "en");
     }
 
     fn sample() -> Settings {

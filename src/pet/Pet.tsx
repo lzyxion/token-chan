@@ -19,12 +19,14 @@ import {
   gaugeLabelShowOf,
   fillsRemaining,
   meterColor,
+  meterLabel,
   meterLevel,
   SOURCE_LABEL,
   SOURCES,
   SOURCE_SHORT,
   totalOf,
 } from "../format";
+import { useI18n } from "../i18n";
 import type {
   AppSettings,
   CharacterImages,
@@ -87,6 +89,7 @@ function resolvePack(
 
 
 export default function Pet() {
+  const { language, t } = useI18n();
   const live = useLive();
   const pickableSources = useEnabledSources();
   const summary = useSummary();
@@ -534,7 +537,10 @@ export default function Pet() {
         const { text: tpl, state: st, pack } = e.payload;
         // 완료 대사의 변수는 사건이 있어야 값이 생기므로 테스트에선 표본값을 넣는다 —
         // `{제목}` 이 중괄호째 나오면 문구가 맞게 짜였는지 확인할 수가 없다
-        const vars = speechVarsRef.current({ 제목: "token-chan", 걸린시간: "3분 12초" });
+        const vars = speechVarsRef.current({
+          제목: "token-chan",
+          걸린시간: t("3분 12초", "3m 12s"),
+        });
         // 값을 모르는 변수 때문에 전부 생략되면 원문이라도 보여준다 — 테스트니까
         const text = interpolate(tpl, vars) ?? tpl.split("|").join("\n");
         void invoke("show_speech", { text });
@@ -553,14 +559,14 @@ export default function Pet() {
       clearTimeout(previewTimerRef.current);
       un.then((f) => f());
     };
-  }, []);
+  }, [language]);
 
   // 문구 템플릿의 `{변수}` 에 넣을 표시 시점 값 (null = 아직 모르는 값 → 그 줄 생략).
   // `extra` 는 그 사건에만 있는 값 — 작업 완료 대사의 `{제목}`·`{걸린시간}` 처럼
   // 전역 상태로는 못 구하는 것들이고, 겹치는 이름은 사건 쪽이 이긴다
   // (`{벤더}` 는 평소엔 게이지가 보는 벤더지만 완료 대사에선 **끝난 세션의** 벤더다).
   const speechVars = (extra?: Record<string, string | null>): Record<string, string | null> => {
-    return {
+    const vars: Record<string, string | null> = {
       오늘토큰: summary ? fmtTokens(totalOf(summary.today)) : null,
       오늘비용: summary ? fmtCost(summary.today_cost, summary.cost_partial, currency) : null,
       세션: sessionPct != null ? String(sessionPct) : null,
@@ -573,6 +579,20 @@ export default function Pet() {
         : null,
       모델: summary?.last_model ? shortModel(summary.last_model) : null,
       ...extra,
+    };
+    return {
+      ...vars,
+      todayTokens: vars.오늘토큰,
+      todayCost: vars.오늘비용,
+      session: vars.세션,
+      weekly: vars.주간,
+      context: vars.컨텍스트,
+      provider: vars.벤더,
+      resetIn: vars.리셋,
+      resetAt: vars.리셋시각,
+      model: vars.모델,
+      title: vars.제목 ?? null,
+      duration: vars.걸린시간 ?? null,
     };
   };
   speechVarsRef.current = speechVars;
@@ -590,7 +610,7 @@ export default function Pet() {
     // 다른 세션이 계속 도는 동안 완료할 때마다 시작 대사가 따라붙는다.
     if (prev === "poke" || state === "poke") return;
     if (prev === "done" || state === "done") return;
-    const tpl = speechFor(prev, state, effectiveSpeechLines);
+    const tpl = speechFor(prev, state, effectiveSpeechLines, language);
     const line = tpl ? interpolate(tpl, speechVars()) : null;
     if (line) void invoke("show_speech", { text: line });
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -658,14 +678,14 @@ export default function Pet() {
     const title =
       summary?.sessions.find((r) => r.source === done.view.source && r.id === done.view.id)
         ?.label ?? null;
-    const tpl = pick(linesFor("done", effectiveSpeechLines), "done");
+    const tpl = pick(linesFor("done", effectiveSpeechLines, language), "done");
     const line = tpl
       ? interpolate(
           tpl,
           speechVars({
             제목: title,
             벤더: SOURCE_LABEL[done.view.source],
-            걸린시간: fmtDuration(done.ms / 1000),
+            걸린시간: fmtDuration(done.ms / 1000, language),
           }),
         )
       : null;
@@ -684,10 +704,10 @@ export default function Pet() {
     if (disabledStates.includes("poke")) return;
     setPokeUntil(Date.now() + POKE_MS);
     if (!summary) {
-      void invoke("show_speech", { text: "아직 사용량을 읽는 중이야…" });
+      void invoke("show_speech", { text: t("아직 사용량을 읽는 중이야…", "I'm still reading your usage…") });
       return;
     }
-    const tpl = pick(linesFor("poke", effectiveSpeechLines), "poke");
+    const tpl = pick(linesFor("poke", effectiveSpeechLines, language), "poke");
     const text = tpl ? interpolate(tpl, speechVars()) : null;
     if (text) void invoke("show_speech", { text });
   };
@@ -836,11 +856,11 @@ export default function Pet() {
       key,
       m.used_pct,
       <>
-        {m.label} <b>{m.used_pct}%</b>
+        {meterLabel(m.label, language)} <b>{m.used_pct}%</b>
         {/* 리셋은 첫 미터(가장 짧은 창)의 것 — 그 창이 리셋되는 시각이라 같은 줄에 얹는다.
             `~` 는 공식 캐시가 굳어 백엔드가 계산한 값이라는 표시 (패널 툴팁에 설명이 있다) */}
         {slot === 0 && resetRemainMin != null ? (
-          <> · 리셋 {m.resets_computed ? "~" : ""}{fmtMinutes(resetRemainMin)}</>
+          <> · {t("리셋", "reset")} {m.resets_computed ? "~" : ""}{fmtMinutes(resetRemainMin)}</>
         ) : null}
       </>,
       // 공식 한도는 창 길이를 가리지 않고 한 설정을 쓴다 (`AlertThresholds.plan`)
@@ -935,7 +955,7 @@ export default function Pet() {
             <button
               key={src}
               className="gauge-dot-btn"
-              title={`${SOURCE_LABEL[src]} 작업 중 — 클릭하면 게이지 고정`}
+              title={t(`${SOURCE_LABEL[src]} 작업 중 — 클릭하면 게이지 고정`, `${SOURCE_LABEL[src]} is working — click to pin the gauge`)}
               onPointerDown={(e) => e.stopPropagation()}
               onPointerUp={(e) => e.stopPropagation()}
               onDoubleClick={(e) => e.stopPropagation()}
@@ -955,8 +975,8 @@ export default function Pet() {
                 시작 시각을 모르면(첫 회차부터 돌던 세션) 원래 문구로 떨어진다. */}
             {active.busy
               ? busySince == null
-                ? " · 작업 중"
-                : ` · ${fmtDuration((Date.now() - busySince) / 1000)}`
+                ? t(" · 작업 중", " · working")
+                : ` · ${fmtDuration((Date.now() - busySince) / 1000, language)}`
               : ""}
             {/* 고정 중 표시 — 글자 대신 핀 아이콘 (이모지는 색을 못 입혀 SVG) */}
             {gaugeVendor !== "auto" && (
@@ -983,12 +1003,12 @@ export default function Pet() {
               "context",
               contextPct,
               <>
-                컨텍스트 <b>{contextPct}%</b>
-                {ctx.interim ? " · 정리 중" : ""}
+                {t("컨텍스트", "Context")} <b>{contextPct}%</b>
+                {ctx.interim ? t(" · 정리 중", " · finalizing") : ""}
               </>,
               ctxThreshold * 100,
             )
-          : ringRow("context", null, <>컨텍스트 <b>—</b></>, ctxThreshold * 100)}
+          : ringRow("context", null, <>{t("컨텍스트", "Context")} <b>—</b></>, ctxThreshold * 100)}
         {meterRow(0)}
         {meterRow(1)}
       </div>

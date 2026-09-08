@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import type { CharacterRule } from "../../types";
 import type { TabProps } from "./types";
+import { useI18n } from "../../i18n";
 
 interface Props extends TabProps {
   /** 설치된 캐릭터 팩 목록 */
@@ -22,6 +23,7 @@ export default function CharacterTab({
   onScaleChange,
   onRefresh,
 }: Props) {
+  const { t } = useI18n();
   // 규칙 편집은 이 탭 밖에서 쓰이지 않는다 — `s` 와 `update` 만 있으면 되므로
   // 껍데기가 아니라 여기 둔다.
   const updateRule = (i: number, patch: Partial<CharacterRule>) => {
@@ -45,7 +47,7 @@ export default function CharacterTab({
   return (
     <>
         <div className="settings-group">
-          <div className="settings-label">캐릭터</div>
+          <div className="settings-label">{t("캐릭터", "Character")}</div>
           <div className="settings-row">
             <select
               className="settings-select"
@@ -54,7 +56,7 @@ export default function CharacterTab({
                 update({ characterPack: e.currentTarget.value || null })
               }
             >
-              <option value="">기본 (토큰짱)</option>
+              <option value="">{t("기본 (토큰짱)", "Default (TokenChan)")}</option>
               {packs.map((p) => (
                 <option key={p} value={p}>
                   {p}
@@ -64,7 +66,7 @@ export default function CharacterTab({
             <button
               className="settings-btn"
               onClick={onRefresh}
-              title="팩 목록 새로고침 — 폴더에서 직접 바꾼 내용도 펫에 바로 반영"
+              title={t("팩 목록 새로고침 — 폴더에서 직접 바꾼 내용도 펫에 바로 반영", "Refresh character packs and apply changes made directly in their folders")}
             >
               ↻
             </button>
@@ -74,24 +76,23 @@ export default function CharacterTab({
               className="settings-btn"
               onClick={() => void invoke("open_studio")}
             >
-              캐릭터 스튜디오 열기…
+              {t("캐릭터 스튜디오 열기…", "Open Character Studio…")}
             </button>
           </div>
           <div className="settings-hint">
-            캐릭터 만들기·상태별 이미지·상태 사용·대사 편집은 전부
-            스튜디오에서 합니다
+            {t("캐릭터 만들기·상태별 이미지·상태 사용·대사 편집은 전부 스튜디오에서 합니다", "Create characters and edit state images, enabled states, and dialogue in Character Studio.")}
           </div>
         </div>
 
         <div className="settings-group">
           <div className="settings-label">
-            모델별 캐릭터 규칙 (최장 접두사 우선)
+            {t("모델별 캐릭터 규칙 (최장 접두사 우선)", "Model-specific character rules (longest prefix wins)")}
           </div>
           {(s.characterRules ?? []).map((r, i) => (
             <div className="settings-row" key={i}>
               <input
                 className="settings-input"
-                placeholder="접두사 (예: claude-opus 또는 gpt, o3)"
+                placeholder={t("접두사 (예: claude-opus 또는 gpt, o3)", "Prefix (e.g. claude-opus or gpt, o3)")}
                 value={r.prefixes}
                 onChange={(e) =>
                   updateRule(i, { prefixes: e.currentTarget.value })
@@ -104,7 +105,7 @@ export default function CharacterTab({
                   updateRule(i, { pack: e.currentTarget.value })
                 }
               >
-                <option value="">팩 선택</option>
+                <option value="">{t("팩 선택", "Select pack")}</option>
                 {packs.map((p) => (
                   <option key={p} value={p}>
                     {p}
@@ -121,13 +122,13 @@ export default function CharacterTab({
           ))}
           <div className="settings-row">
             <button className="settings-btn" onClick={addRule}>
-              + 규칙 추가
+              {t("+ 규칙 추가", "+ Add rule")}
             </button>
           </div>
           {observedModels.length > 0 && (
             <>
               <div className="settings-hint">
-                최근 관측된 모델 (클릭 → 규칙으로 추가):
+                {t("최근 관측된 모델 (클릭 → 규칙으로 추가):", "Recently observed models (click to add a rule):")}
               </div>
               <div className="chips">
                 {observedModels.map((m) => (
@@ -146,7 +147,7 @@ export default function CharacterTab({
 
         <div className="settings-group">
           <div className="settings-label">
-            캐릭터 크기 <b>{Math.round(s.petScale * 100)}%</b>
+            {t("캐릭터 크기", "Character size")} <b>{Math.round(s.petScale * 100)}%</b>
           </div>
           <div className="settings-row">
             <span className="settings-min">50%</span>
@@ -173,13 +174,13 @@ export default function CharacterTab({
                 update({ speechEnabled: e.currentTarget.checked })
               }
             />
-            상황별 대사 말풍선
+            {t("상황별 대사 말풍선", "State-based speech bubbles")}
             <span className="settings-hint-inline">
-              (경고·리셋·작업·잠자기)
+              {t("(경고·리셋·작업·잠자기)", "(alerts, resets, work, sleep)")}
             </span>
           </label>
           <div className="settings-label">
-            대사 표시 시간 <b>{(s.speechDurationMs / 1000).toFixed(1)}s</b>
+            {t("대사 표시 시간", "Dialogue duration")} <b>{(s.speechDurationMs / 1000).toFixed(1)}s</b>
           </div>
           <div className="settings-row">
             <span className="settings-min">1s</span>
@@ -199,7 +200,7 @@ export default function CharacterTab({
             <span className="settings-max">15s</span>
           </div>
           <div className="settings-hint">
-            문구 내용은 캐릭터 스튜디오(캐릭터 탭)에서 편집합니다
+            {t("문구 내용은 캐릭터 스튜디오(캐릭터 탭)에서 편집합니다", "Edit dialogue text in Character Studio from the Character tab.")}
           </div>
         </div>
 

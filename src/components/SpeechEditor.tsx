@@ -1,12 +1,23 @@
 import { useRef } from "react";
-import { DEFAULT_LINES } from "../pet/speech";
+import { defaultLines } from "../pet/speech";
+import { useI18n } from "../i18n";
 
 /** 문구에서 쓸 수 있는 변수 — 리셋 임박은 백엔드가 채우는 {분}·{시각}만 지원한다 */
-const VARS_DEFAULT = ["오늘토큰", "오늘비용", "세션", "주간", "컨텍스트", "리셋", "리셋시각", "모델", "벤더"];
-const VARS_RESET = ["분", "시각"];
+const VARS_DEFAULT = [
+  ["오늘토큰", "todayTokens"],
+  ["오늘비용", "todayCost"],
+  ["세션", "session"],
+  ["주간", "weekly"],
+  ["컨텍스트", "context"],
+  ["리셋", "resetIn"],
+  ["리셋시각", "resetAt"],
+  ["모델", "model"],
+  ["벤더", "provider"],
+] as const;
+const VARS_RESET = [["분", "minutes"], ["시각", "time"]] as const;
 /** 작업 완료는 **끝난 세션**에서만 아는 값이 앞에 더 붙는다 (그 자리의 `{벤더}` 도
  *  게이지가 보는 벤더가 아니라 끝난 세션의 벤더다) */
-const VARS_DONE = ["제목", "걸린시간", ...VARS_DEFAULT];
+const VARS_DONE = [["제목", "title"], ["걸린시간", "duration"], ...VARS_DEFAULT] as const;
 
 interface FieldProps {
   /** 상황 키 (speech.ts DEFAULT_LINES · speech.json 과 동일) */
@@ -33,13 +44,14 @@ export function SpeechField({
   onChange,
   onTest,
 }: FieldProps) {
+  const { language, t } = useI18n();
   const ref = useRef<HTMLTextAreaElement>(null);
   const value = lines[key]?.join("\n") ?? "";
   const placeholder = (() => {
     if (baseLines?.[key]?.some((l) => l.trim())) {
       return (baseLines[key] ?? []).join("\n");
     }
-    return (DEFAULT_LINES[key] ?? []).join("\n");
+    return (defaultLines(language)[key] ?? []).join("\n");
   })();
   /** 지금 실제로 쓰이는 후보 — 런타임 linesFor 와 같은 판정 (편집값 → 폴백) */
   const pool = nonBlankLines(value).length
@@ -68,11 +80,11 @@ export function SpeechField({
       <div className="settings-speech-head">
         <span className="settings-hint">{label}</span>
         <span className="settings-hint">
-          {pool.length > 1 ? `${pool.length}개 중 무작위 ` : ""}
+          {pool.length > 1 ? t(`${pool.length}개 중 무작위 `, `Random from ${pool.length} `) : ""}
           {onTest && pool.length > 0 && (
             <button
               className="speech-test"
-              title="펫이 이 대사를 실제로 말해봅니다 (무작위 한 줄)"
+              title={t("펫이 이 대사를 실제로 말해봅니다 (무작위 한 줄)", "Preview one random line on the pet")}
               /* 칩과 같은 이유로 mousedown 을 막는다 — 다른 칸을 편집 중에 누르면
                  그 칸이 포커스를 잃으며 변수 칩이 접히고, 그만큼 아래 내용이 위로
                  밀려 커서 밑에서 버튼이 빠져나간다(= 클릭이 안 먹는다) */
@@ -81,7 +93,7 @@ export function SpeechField({
                 onTest(key, pool[Math.floor(Math.random() * pool.length)])
               }
             >
-              ▶ 테스트
+              ▶ {t("테스트", "Test")}
             </button>
           )}
         </span>
@@ -98,17 +110,20 @@ export function SpeechField({
       {/* 변수 칩 — 칸에 포커스가 있을 때만 (CSS :focus-within).
           mousedown 을 막아야 클릭 순간 textarea 가 포커스를 잃으며 칩이 사라지지 않는다 */}
       <div className="speech-vars chips">
-        {vars.map((v) => (
+        {vars.map((names) => {
+          const name = names[language === "en" ? 1 : 0];
+          return (
           <button
-            key={v}
+            key={names[0]}
             className="chip-btn"
             onMouseDown={(e) => e.preventDefault()}
-            onClick={() => insertVar(v)}
-            title="커서 위치에 삽입"
+            onClick={() => insertVar(name)}
+            title={t("커서 위치에 삽입", "Insert at cursor")}
           >
-            {`{${v}}`}
+            {`{${name}}`}
           </button>
-        ))}
+          );
+        })}
       </div>
     </div>
   );

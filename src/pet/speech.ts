@@ -1,4 +1,5 @@
 import type { PetState } from "../types";
+import type { Language } from "../i18n";
 
 /**
  * 상황(상태 전이·클릭 반응) → 캐릭터 대사.
@@ -102,6 +103,91 @@ export const DEFAULT_LINES: Record<string, string[]> = {
   ],
 };
 
+export const DEFAULT_LINES_EN: Record<string, string[]> = {
+  "enter.exhausted": [
+    "We're out of tokens…",
+    "I can't do any more. Let's wait for the reset.",
+    "Limit exhausted! Time for a short break.",
+    "That's the limit for now!",
+    "Empty… I need a recharge.",
+    "That's all for today. Nice work!",
+    "Energy at zero. Waiting for the reset.",
+  ],
+  "enter.alert": [
+    "The limit is getting close…",
+    "We've used quite a bit of this window. Careful!",
+    "Should we slow down a little?",
+    "Oh, we've used more than I thought.",
+    "Approaching the limit! Let's conserve tokens.",
+    "Warning light on. Let's use what's left wisely.",
+    "Time to pace ourselves.",
+  ],
+  "enter.refreshed": [
+    "A new window has started!",
+    "Recharged! Let's get back to it.",
+    "Reset complete. We're good to go.",
+    "Ta-da, a fresh limit window!",
+    "Full energy! What's first?",
+    "Everything has reset cleanly.",
+    "Refill complete! Ready when you are.",
+  ],
+  "enter.working": [
+    "Task started!",
+    "Tap tap… working on it.",
+    "I'll do my best!",
+    "All right, let's begin.",
+    "Focus mode on!",
+    "Leave it to me.",
+    "Thinking… just a moment.",
+  ],
+  done: [
+    "Finished {title}!|Took {duration}",
+    "All done—nice work!|Completed in {duration}",
+    "Task complete! Took {duration}",
+    "The {provider} task is done.|{title}",
+    "Done!|{title} · {duration}",
+    "Finished in {duration}!",
+    "Completed successfully.|{provider} · {duration}",
+  ],
+  "enter.sleep": [
+    "I'm getting sleepy…",
+    "It's quiet… time for a nap.",
+    "zzz…",
+    "Nothing happening. I'll rest my eyes.",
+    "Anyone there? I'm going to sleep.",
+    "Yawn—getting drowsy.",
+    "Switching to standby for a bit.",
+  ],
+  "leave.sleep": [
+    "It's been a while!",
+    "That was a good nap… ready to go?",
+    "Oh, you're back!",
+    "I've been waiting! What's next?",
+    "I'm awake and ready!",
+    "Welcome back!",
+    "Yawn—I'm up now.",
+  ],
+  poke: [
+    "Today {todayTokens} · {todayCost}|Session {session}% · weekly {weekly}%|Reset in {resetIn}",
+    "You've used {todayTokens} today!|Session {session}% · weekly {weekly}%|Resets in {resetIn}",
+    "About {todayCost} so far|Using {model}|Session gauge {session}%",
+    "You called? Today {todayTokens} · {todayCost}|Weekly limit {weekly}%",
+    "Check! Today {todayCost}|Reset in {resetIn}",
+    "Today total {todayTokens}|Session {session}% · resets at {resetAt}",
+  ],
+  resetNotify: [
+    "This window resets in {minutes}m! ({time})",
+    "Just {minutes}m until the reset ({time})",
+    "Reset soon! A new window opens at {time}.",
+    "{minutes}m left until the {time} reset.",
+    "Reset approaching! Recharged in {minutes}m ({time}).",
+  ],
+};
+
+export function defaultLines(language: Language): Record<string, string[]> {
+  return language === "en" ? DEFAULT_LINES_EN : DEFAULT_LINES;
+}
+
 /** 상황 키 → 직전에 고른 문구. 같은 상황이 연달아 같은 대사를 내지 않게 한다. */
 const lastPicked = new Map<string, string>();
 
@@ -121,10 +207,11 @@ export function pick(lines: string[], key?: string): string | null {
 export function linesFor(
   key: string,
   overrides: Record<string, string[]> | undefined,
+  language: Language = "en",
 ): string[] {
   const custom = overrides?.[key]?.map((l) => l.trim()).filter(Boolean);
   if (custom?.length) return custom;
-  return DEFAULT_LINES[key] ?? [];
+  return defaultLines(language)[key] ?? [];
 }
 
 /** 대사가 없는 전이면 null. 반환값은 아직 `{변수}` 가 남은 템플릿 — interpolate 로 채운다 */
@@ -132,13 +219,14 @@ export function speechFor(
   prev: PetState,
   next: PetState,
   overrides?: Record<string, string[]>,
+  language: Language = "en",
 ): string | null {
   // 진입 대사가 우선 — 경고/소진처럼 알려야 할 상황을 이탈 대사가 가리지 않게
   const enterKey = `enter.${next}`;
-  const enter = linesFor(enterKey, overrides);
+  const enter = linesFor(enterKey, overrides, language);
   if (enter.length) return pick(enter, enterKey);
   const leaveKey = `leave.${prev}`;
-  const leave = linesFor(leaveKey, overrides);
+  const leave = linesFor(leaveKey, overrides, language);
   if (leave.length) return pick(leave, leaveKey);
   return null;
 }
