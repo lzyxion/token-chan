@@ -89,9 +89,9 @@ Open the usage panel to compare all providers at once.
 
 Double-click the character or open the panel from the tray menu. Move between pages with the mouse wheel or the `◀` and `▶` buttons.
 
-| Overview | Stats & usage | Activity history |
-| :---: | :---: | :---: |
-| <img src="docs/demo/panel-now.png" alt="Usage overview showing context and official rate limits by provider" width="250" /> | <img src="docs/demo/panel-usage.png" alt="Usage statistics showing token totals, cost, provider share, and model breakdowns" width="250" /> | <img src="docs/demo/usage-grass.png" alt="Activity history showing daily activity and usage by provider and model" width="250" /> |
+| Overview | Recent sessions | Stats & usage | Activity history |
+| :---: | :---: | :---: | :---: |
+| <img src="docs/demo/panel-now.png" alt="Usage overview showing context and official rate limits by provider" width="200" /> | <img src="docs/demo/panel-sessions.png" alt="Recent sessions showing projects, session titles, models, and token usage" width="200" /> | <img src="docs/demo/panel-usage.png" alt="Usage statistics showing token totals, cost, provider share, and model breakdowns" width="200" /> | <img src="docs/demo/usage-grass.png" alt="Activity history showing daily activity and usage by provider and model" width="200" /> |
 
 | Page | Contents |
 | --- | --- |
@@ -109,9 +109,9 @@ Double-click the character or open the panel from the tray menu. Move between pa
 | Character | Default character, size, speech bubble, model rules, Character Studio |
 | Accounts | Discovered CLI accounts, inclusion in totals, additional CLI home directories |
 
-| Alert settings | Character settings |
-| :---: | :---: |
-| <img src="docs/demo/settings-alert.png" alt="Settings for warning thresholds, resets, task completion, and sleep behavior" width="300" /> | <img src="docs/demo/settings-character.png" alt="Settings for character selection, size, speech bubbles, and model-specific rules" width="300" /> |
+| General settings | Alert settings | Character settings | Account settings |
+| :---: | :---: | :---: | :---: |
+| <img src="docs/demo/settings-general.png" alt="General settings for interface language, currency, gauges, startup behavior, and launch at login" width="200" /> | <img src="docs/demo/settings-alert.png" alt="Settings for warning thresholds, resets, task completion, and sleep behavior" width="200" /> | <img src="docs/demo/settings-character.png" alt="Settings for character selection, size, speech bubbles, and model-specific rules" width="200" /> | <img src="docs/demo/settings-account.png" alt="Account settings for discovered CLI accounts and additional CLI home directories" width="200" /> |
 
 Settings are stored in `<OS config directory>/token-chan/settings.json`.
 

@@ -73,12 +73,9 @@ AI CLI의 **토큰 사용량·한도·작업 상태**를 바탕화면 위 캐릭
 
 캐릭터 옆의 링은 현재 선택된 서비스 하나의 값입니다. 맨 위 로고가 보고 있는 서비스이며, 작업 중에는 로고가 깜빡입니다.
 
-```text
-  [logo]                        [logo] Claude · fable-5 · 작업 중
-   ◕      마우스를 올리면 →      ◕ 컨텍스트 16%
-   ◔                             ◔ 5시간 15% · 리셋 4h 22m
-   ○                             ○ 주간 26%
-```
+| 기본 상태 | 마우스를 올렸을 때 |
+| :---: | :---: |
+| <img src="docs/demo/no-hover.png" alt="서비스 로고와 사용량 링만 표시된 토큰쨩 게이지의 기본 상태" width="280" /> | <img src="docs/demo/hover.png" alt="모델, 컨텍스트 사용량, 공식 한도와 리셋 시간이 펼쳐진 토큰쨩 게이지" width="280" /> |
 
 - 자동 모드에서는 `작업 중 → 마지막으로 사용한 세션 → 오늘 사용량 1위` 순서로 서비스를 선택합니다.
 - 로고를 클릭하거나 `설정 → 일반 → 게이지`에서 표시할 서비스를 고정할 수 있습니다.
@@ -92,9 +89,9 @@ AI CLI의 **토큰 사용량·한도·작업 상태**를 바탕화면 위 캐릭
 
 캐릭터를 더블클릭하거나 트레이 메뉴에서 엽니다. 마우스 휠 또는 하단의 `◀`, `▶` 버튼으로 페이지를 이동합니다.
 
-| 사용량 현황 | 통계·사용량 | 사용 기록 |
-| :---: | :---: | :---: |
-| <img src="docs/demo/panel-now.png" alt="서비스별 컨텍스트와 공식 한도를 보여주는 사용량 현황 화면" width="250" /> | <img src="docs/demo/panel-usage.png" alt="기간별 토큰 사용량과 비용, 서비스 및 모델 구성을 보여주는 통계 화면" width="250" /> | <img src="docs/demo/usage-grass.png" alt="일별 활동과 선택한 날짜의 서비스 및 모델 사용량을 보여주는 사용 기록 화면" width="250" /> |
+| 사용량 현황 | 최근 세션 | 통계·사용량 | 사용 기록 |
+| :---: | :---: | :---: | :---: |
+| <img src="docs/demo/panel-now.png" alt="서비스별 컨텍스트와 공식 한도를 보여주는 사용량 현황 화면" width="200" /> | <img src="docs/demo/panel-sessions.png" alt="프로젝트, 세션 제목, 모델과 토큰 사용량을 보여주는 최근 세션 화면" width="200" /> | <img src="docs/demo/panel-usage.png" alt="기간별 토큰 사용량과 비용, 서비스 및 모델 구성을 보여주는 통계 화면" width="200" /> | <img src="docs/demo/usage-grass.png" alt="일별 활동과 선택한 날짜의 서비스 및 모델 사용량을 보여주는 사용 기록 화면" width="200" /> |
 
 | 페이지 | 내용 |
 | --- | --- |
@@ -112,9 +109,9 @@ AI CLI의 **토큰 사용량·한도·작업 상태**를 바탕화면 위 캐릭
 | 캐릭터 | 기본 캐릭터, 크기, 말풍선, 모델별 캐릭터 규칙, 캐릭터 스튜디오 |
 | 계정 | 발견된 CLI 계정 확인, 계정별 집계 포함 여부, 추가 CLI 홈 경로 |
 
-| 알림 설정 | 캐릭터 설정 |
-| :---: | :---: |
-| <img src="docs/demo/settings-alert.png" alt="위험 한도와 리셋, 작업 완료 및 잠자기 알림을 조절하는 설정 화면" width="300" /> | <img src="docs/demo/settings-character.png" alt="캐릭터 선택과 크기, 말풍선 및 모델별 캐릭터 규칙을 조절하는 설정 화면" width="300" /> |
+| 일반 설정 | 알림 설정 | 캐릭터 설정 | 계정 설정 |
+| :---: | :---: | :---: | :---: |
+| <img src="docs/demo/settings-general.png" alt="화면 언어, 통화, 게이지, 시작 동작과 로그인 시 실행을 조절하는 일반 설정 화면" width="200" /> | <img src="docs/demo/settings-alert.png" alt="위험 한도와 리셋, 작업 완료 및 잠자기 알림을 조절하는 설정 화면" width="200" /> | <img src="docs/demo/settings-character.png" alt="캐릭터 선택과 크기, 말풍선 및 모델별 캐릭터 규칙을 조절하는 설정 화면" width="200" /> | <img src="docs/demo/settings-account.png" alt="발견된 CLI 계정과 추가 CLI 홈 경로를 관리하는 계정 설정 화면" width="200" /> |
 
 설정은 `<설정 폴더>/token-chan/settings.json`에 저장됩니다.
 
