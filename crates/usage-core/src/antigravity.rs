@@ -216,8 +216,17 @@ impl AntigravityAdapter {
     }
 
     /// 최근 대화 목록. 제목·작업 위치까지 `parse_conversation` 이 채워 둔다.
-    pub fn sessions(&self) -> Vec<SessionRow> {
-        self.cache.values().filter_map(|fc| fc.session.clone()).collect()
+    pub fn sessions(&self, since: DateTime<Utc>) -> Vec<SessionRow> {
+        self.cache
+            .values()
+            .filter_map(|fc| {
+                crate::session::in_period(
+                    fc.session.as_ref()?,
+                    fc.events.iter().map(|event| &event.ev),
+                    since,
+                )
+            })
+            .collect()
     }
 
     /// 스캔한 대화 DB 중 가장 최근에 쓰인 시각 — 작업 중 판정용.
@@ -243,8 +252,8 @@ impl crate::adapter::SourceAdapter for AntigravityAdapter {
     fn context(&self, pricing: &PriceTable) -> Option<ContextState> {
         AntigravityAdapter::context(self, pricing)
     }
-    fn sessions(&self) -> Vec<SessionRow> {
-        AntigravityAdapter::sessions(self)
+    fn sessions(&self, since: DateTime<Utc>) -> Vec<SessionRow> {
+        AntigravityAdapter::sessions(self, since)
     }
 }
 

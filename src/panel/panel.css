@@ -873,6 +873,7 @@
   border: 1px solid transparent;
 }
 .vendor-card.active::before,
+.project-row.active::before,
 .session-row.active::before {
   content: "";
   position: absolute;
@@ -1094,6 +1095,101 @@
   flex-direction: column;
   gap: 4px;
 }
+.session-period {
+  color: var(--fg-faint);
+  font-size: 9px;
+  padding: 0 4px 1px;
+}
+.session-project {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.project-row {
+  position: relative;
+  overflow: hidden;
+  width: 100%;
+  display: grid;
+  grid-template-columns: 10px minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 6px;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 7px;
+  background: rgba(255, 255, 255, 0.055);
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.project-row:hover {
+  background: rgba(255, 255, 255, 0.085);
+}
+.project-row.active:not(.collapsed) {
+  border-color: rgba(53, 208, 127, 0.18);
+}
+/* 접힌 프로젝트에서는 자식의 활성 glow를 볼 수 없으므로 헤더가 같은 신호를 대신한다. */
+.project-row.active.collapsed {
+  border-color: rgba(53, 208, 127, 0.48);
+  box-shadow: 0 0 10px rgba(53, 208, 127, 0.25);
+}
+.project-chevron {
+  color: var(--fg-faint);
+  font-size: 9px;
+  line-height: 1;
+}
+.project-label {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--fg);
+  font-size: 10.5px;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.project-active {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--grass);
+  font-size: 8.5px;
+  white-space: nowrap;
+}
+.project-active::before {
+  content: "";
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--grass);
+  box-shadow: 0 0 5px rgba(53, 208, 127, 0.65);
+  animation: dot-pulse 1.4s ease-in-out infinite;
+}
+.project-total {
+  display: flex;
+  align-items: baseline;
+  gap: 5px;
+  white-space: nowrap;
+}
+.project-total b {
+  color: var(--fg-soft);
+  font-size: 9.5px;
+}
+.project-total i {
+  color: var(--fg-faint);
+  font-size: 8.5px;
+  font-style: normal;
+}
+.project-sessions {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding-left: 10px;
+}
+.project-more {
+  color: var(--fg-faint);
+  font-size: 8.5px;
+  padding: 1px 5px;
+  text-align: right;
+}
 .session-row {
   position: relative;
   overflow: hidden;
@@ -1122,10 +1218,14 @@
 }
 @media (prefers-reduced-motion: reduce) {
   .vendor-card.active::before,
+  .project-row.active::before,
   .session-row.active::before {
     animation: none;
     opacity: 0.8;
     box-shadow: 0 0 5px rgba(53, 208, 127, 0.4);
+  }
+  .project-active::before {
+    animation: none;
   }
 }
 .session-row .vendor-icon {

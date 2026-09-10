@@ -41,7 +41,16 @@ import {
   type Currency,
 } from "../format";
 import { useI18n } from "../i18n";
-import type { ContextState, DailyDetail, PlanMeter, PlanUsage, Source, SourceSummary } from "../types";
+import type {
+  ContextState,
+  DailyDetail,
+  PlanMeter,
+  PlanUsage,
+  ProjectSessions,
+  SessionRow,
+  Source,
+  SourceSummary,
+} from "../types";
 import "./panel.css";
 
 /** 게이지 한 줄: `라벨 | 바 | % | 리셋`. 컨텍스트와 한도가 같은 격자를 써야
@@ -254,6 +263,93 @@ function resetCreditExpiry(credit: NonNullable<PlanUsage["reset_credits"]>) {
   return { days, pct, tone };
 }
 
+const liveSessionKey = (session: Pick<SessionRow, "source" | "id">) =>
+  `${session.source}:${session.id}`;
+
+function ProjectSessionGroup({
+  project,
+  collapsed,
+  runningKeys,
+  retention,
+  onToggle,
+}: {
+  project: ProjectSessions;
+  collapsed: boolean;
+  runningKeys: Set<string>;
+  retention: number;
+  onToggle: () => void;
+}) {
+  const { language, t } = useI18n();
+  const activeCount = project.sessions.filter((session) =>
+    runningKeys.has(liveSessionKey(session)),
+  ).length;
+  const active = activeCount > 0;
+  const projectLabel = project.label || t("프로젝트 없음", "Unknown project");
+  const countLabel = language === "en"
+    ? `${project.sessionCount} ${project.sessionCount === 1 ? "session" : "sessions"}`
+    : `${project.sessionCount}세션`;
+
+  return (
+    <section className="session-project">
+      <button
+        className={`project-row${active ? " active" : ""}${collapsed ? " collapsed" : ""}`}
+        type="button"
+        aria-expanded={!collapsed}
+        title={`${project.cwd || projectLabel}\n${retentionLabel(retention, language)} ${t("합계", "total")}`}
+        onClick={onToggle}
+      >
+        <span className="project-chevron" aria-hidden="true">{collapsed ? "▸" : "▾"}</span>
+        <span className="project-label">{projectLabel}</span>
+        {active && (
+          <span className="project-active">
+            {activeCount > 1 ? t(`작업 중 ${activeCount}`, `${activeCount} active`) : t("작업 중", "Active")}
+          </span>
+        )}
+        <span className="project-total">
+          <b>{fmtTokens(project.tokens)}</b>
+          <i>{countLabel}</i>
+        </span>
+      </button>
+      {!collapsed && (
+        <div className="project-sessions">
+          {project.sessions.map((session) => {
+            const sessionActive = runningKeys.has(liveSessionKey(session));
+            return (
+              <div
+                className={`session-row${sessionActive ? " active" : ""}`}
+                key={liveSessionKey(session)}
+                title={session.cwd || session.id}
+              >
+                {/* 프로젝트가 펼쳐졌을 때는 실제로 도는 세션만 기존 glow를 유지한다. */}
+                <VendorIcon
+                  source={session.source}
+                  size={12}
+                  className={sessionActive ? "busy" : ""}
+                />
+                <span className="session-label">{session.label}</span>
+                <span className="session-ago">{fmtAgo(session.at, language)}</span>
+                <span className="session-meta">
+                  {shortModel(session.model)}
+                  {session.branch && ` · ${session.branch}`}
+                </span>
+                <span className="session-tokens">{fmtTokens(session.tokens)}</span>
+              </div>
+            );
+          })}
+          {project.sessionCount > project.sessions.length && (
+            <div className="project-more">
+              {t(
+                `최근 ${project.sessions.length}개 세션 표시`,
+                `Showing ${project.sessions.length} most recent sessions`,
+              )}
+            </div>
+          )}
+        </div>
+      )}
+    </section>
+  );
+}
+
 /** 독립 창으로 뜨는 사용량 패널 — 펫 우클릭 또는 트레이 메뉴로 토글 */
 export default function UsagePanel() {
   const { language, t } = useI18n();
@@ -279,6 +375,8 @@ export default function UsagePanel() {
   // 설정 저장 오류 배너와 같은 규칙: 닫은 소스는 같은 오류가 지속되는 동안 숨기고,
   // 정상으로 돌아오면 목록에서 빼 다음 오류 때 다시 보이게 한다.
   const [dismissedParserSources, setDismissedParserSources] = useState<Source[]>([]);
+  // 기본은 모두 접힘. 라이브 상태가 바뀌어도 작업 중 프로젝트를 자동으로 펼치지 않는다.
+  const [expandedProjects, setExpandedProjects] = useState<Set<string>>(() => new Set());
   const bodyRef = useRef<HTMLDivElement | null>(null);
 
   useWindowPersist("panel");
@@ -382,7 +480,7 @@ export default function UsagePanel() {
   }
   // 최근 세션 목록에서 **그 줄**만 짚기 위한 키. id 를 못 알아낸 세션은 넣지 않는다 —
   // 빈 문자열을 넣으면 id 가 빈 다른 줄과 잘못 맞물린다.
-  const runningKeys = new Set(running.filter((s) => s.id).map((s) => `${s.source}:${s.id}`));
+  const runningKeys = new Set(running.filter((s) => s.id).map(liveSessionKey));
   const pageCount = PAGE_TITLES.length;
   const prev = () => setPage((p) => (p + pageCount - 1) % pageCount);
   const next = () => setPage((p) => (p + 1) % pageCount);
@@ -640,26 +738,29 @@ export default function UsagePanel() {
 
           {page === PAGE.SESSIONS && (
             <div className="sessions">
-              {summary.sessions.length === 0 ? (
+              {(summary.projects ?? []).length === 0 ? (
                 <div className="empty-hint">{t("최근 세션이 없습니다", "No recent sessions")}</div>
               ) : (
-                summary.sessions.map((r) => {
-                  const active = runningKeys.has(`${r.source}:${r.id}`);
-                  return (
-                    <div className={`session-row${active ? " active" : ""}`} key={`${r.source}:${r.id}`} title={r.cwd || r.id}>
-                      {/* 벤더가 아니라 **이 세션**이 도는지로 판단한다 — 벤더로 보면
-                          한 세션만 돌아도 그 벤더의 지난 세션까지 전부 깜빡였다 */}
-                      <VendorIcon source={r.source} size={12} className={active ? "busy" : ""} />
-                      <span className="session-label">{r.label}</span>
-                      <span className="session-ago">{fmtAgo(r.at, language)}</span>
-                      <span className="session-meta">
-                        {shortModel(r.model)}
-                        {r.branch && ` · ${r.branch}`}
-                      </span>
-                      <span className="session-tokens">{fmtTokens(r.tokens)}</span>
-                    </div>
-                  );
-                })
+                <>
+                  <div className="session-period">
+                    {t("프로젝트 합계", "Project totals")} · {retentionLabel(retention, language)}
+                  </div>
+                  {(summary.projects ?? []).map((project) => (
+                    <ProjectSessionGroup
+                      key={project.key}
+                      project={project}
+                      collapsed={!expandedProjects.has(project.key)}
+                      runningKeys={runningKeys}
+                      retention={retention}
+                      onToggle={() => setExpandedProjects((previous) => {
+                        const next = new Set(previous);
+                        if (next.has(project.key)) next.delete(project.key);
+                        else next.add(project.key);
+                        return next;
+                      })}
+                    />
+                  ))}
+                </>
               )}
             </div>
           )}

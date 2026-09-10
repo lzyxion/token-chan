@@ -18,7 +18,7 @@ fn main() {
     agy.scan(since);
 
     let rows = usage_core::session::merge(
-        [claude.sessions(), codex.sessions(), agy.sessions()].concat(),
+        [claude.sessions(since), codex.sessions(since), agy.sessions(since)].concat(),
         15,
     );
     println!("{:<12} {:<28} {:<18} {:>10}  시각", "소스", "이름", "모델", "토큰");

@@ -221,8 +221,17 @@ impl CodexAdapter {
     }
 
     /// 최근 세션 목록
-    pub fn sessions(&self) -> Vec<SessionRow> {
-        self.cache.values().filter_map(|fc| fc.session.clone()).collect()
+    pub fn sessions(&self, since: DateTime<Utc>) -> Vec<SessionRow> {
+        self.cache
+            .values()
+            .filter_map(|fc| {
+                crate::session::in_period(
+                    fc.session.as_ref()?,
+                    fc.events.iter().map(|event| &event.ev),
+                    since,
+                )
+            })
+            .collect()
     }
 
     /// 스캔한 rollout 중 가장 최근에 쓰인 시각 — 작업 중 판정용
@@ -244,8 +253,8 @@ impl crate::adapter::SourceAdapter for CodexAdapter {
     fn context(&self, pricing: &PriceTable) -> Option<ContextState> {
         CodexAdapter::context(self, pricing)
     }
-    fn sessions(&self) -> Vec<SessionRow> {
-        CodexAdapter::sessions(self)
+    fn sessions(&self, since: DateTime<Utc>) -> Vec<SessionRow> {
+        CodexAdapter::sessions(self, since)
     }
     fn plan(&self) -> Option<PlanUsage> {
         CodexAdapter::plan(self)
@@ -1267,7 +1276,7 @@ mod tests {
 
         let mut adapter = CodexAdapter::new(vec![dir.path().to_path_buf()]);
         adapter.scan(DateTime::UNIX_EPOCH);
-        let rows = adapter.sessions();
+        let rows = adapter.sessions(DateTime::UNIX_EPOCH);
 
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].label, "상태 정보를 가져오는데", "첫 줄만, 첫 메시지만");
@@ -1288,7 +1297,7 @@ mod tests {
         std::fs::write(root.join("rollout-current.jsonl"), lines.join("\n")).unwrap();
         let mut adapter = CodexAdapter::new(vec![dir.path().to_path_buf()]);
         adapter.scan(DateTime::UNIX_EPOCH);
-        assert_eq!(adapter.sessions()[0].label, "현재 형식의 Codex 제목");
+        assert_eq!(adapter.sessions(DateTime::UNIX_EPOCH)[0].label, "현재 형식의 Codex 제목");
     }
 
     /// 다른 도구가 Claude 대화를 그대로 입력으로 넣은 세션이 실측됐다
@@ -1306,7 +1315,11 @@ mod tests {
 
         let mut adapter = CodexAdapter::new(vec![dir.path().to_path_buf()]);
         adapter.scan(DateTime::UNIX_EPOCH);
-        assert_eq!(adapter.sessions()[0].label, "src-tauri", "래퍼는 제목이 아니다");
+        assert_eq!(
+            adapter.sessions(DateTime::UNIX_EPOCH)[0].label,
+            "src-tauri",
+            "래퍼는 제목이 아니다"
+        );
     }
 
     /// 첫 사용자 메시지가 없으면(도구로만 돈 세션) 예전처럼 폴더명으로 떨어진다
@@ -1321,7 +1334,7 @@ mod tests {
 
         let mut adapter = CodexAdapter::new(vec![dir.path().to_path_buf()]);
         adapter.scan(DateTime::UNIX_EPOCH);
-        let rows = adapter.sessions();
+        let rows = adapter.sessions(DateTime::UNIX_EPOCH);
 
         assert_eq!(rows[0].label, "api");
         assert_eq!(rows[0].branch, "", "git 정보가 없으면 빈 값");

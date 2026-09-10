@@ -123,6 +123,19 @@ export interface SessionRow {
   tokens: number;
 }
 
+export interface ProjectSessions {
+  /** 전체 경로를 정규화한 그룹 키 */
+  key: string;
+  label: string;
+  cwd: string;
+  /** 현재 조회 기간의 전체 합계 */
+  tokens: number;
+  sessionCount: number;
+  at: string;
+  /** 이 프로젝트의 최근 세션 (전체 개수는 sessionCount) */
+  sessions: SessionRow[];
+}
+
 export interface Summary {
   generated_at: string;
   today_date: string;
@@ -149,6 +162,8 @@ export interface Summary {
   contexts: ContextState[];
   /** 최근 세션 (소스 합쳐 최근순) */
   sessions: SessionRow[];
+  /** 조회 기간 안의 프로젝트 합계와 프로젝트별 최근 세션 */
+  projects: ProjectSessions[];
 }
 
 export interface LiveSessionView {

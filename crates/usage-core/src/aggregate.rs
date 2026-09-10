@@ -154,6 +154,9 @@ pub struct Summary {
     /// 최근 세션 (소스 합쳐 최근순). 어느 프로젝트에서 태웠는지는 이것만 답한다.
     #[serde(default)]
     pub sessions: Vec<crate::session::SessionRow>,
+    /// 조회 기간 안의 프로젝트 합계와 프로젝트별 최근 세션.
+    #[serde(default)]
+    pub projects: Vec<crate::session::ProjectSessions>,
 }
 
 impl Summary {
@@ -424,6 +427,7 @@ pub fn build_summary(
         observed_models: observed.into_iter().collect(),
         contexts: vec![],
         sessions: vec![],
+        projects: vec![],
     }
 }
 

@@ -130,8 +130,17 @@ impl ClaudeAdapter {
     }
 
     /// 최근 세션 목록. 정렬·합치기는 여러 소스를 모으는 호출부(`session::merge`)가 한다.
-    pub fn sessions(&self) -> Vec<SessionRow> {
-        self.cache.values().filter_map(|fc| fc.session.clone()).collect()
+    pub fn sessions(&self, since: DateTime<Utc>) -> Vec<SessionRow> {
+        self.cache
+            .values()
+            .filter_map(|fc| {
+                crate::session::in_period(
+                    fc.session.as_ref()?,
+                    fc.events.iter().map(|event| &event.ev),
+                    since,
+                )
+            })
+            .collect()
     }
 
     /// 지금 열려 있는 5시간 창의 종료 시각 — **공식 캐시를 안 본다** ([`crate::blocks`]).
@@ -252,8 +261,8 @@ impl crate::adapter::SourceAdapter for ClaudeAdapter {
     fn context(&self, pricing: &PriceTable) -> Option<ContextState> {
         ClaudeAdapter::context(self, pricing)
     }
-    fn sessions(&self) -> Vec<SessionRow> {
-        ClaudeAdapter::sessions(self)
+    fn sessions(&self, since: DateTime<Utc>) -> Vec<SessionRow> {
+        ClaudeAdapter::sessions(self, since)
     }
     fn session_reset(&self, now: DateTime<Utc>) -> Option<DateTime<Utc>> {
         ClaudeAdapter::session_reset(self, now)
@@ -1025,7 +1034,7 @@ mod tests {
 
         let mut adapter = ClaudeAdapter::new(vec![dir.path().to_path_buf()]);
         adapter.scan(DateTime::UNIX_EPOCH);
-        let rows = adapter.sessions();
+        let rows = adapter.sessions(DateTime::UNIX_EPOCH);
 
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].label, "디렉터리명 변경하고 다시 실행하는데 에러", "첫 줄만, 명령 래퍼는 건너뛴다");
@@ -1044,7 +1053,7 @@ mod tests {
 
         let mut adapter = ClaudeAdapter::new(vec![dir.path().to_path_buf()]);
         adapter.scan(DateTime::UNIX_EPOCH);
-        assert_eq!(adapter.sessions()[0].label, "블록 배열 안의 텍스트");
+        assert_eq!(adapter.sessions(DateTime::UNIX_EPOCH)[0].label, "블록 배열 안의 텍스트");
     }
 
     /// 사람 메시지가 하나도 없으면(명령만 돈 세션) 예전처럼 폴더명으로 떨어진다
@@ -1059,7 +1068,7 @@ mod tests {
 
         let mut adapter = ClaudeAdapter::new(vec![dir.path().to_path_buf()]);
         adapter.scan(DateTime::UNIX_EPOCH);
-        assert_eq!(adapter.sessions()[0].label, "api");
+        assert_eq!(adapter.sessions(DateTime::UNIX_EPOCH)[0].label, "api");
     }
 
     #[test]

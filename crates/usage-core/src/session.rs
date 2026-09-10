@@ -16,7 +16,7 @@
 use chrono::{DateTime, Utc};
 use serde::Serialize;
 
-use crate::model::Source;
+use crate::model::{Source, UsageEvent};
 
 /// 최근 세션 한 줄
 #[derive(Clone, Debug, Serialize)]
@@ -36,6 +36,39 @@ pub struct SessionRow {
     pub at: DateTime<Utc>,
     /// 이 세션이 쓴 토큰 총합 (스캔 범위 안에서)
     pub tokens: u64,
+}
+
+/// 조회 기간 안의 세션을 작업 디렉터리별로 묶은 한 프로젝트.
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectSessions {
+    /// 전체 경로를 정규화한 그룹 키. 같은 폴더명이어도 경로가 다르면 다른 프로젝트다.
+    pub key: String,
+    pub label: String,
+    pub cwd: String,
+    /// 조회 기간 안의 프로젝트 총합. 아래 `sessions` 가 잘려도 이 값은 전체를 센다.
+    pub tokens: u64,
+    pub session_count: usize,
+    pub at: DateTime<Utc>,
+    /// 프로젝트 안의 최근 세션. 전체 개수는 `session_count` 로 따로 알린다.
+    pub sessions: Vec<SessionRow>,
+}
+
+/// 캐시된 세션 메타데이터에 조회 기간 안의 이벤트 합계·마지막 시각을 입힌다.
+pub(crate) fn in_period<'a>(
+    row: &SessionRow,
+    events: impl Iterator<Item = &'a UsageEvent>,
+    since: DateTime<Utc>,
+) -> Option<SessionRow> {
+    let mut tokens = 0u64;
+    let mut at = None;
+    for event in events.filter(|event| event.ts >= since) {
+        tokens = tokens.saturating_add(event.total());
+        if at.is_none_or(|current| event.ts > current) {
+            at = Some(event.ts);
+        }
+    }
+    Some(SessionRow { at: at?, tokens, ..row.clone() })
 }
 
 /// 경로에서 표시용 이름 하나를 뽑는다. 구분자가 OS마다 다르고 agy 는 `file://` URI 로
@@ -132,6 +165,60 @@ pub fn merge(mut rows: Vec<SessionRow>, limit: usize) -> Vec<SessionRow> {
     rows.retain(|r| seen.insert((r.source, r.id.clone())));
     rows.truncate(limit);
     rows
+}
+
+/// 최근 프로젝트를 만들되 프로젝트 총합은 잘라내기 전에 전부 센다.
+pub fn group_projects(
+    rows: &[SessionRow],
+    project_limit: usize,
+    session_limit: usize,
+) -> Vec<ProjectSessions> {
+    let mut groups: Vec<ProjectSessions> = vec![];
+    let mut indexes = std::collections::HashMap::<String, usize>::new();
+
+    // `merge`가 만든 최근순을 그대로 받는다. 처음 등장한 순서가 프로젝트 최근 활동순이다.
+    for row in rows {
+        let cwd = row.cwd.trim_end_matches(['/', '\\']).to_string();
+        let key = project_key(&cwd);
+        let index = if let Some(index) = indexes.get(&key) {
+            *index
+        } else {
+            if groups.len() >= project_limit {
+                continue;
+            }
+            let index = groups.len();
+            indexes.insert(key.clone(), index);
+            groups.push(ProjectSessions {
+                key,
+                label: dir_label(&cwd),
+                cwd,
+                tokens: 0,
+                session_count: 0,
+                at: row.at,
+                sessions: vec![],
+            });
+            index
+        };
+        let group = &mut groups[index];
+        group.tokens = group.tokens.saturating_add(row.tokens);
+        group.session_count += 1;
+        if group.sessions.len() < session_limit {
+            group.sessions.push(row.clone());
+        }
+    }
+    groups
+}
+
+/// Windows 경로는 구분자와 대소문자가 달라도 같은 위치다. Unix 경로의 대소문자는 보존한다.
+fn project_key(cwd: &str) -> String {
+    if cwd.is_empty() {
+        return "__unknown_project__".into();
+    }
+    let mut key = cwd.replace('\\', "/");
+    if key.as_bytes().get(1) == Some(&b':') || key.starts_with("//") {
+        key.make_ascii_lowercase();
+    }
+    key
 }
 
 #[cfg(test)]
@@ -231,5 +318,54 @@ mod tests {
             .map(|i| row(Source::Claude, &format!("s{i}"), "2026-08-11T01:00:00Z"))
             .collect();
         assert_eq!(merge(rows, 8).len(), 8);
+    }
+
+    #[test]
+    fn period_row_counts_only_events_in_the_selected_range() {
+        let row = row(Source::Claude, "a", "2026-08-11T03:00:00Z");
+        let event = |ts: &str, input| UsageEvent {
+            source: Source::Claude,
+            model: "m".into(),
+            ts: DateTime::parse_from_rfc3339(ts).unwrap().with_timezone(&Utc),
+            input,
+            output: 1,
+            cache_write: 2,
+            cache_write_1h: 0,
+            cache_read: 3,
+            sidechain: false,
+        };
+        let events = [
+            event("2026-08-10T01:00:00Z", 100),
+            event("2026-08-11T02:00:00Z", 10),
+        ];
+        let since = DateTime::parse_from_rfc3339("2026-08-11T00:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let actual = in_period(&row, events.iter(), since).unwrap();
+        assert_eq!(actual.tokens, 16);
+        assert_eq!(actual.at.to_rfc3339(), "2026-08-11T02:00:00+00:00");
+    }
+
+    #[test]
+    fn projects_group_by_full_path_before_limiting_sessions() {
+        let mut rows = vec![
+            row(Source::Claude, "a", "2026-08-11T03:00:00Z"),
+            row(Source::Codex, "b", "2026-08-11T02:00:00Z"),
+            row(Source::Claude, "c", "2026-08-11T01:00:00Z"),
+        ];
+        rows[0].cwd = r"C:\Users\u\Projects\Dolphin".into();
+        rows[1].cwd = "c:/users/u/projects/dolphin/".into();
+        rows[2].cwd = "/srv/dolphin".into();
+        rows[0].tokens = 10;
+        rows[1].tokens = 20;
+        rows[2].tokens = 30;
+
+        let groups = group_projects(&rows, 8, 1);
+        assert_eq!(groups.len(), 2, "같은 Windows 경로는 하나, 같은 이름의 Unix 경로는 별도");
+        assert_eq!(groups[0].label, "Dolphin");
+        assert_eq!(groups[0].tokens, 30, "화면에 한 세션만 실어도 합계는 전체");
+        assert_eq!(groups[0].session_count, 2);
+        assert_eq!(groups[0].sessions.len(), 1);
+        assert_eq!(groups[1].tokens, 30);
     }
 }

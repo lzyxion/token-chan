@@ -46,8 +46,8 @@ pub trait SourceAdapter {
     fn scan(&mut self, since: DateTime<Utc>) -> ScanOutcome;
     /// 가장 최근에 움직인 세션의 컨텍스트 게이지 (트랜스크립트 파일 단위 정보)
     fn context(&self, pricing: &PriceTable) -> Option<ContextState>;
-    /// 최근 세션 목록 (마지막 스캔 기준)
-    fn sessions(&self) -> Vec<SessionRow>;
+    /// 마지막 스캔에서 읽은 세션을 `since` 이후 사용량으로 잘라 돌려준다
+    fn sessions(&self, since: DateTime<Utc>) -> Vec<SessionRow>;
     /// 스캔한 파일에 실려 온 공식 한도 — 주는 소스(Codex)만 구현한다
     fn plan(&self) -> Option<PlanUsage> {
         None
@@ -111,7 +111,7 @@ mod tests {
             let out = a.scan(Utc::now() - chrono::Duration::days(1));
             assert!(out.events.is_empty(), "{:?}", a.source());
             assert_eq!(out.status, SourceStatus::NoData, "{:?}", a.source());
-            assert!(a.sessions().is_empty(), "{:?}", a.source());
+            assert!(a.sessions(DateTime::UNIX_EPOCH).is_empty(), "{:?}", a.source());
             assert!(a.context(&pricing).is_none(), "{:?}", a.source());
             assert!(a.plan().is_none(), "{:?}", a.source());
             assert!(a.session_reset(Utc::now()).is_none(), "{:?}", a.source());
@@ -190,7 +190,7 @@ mod tests {
     fn session_titles_come_from_the_first_human_prompt() {
         for (_guard, mut a) in subjects() {
             a.scan(chrono::DateTime::UNIX_EPOCH);
-            let rows = a.sessions();
+            let rows = a.sessions(DateTime::UNIX_EPOCH);
             assert!(!rows.is_empty(), "{:?}", a.source());
             let labels: Vec<&str> = rows.iter().map(|r| r.label.as_str()).collect();
             assert!(labels.iter().all(|l| *l == TITLE), "{:?}: {labels:?}", a.source());

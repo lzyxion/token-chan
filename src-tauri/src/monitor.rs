@@ -25,6 +25,8 @@ const LIVE_INTERVAL: Duration = Duration::from_secs(2);
 const PLAN_INTERVAL: Duration = Duration::from_secs(30);
 /// 최근 세션 목록에 실을 개수 — 패널 한 페이지에 들어가는 만큼
 const RECENT_SESSIONS: usize = 8;
+const RECENT_PROJECTS: usize = 8;
+const RECENT_SESSIONS_PER_PROJECT: usize = 8;
 
 /// 리셋 임박 기본 문구 — 프론트 speech.ts `DEFAULT_LINES.resetNotify` 와 동일하게 유지.
 /// 한국어 변수(`{분}`·`{시각}`)와 영문 별칭(`{minutes}`·`{time}`)을 모두 치환한다.
@@ -433,11 +435,17 @@ fn spawn_usage_thread(app: AppHandle) {
             // 어느 벤더를 게이지에 태울지는 프론트가 정하므로 여기서 고르지 않는다
             summary.contexts =
                 adapters.iter().filter_map(|(_, _, a)| a.context(&pricing)).collect();
-            // 최근 세션 — 소스별 목록을 합쳐 최근순 상위 N개만
-            summary.sessions = usage_core::session::merge(
-                adapters.iter().flat_map(|(_, _, a)| a.sessions()).collect(),
-                RECENT_SESSIONS,
+            // 기간 안의 세션을 먼저 전부 합쳐야 프로젝트 총합이 화면 표시 개수에 잘리지 않는다.
+            let sessions = usage_core::session::merge(
+                adapters.iter().flat_map(|(_, _, a)| a.sessions(since)).collect(),
+                usize::MAX,
             );
+            summary.projects = usage_core::session::group_projects(
+                &sessions,
+                RECENT_PROJECTS,
+                RECENT_SESSIONS_PER_PROJECT,
+            );
+            summary.sessions = sessions.into_iter().take(RECENT_SESSIONS).collect();
 
             {
                 let state = app.state::<AppState>();
