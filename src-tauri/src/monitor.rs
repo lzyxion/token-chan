@@ -305,7 +305,7 @@ fn spawn_plan_thread(app: AppHandle) {
                         .or_else(|| s.character_pack.clone());
                     let pack_lines = pack
                         .as_deref()
-                        .and_then(crate::settings::load_pack_speech)
+                        .and_then(|pack| crate::commands::get_character_speech(app.clone(), pack.into()))
                         .and_then(|mut sp| sp.remove("resetNotify"))
                         .filter(|v| v.iter().any(|l| !l.trim().is_empty()));
                     let lines = pack_lines.or_else(|| s.speech_lines.get("resetNotify").cloned());

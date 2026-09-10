@@ -1,10 +1,11 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { emit, listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import type { Account, AppSettings, Summary } from "../types";
+import type { Account, AppSettings, AutostartStatus, Summary } from "../types";
 import { usePlans } from "../hooks/useUsage";
 import { useWindowPersist } from "../hooks/useWindowPersist";
+import { useLoadErrors } from "../hooks/useLoadErrors";
 import ResizeGrips from "../components/ResizeGrips";
 import AccountTab from "./tabs/AccountTab";
 import AlertsTab from "./tabs/AlertsTab";
@@ -22,6 +23,7 @@ const TABS: Tab[] = ["general", "alerts", "character", "account"];
 
 export default function SettingsPanel() {
   const { t } = useI18n();
+  const loadErrors = useLoadErrors();
   const [s, setS] = useState<AppSettings | null>(null);
   const [packs, setPacks] = useState<string[]>([]);
   const [observedModels, setObservedModels] = useState<string[]>([]);
@@ -40,6 +42,68 @@ export default function SettingsPanel() {
   // ✕ 로 닫으면 같은 실패가 지속되는 동안은 다시 안 띄운다. 복구됐다가
   // **새로 실패하면**(전환 이벤트) 다시 보여야 하므로 그때 리셋한다.
   const [saveErrorDismissed, setSaveErrorDismissed] = useState(false);
+  const [autostart, setAutostart] = useState<AutostartStatus | null>(null);
+  const [autostartBusy, setAutostartBusy] = useState(false);
+  const [autostartError, setAutostartError] = useState<string | null>(null);
+  const [autostartErrorDismissed, setAutostartErrorDismissed] = useState(false);
+  const autostartRequest = useRef(0);
+  const autostartChanging = useRef(false);
+
+  useEffect(() => setAutostartErrorDismissed(false), [autostartError]);
+
+  useEffect(() => {
+    let alive = true;
+    const refresh = () => {
+      if (autostartChanging.current) return;
+      const request = ++autostartRequest.current;
+      setAutostartBusy(true);
+      invoke<AutostartStatus>("get_autostart_status")
+        .then((status) => {
+          if (!alive || request !== autostartRequest.current) return;
+          setAutostart(status);
+          setAutostartError(status.error);
+        })
+        .catch((error) => {
+          if (!alive || request !== autostartRequest.current) return;
+          setAutostart(null);
+          setAutostartError(String(error));
+          setAutostartErrorDismissed(false);
+        })
+        .finally(() => {
+          if (alive && request === autostartRequest.current) setAutostartBusy(false);
+        });
+    };
+    refresh();
+    const unFocus = getCurrentWindow().onFocusChanged(({ payload }) => {
+      if (payload) refresh();
+    });
+    return () => {
+      alive = false;
+      unFocus.then((unlisten) => unlisten());
+    };
+  }, []);
+
+  const changeAutostart = async (enabled: boolean) => {
+    if (!autostart?.canChange || autostartChanging.current) return;
+    autostartChanging.current = true;
+    ++autostartRequest.current;
+    setAutostartBusy(true);
+    try {
+      setAutostart(await invoke<AutostartStatus>("set_autostart", { enabled }));
+      setAutostartError(null);
+    } catch (error) {
+      setAutostartError(String(error));
+      setAutostartErrorDismissed(false);
+      try {
+        setAutostart(await invoke<AutostartStatus>("get_autostart_status"));
+      } catch {
+        setAutostart(null);
+      }
+    } finally {
+      autostartChanging.current = false;
+      setAutostartBusy(false);
+    }
+  };
 
   const refreshPacks = () => {
     invoke<string[]>("list_character_packs")
@@ -152,6 +216,9 @@ export default function SettingsPanel() {
     void invoke("set_pet_scale", { scale });
   };
 
+  const showAutostartError = autostartError && !autostartErrorDismissed;
+  const showSaveError = saveError && !saveErrorDismissed;
+
   return (
     <div className="settings-root">
       <ResizeGrips />
@@ -159,18 +226,24 @@ export default function SettingsPanel() {
           기존 설정 내용이 통째로 밀려 내려가고, 탭 아래에 띄우면 내비게이션을
           가린다. 제목줄("설정" 글자)만 덮고 ✕·탭·콘텐츠는 그대로 보이도록
           스크롤 컨테이너(.settings-card) 밖에 둔다. */}
-      {saveError && !saveErrorDismissed && (
+      {(showAutostartError || showSaveError || loadErrors.message) && (
         <div className="settings-save-error" role="alert">
-          <span className="settings-save-error-text">
-            {t(
+          <span className="settings-save-error-text" title={!showAutostartError && !showSaveError ? loadErrors.detail : undefined}>
+            {showAutostartError ? t(
+              `⚠️ 자동 시작 설정 오류: ${autostartError} — 운영체제의 시작 앱 설정을 확인한 뒤 다시 시도하세요.`,
+              `⚠️ Launch at login error: ${autostartError} — Check your operating system's startup settings and try again.`,
+            ) : showSaveError ? t(
               `⚠️ 설정 저장 실패: ${saveError} — 변경 사항이 파일에 반영되지 않고 있습니다. 디스크 공간·권한을 확인한 뒤 아무 설정이나 바꾸면 다시 저장을 시도합니다.`,
               `⚠️ Failed to save settings: ${saveError} — changes are not being written. Check disk space and permissions, then change any setting to retry.`,
-            )}
+            ) : loadErrors.message}
           </span>
           <button
             className="settings-save-error-close"
             title={t("닫기 (같은 오류가 지속되는 동안 다시 띄우지 않음)", "Dismiss until a new error occurs")}
-            onClick={() => setSaveErrorDismissed(true)}
+            aria-label={t("오류 알림 닫기", "Dismiss error")}
+            onClick={() => showAutostartError
+              ? setAutostartErrorDismissed(true)
+              : showSaveError ? setSaveErrorDismissed(true) : loadErrors.dismiss()}
           >
             ✕
           </button>
@@ -215,7 +288,11 @@ export default function SettingsPanel() {
           />
         )}
 
-        {tab === "general" && <GeneralTab s={s} update={update} accounts={accounts} />}
+        {tab === "general" && (
+          <GeneralTab s={s} update={update} accounts={accounts}
+            autostart={autostart} autostartBusy={autostartBusy}
+            onAutostartChange={changeAutostart} />
+        )}
 
         {tab === "alerts" && <AlertsTab s={s} update={update} />}
 

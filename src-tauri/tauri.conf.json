@@ -25,7 +25,7 @@
         "shadow": false,
         "visibleOnAllWorkspaces": true,
         "acceptFirstMouse": true,
-        "additionalBrowserArgs": "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --process-per-site"
+        "additionalBrowserArgs": "--disable-features=msWebOOUI,msPdfOOUI --process-per-site"
       },
       {
         "label": "bubble",
@@ -41,7 +41,7 @@
         "resizable": false,
         "shadow": false,
         "visibleOnAllWorkspaces": true,
-        "additionalBrowserArgs": "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --process-per-site"
+        "additionalBrowserArgs": "--disable-features=msWebOOUI,msPdfOOUI --process-per-site"
       },
       {
         "label": "panel",
@@ -55,7 +55,7 @@
         "skipTaskbar": true,
         "resizable": false,
         "shadow": false,
-        "additionalBrowserArgs": "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --process-per-site"
+        "additionalBrowserArgs": "--disable-features=msWebOOUI,msPdfOOUI --process-per-site"
       },
       {
         "label": "settings",
@@ -69,7 +69,7 @@
         "skipTaskbar": false,
         "resizable": false,
         "shadow": false,
-        "additionalBrowserArgs": "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --process-per-site"
+        "additionalBrowserArgs": "--disable-features=msWebOOUI,msPdfOOUI --process-per-site"
       },
       {
         "label": "studio",
@@ -83,11 +83,28 @@
         "skipTaskbar": false,
         "resizable": false,
         "shadow": false,
-        "additionalBrowserArgs": "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --process-per-site"
+        "additionalBrowserArgs": "--disable-features=msWebOOUI,msPdfOOUI --process-per-site"
       }
     ],
     "security": {
-      "csp": null
+      "csp": {
+        "default-src": "'self' customprotocol: asset:",
+        "connect-src": "ipc: http://ipc.localhost",
+        "img-src": "'self' asset: http://asset.localhost data:",
+        "style-src": "'self' 'unsafe-inline'",
+        "object-src": "'none'",
+        "base-uri": "'self'",
+        "frame-ancestors": "'none'"
+      },
+      "devCsp": {
+        "default-src": "'self' customprotocol: asset:",
+        "connect-src": "ipc: http://ipc.localhost ws://localhost:1420",
+        "img-src": "'self' asset: http://asset.localhost data:",
+        "style-src": "'self' 'unsafe-inline'",
+        "object-src": "'none'",
+        "base-uri": "'self'",
+        "frame-ancestors": "'none'"
+      }
     }
   },
   "bundle": {

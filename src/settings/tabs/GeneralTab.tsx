@@ -1,4 +1,4 @@
-import type { Account, AppSettings, GaugeSide } from "../../types";
+import type { Account, AppSettings, AutostartStatus, GaugeSide } from "../../types";
 import {
   defaultFill,
   enabledSources,
@@ -21,6 +21,9 @@ import type { TabProps } from "./types";
 interface Props extends TabProps {
   /** 계정 목록 (null = 아직 못 읽음). 게이지에 실을 수 있는 벤더를 여기서 가린다 */
   accounts: Account[] | null;
+  autostart: AutostartStatus | null;
+  autostartBusy: boolean;
+  onAutostartChange: (enabled: boolean) => void;
 }
 
 /** 일반 — 비용 표기·소진율 게이지·시스템 동작.
@@ -28,7 +31,7 @@ interface Props extends TabProps {
  *  예전에는 이 내용이 `{tab === "general" && …}` 두 조각으로 갈려 있었고 그 사이에
  *  알림 탭 블록이 끼어 있었다. 동작은 맞지만 뒤쪽 조각은 찾지 못한다 — 탭 하나가
  *  파일 하나면 그 종류의 사고가 아예 생기지 않는다. */
-export default function GeneralTab({ s, update, accounts }: Props) {
+export default function GeneralTab({ s, update, accounts, autostart, autostartBusy, onAutostartChange }: Props) {
   const { language, t } = useI18n();
   // 계정을 꺼 둔 벤더는 게이지에 실을 게 없다 — 목록에서 뺀다.
   // 고정해 둔 벤더가 꺼졌을 때 "자동" 으로 되돌리는 건 백엔드가 한다
@@ -228,11 +231,19 @@ export default function GeneralTab({ s, update, accounts }: Props) {
         <label className="settings-check">
           <input
             type="checkbox"
-            checked={s.autostart}
-            onChange={(e) => update({ autostart: e.currentTarget.checked })}
+            checked={autostart?.enabled ?? false}
+            disabled={autostartBusy || !autostart?.canChange}
+            onChange={(e) => onAutostartChange(e.currentTarget.checked)}
           />
           {t("로그인 시 자동 시작", "Launch at login")}
         </label>
+        {autostartBusy ? (
+          <div className="settings-hint">{t("자동 시작 상태 확인 중…", "Checking launch at login…")}</div>
+        ) : !autostart ? (
+          <div className="settings-hint">{t("자동 시작 상태를 확인할 수 없습니다. 설정 창을 다시 열어 재시도하세요.", "Startup status is unavailable. Reopen Settings to retry.")}</div>
+        ) : !autostart.canChange && (
+          <div className="settings-hint">{t("개발 빌드에서는 자동 시작을 변경할 수 없습니다. 배포 버전에서 설정하세요.", "Launch at login is read-only in development builds. Use a release version to change it.")}</div>
+        )}
 
         <div className="settings-hint">
           {t("데이터 소스(계정 켜고 끄기·홈 경로)는", "Manage data sources, account inclusion, and home directories in the")} <b>{t("계정", "Accounts")}</b> {t("탭에서 관리합니다", "tab.")}

@@ -79,7 +79,9 @@ use chrono::{DateTime, TimeZone, Utc};
 use rusqlite::{Connection, OpenFlags};
 
 use crate::context::{ContextState, RawContext};
-use crate::model::{ScanOutcome, Source, SourceStatus, UsageEvent};
+use crate::model::{
+    source_status, ParseDiagnostics, ScanOutcome, Source, SourceStatus, UsageEvent,
+};
 use crate::pricing::PriceTable;
 use crate::protobuf::Message;
 use crate::session::{dir_label, from_file_uri, SessionRow};
@@ -105,6 +107,7 @@ struct FileCache {
     written_at: DateTime<Utc>,
     /// 최근 세션 목록용 (제목·작업 위치 포함)
     session: Option<SessionRow>,
+    diagnostics: ParseDiagnostics,
 }
 
 pub struct AntigravityAdapter {
@@ -129,6 +132,7 @@ impl AntigravityAdapter {
 
         let mut seen = HashSet::new();
         let mut any_file = false;
+        let mut diagnostics = ParseDiagnostics::default();
 
         for home in &self.homes {
             let dir = home.join("conversations");
@@ -139,7 +143,10 @@ impl AntigravityAdapter {
                     continue;
                 }
                 any_file = true;
-                let Some(stamp) = db_stamp(&path) else { continue };
+                let Some(stamp) = db_stamp(&path) else {
+                    diagnostics.files_failed += 1;
+                    continue;
+                };
                 seen.insert(path.clone());
                 // WAL 이 갱신되면 본체가 그대로여도 작업이 있었다는 뜻이다
                 let written_at: DateTime<Utc> = stamp.0.max(stamp.2).into();
@@ -147,11 +154,22 @@ impl AntigravityAdapter {
                 if needs {
                     // 잠겨서 못 읽으면 이전 캐시를 유지한다 — 지워 버리면 agy 가 도는 동안
                     // 사용량이 통째로 사라져 보인다
-                    if let Some((events, ctx, session)) = parse_conversation(&path) {
+                    if let Some((events, ctx, session, parse_diagnostics)) =
+                        parse_conversation(&path)
+                    {
                         self.cache.insert(
                             path.clone(),
-                            FileCache { stamp, events, ctx, written_at, session },
+                            FileCache {
+                                stamp,
+                                events,
+                                ctx,
+                                written_at,
+                                session,
+                                diagnostics: parse_diagnostics,
+                            },
                         );
+                    } else {
+                        diagnostics.files_failed += 1;
                     }
                 } else if let Some(fc) = self.cache.get_mut(&path) {
                     fc.written_at = written_at;
@@ -159,6 +177,9 @@ impl AntigravityAdapter {
             }
         }
         self.cache.retain(|p, _| seen.contains(p));
+        for fc in self.cache.values() {
+            diagnostics.add(fc.diagnostics);
+        }
 
         let mut dedup: HashSet<&str> = HashSet::new();
         let mut events: Vec<UsageEvent> = vec![];
@@ -174,7 +195,7 @@ impl AntigravityAdapter {
         }
         events.sort_by_key(|e| e.ts);
 
-        let status = if any_file { SourceStatus::Ok } else { SourceStatus::NoData };
+        let status = source_status(any_file, diagnostics);
         ScanOutcome { events, status }
     }
 
@@ -301,7 +322,9 @@ fn db_stamp(path: &Path) -> Option<(SystemTime, u64, SystemTime, u64)> {
 
 /// 대화 DB 하나를 읽어 이벤트와 컨텍스트를 뽑는다.
 /// 열지 못하거나(잠김·손상) 스키마가 다르면 `None` — 호출부가 이전 값을 유지한다.
-fn parse_conversation(path: &Path) -> Option<(Vec<ParsedEvent>, RawContext, Option<SessionRow>)> {
+fn parse_conversation(
+    path: &Path,
+) -> Option<(Vec<ParsedEvent>, RawContext, Option<SessionRow>, ParseDiagnostics)> {
     // 읽기 전용으로 연다. agy 가 쓰는 중이어도 읽기는 대개 통과한다.
     let conn = Connection::open_with_flags(
         path,
@@ -324,6 +347,7 @@ fn parse_conversation(path: &Path) -> Option<(Vec<ParsedEvent>, RawContext, Opti
     let step_at = step_times(&conn);
 
     let mut out = vec![];
+    let mut diagnostics = ParseDiagnostics { files_read: 1, ..Default::default() };
     let (mut last_at, mut last_model, mut tokens) = (None, String::new(), 0u64);
     // 시각을 못 찾은 행이 물려받을 값 — 그 대화에서 마지막으로 본 시각
     let mut carried_ts: Option<DateTime<Utc>> = None;
@@ -333,6 +357,7 @@ fn parse_conversation(path: &Path) -> Option<(Vec<ParsedEvent>, RawContext, Opti
     let mut known_model: Option<String> = None;
 
     for row in rows {
+        diagnostics.checked += 1;
         let Ok((idx, blob)) = row else { continue };
         let root = Message::new(&blob);
         let Some(rec) = root.msg(1) else { continue };
@@ -351,6 +376,7 @@ fn parse_conversation(path: &Path) -> Option<(Vec<ParsedEvent>, RawContext, Opti
         else {
             continue;
         };
+        diagnostics.parsed += 1;
         carried_ts = Some(ts);
         if let Some(m) = rec.str(19).filter(|m| !m.is_empty()) {
             known_model = Some(m.to_string());
@@ -429,7 +455,7 @@ fn parse_conversation(path: &Path) -> Option<(Vec<ParsedEvent>, RawContext, Opti
         at,
         tokens,
     });
-    Some((out, ctx, row))
+    Some((out, ctx, row, diagnostics))
 }
 
 /// 계약 테스트([`crate::adapter`] tests)용 표준 픽스처 — 내용 명세는 그쪽 주석 참고.
@@ -947,6 +973,31 @@ mod tests {
     fn no_home_reports_no_data() {
         let mut a = AntigravityAdapter::new(vec![]);
         assert_eq!(a.scan(DateTime::UNIX_EPOCH).status, SourceStatus::NoData);
+    }
+
+    #[test]
+    fn unreadable_metadata_format_reports_degraded() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path().join("antigravity-cli");
+        let conversations = home.join("conversations");
+        std::fs::create_dir_all(&conversations).unwrap();
+        let conn = Connection::open(conversations.join("broken.db")).unwrap();
+        conn.execute("create table gen_metadata (idx integer primary key, data blob)", [])
+            .unwrap();
+        for idx in 0..3 {
+            conn.execute(
+                "insert into gen_metadata (idx, data) values (?1, ?2)",
+                rusqlite::params![idx, vec![0u8]],
+            )
+            .unwrap();
+        }
+        drop(conn);
+
+        let mut a = AntigravityAdapter::new(vec![home]);
+        assert_eq!(
+            a.scan(DateTime::UNIX_EPOCH).status,
+            SourceStatus::Degraded { checked: 3, failed: 3 }
+        );
     }
 
     #[test]

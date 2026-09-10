@@ -1,6 +1,8 @@
 {
-  "note": "USD per 1M tokens. in=input, out=output, cw=cache write(5m TTL), cw1h=cache write(1h TTL), cr=cache read. TTL 배율의 기준은 입력 단가다 — 5분 1.25배, 1시간 2배(= 5분 단가의 1.6배). cw1h 가 없는 모델은 cw 로 물러난다.  ctx=컨텍스트 창(토큰, 선택) — 컨텍스트 게이지의 분모. 모델 ID는 최장 접두사 매칭 (예: claude-sonnet-4-5-20250929 → claude-sonnet-4-5). 설정의 priceOverridePath JSON으로 덮어쓰기 가능. 단가는 2026-08-19 공식 페이지(platform.claude.com/docs/about-claude/pricing · developers.openai.com/api/docs/pricing · ai.google.dev/gemini-api/docs/pricing)에서 대조한 값이다. 두 가지는 이 표로 표현할 수 없어 알고 쓴다:  (1) Gemini 3.x 는 2026-12-31 까지 도입가라 2027-01-01 에 정확히 2배가 된다(3.7-flash: in 1.50 / out 7.50 / cr 0.15). (2) OpenAI 5.6 계열은 긴 컨텍스트 구간의 단가가 따로 있다 — in·cr·cw 는 정확히 2배, out 은 1.5배다 (sol short 4/0.4/5/20 → long 8/0.8/10/30, terra 2/0.2/2.5/12 → 4/0.4/5/18, luna 0.2/0.02/0.25/1.2 → 0.4/0.04/0.5/1.8). 여기 적은 건 짧은 구간 값이라 긴 대화의 비용은 낮게 잡힌다. 경계 토큰수는 공식 표에 명시돼 있지 않다. 필요하면 오버라이드로 조정. cache writes 요금은 5.6 계열에만 있다 — gpt-5.1 은 해당 칸이 비어 있고 gpt-5.3-codex 는 칸 자체가 없다. gpt-5-codex·codex-mini 는 공식 표에서 사라져 옛 값을 유지한다. ctx 가 없는 모델은 200k 로 가정하되, 실제 관측치가 그걸 넘으면 자동으로 상위 구간으로 승격된다(context.rs).",
+  "note": "USD per 1M tokens. in=input, out=output, cw=cache write(5m TTL), cw1h=cache write(1h TTL), cr=cache read. TTL 배율의 기준은 입력 단가다 — 5분 1.25배, 1시간 2배(= 5분 단가의 1.6배). cw1h 가 없는 모델은 cw 로 물러난다. ctx=컨텍스트 창(토큰, 선택) — 컨텍스트 게이지의 분모. 모델 ID는 최장 접두사 매칭 (예: claude-sonnet-4-5-20250929 → claude-sonnet-4-5). 설정의 priceOverridePath JSON으로 덮어쓰기 가능. 단가는 2026-09-10 공식 페이지(platform.claude.com/docs/about-claude/pricing · developers.openai.com/api/docs/pricing · ai.google.dev/gemini-api/docs/pricing)에서 대조한 값이다. 두 가지는 이 표로 표현할 수 없어 알고 쓴다: (1) Gemini 3.6/3.7/3.8 Flash는 2026-12-31까지 도입가라 2027-01-01에 정확히 2배가 된다(3.8-flash: in 1.50 / out 7.50 / cr 0.15). (2) OpenAI GPT-6 Astra와 5.6 계열은 긴 컨텍스트 구간의 단가가 따로 있다 — in·cr·cw는 2배, out은 1.5배다. 여기 적은 건 짧은 구간 값이라 긴 대화의 비용은 낮게 잡힌다. Astra의 경계는 입력 272K 토큰 초과다. 필요하면 오버라이드로 조정. cache writes 요금은 Astra와 5.6 계열에만 있다 — gpt-5.1은 해당 칸이 비어 있고 gpt-5.3-codex는 칸 자체가 없다. gpt-5-codex·codex-mini는 공식 표에서 사라져 옛 값을 유지한다. ctx가 없는 모델은 200k로 가정하되, 실제 관측치가 그걸 넘으면 자동으로 상위 구간으로 승격된다(context.rs).",
   "models": {
+    "claude-fable-5-1": { "in": 10.0, "out": 50.0, "cw": 12.5, "cw1h": 20.0, "cr": 0.25, "ctx": 1000000 },
+    "claude-mythos-5-1": { "in": 10.0, "out": 50.0, "cw": 12.5, "cw1h": 20.0, "cr": 0.25, "ctx": 1000000 },
     "claude-fable-5": { "in": 10.0, "out": 50.0, "cw": 12.5, "cw1h": 20.0, "cr": 1.0, "ctx": 1000000 },
     "claude-mythos-5": { "in": 10.0, "out": 50.0, "cw": 12.5, "cw1h": 20.0, "cr": 1.0, "ctx": 1000000 },
     "claude-opus-5": { "in": 5.0, "out": 25.0, "cw": 6.25, "cw1h": 10.0, "cr": 0.5, "ctx": 1000000 },
@@ -21,6 +23,7 @@
     "claude-3-5-haiku": { "in": 0.8, "out": 4.0, "cw": 1.0, "cw1h": 1.6, "cr": 0.08 },
     "claude-3-haiku": { "in": 0.25, "out": 1.25, "cw": 0.3, "cw1h": 0.5, "cr": 0.03 },
 
+    "gpt-6-astra": { "in": 10.0, "out": 50.0, "cw": 12.5, "cr": 1.0, "ctx": 1050000 },
     "gpt-5.6-sol": { "in": 4.0, "out": 20.0, "cw": 5.0, "cr": 0.4, "ctx": 1050000 },
     "gpt-5.6-terra": { "in": 2.0, "out": 12.0, "cw": 2.5, "cr": 0.2, "ctx": 1050000 },
     "gpt-5.6-luna": { "in": 0.2, "out": 1.2, "cw": 0.25, "cr": 0.02, "ctx": 1050000 },
@@ -38,8 +41,11 @@
     "o3": { "in": 2.0, "out": 8.0, "cw": 0.0, "cr": 0.5 },
     "o4-mini": { "in": 1.1, "out": 4.4, "cw": 0.0, "cr": 0.275 },
 
-    "gemini-3.7-flash": { "in": 0.75, "out": 3.75, "cw": 0.0, "cr": 0.075, "ctx": 256000 },
-    "gemini-3.6-flash": { "in": 0.75, "out": 3.75, "cw": 0.0, "cr": 0.075, "ctx": 256000 },
+    "gemini-3.8-flash": { "in": 0.75, "out": 3.75, "cw": 0.0, "cr": 0.075, "ctx": 1048576 },
+    "gemini-3.7-flash": { "in": 0.75, "out": 3.75, "cw": 0.0, "cr": 0.075, "ctx": 1048576 },
+    "gemini-3.6-flash": { "in": 0.75, "out": 3.75, "cw": 0.0, "cr": 0.075, "ctx": 1048576 },
+    "gemini-3.5-flash-lite": { "in": 0.3, "out": 2.5, "cw": 0.0, "cr": 0.03, "ctx": 1048576 },
+    "gemini-3.5-flash": { "in": 1.5, "out": 9.0, "cw": 0.0, "cr": 0.15, "ctx": 1048576 },
     "gemini-2.5-pro": { "in": 1.25, "out": 10.0, "cw": 0.0, "cr": 0.31 },
     "gemini-2.5-flash-lite": { "in": 0.1, "out": 0.4, "cw": 0.0, "cr": 0.025 },
     "gemini-2.5-flash": { "in": 0.3, "out": 2.5, "cw": 0.0, "cr": 0.075 },

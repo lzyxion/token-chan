@@ -1,7 +1,6 @@
 //! 설정 읽기·쓰기와 저장 실패 추적. 모든 저장 지점이 [`save_settings`] 를 거친다.
 
 use tauri::{AppHandle, Manager, State};
-use tauri_plugin_autostart::ManagerExt;
 
 use crate::settings::{self, Settings};
 use crate::window;
@@ -36,7 +35,33 @@ pub fn get_save_error(state: State<'_, AppState>) -> Option<String> {
     state.save_error.lock().unwrap().clone()
 }
 
-/// 설정 일괄 갱신: 변경된 항목의 side effect(autostart/클릭 통과/크기)를 적용하고
+#[tauri::command]
+pub fn get_load_errors(state: State<'_, AppState>) -> Vec<String> {
+    state.load_errors.lock().unwrap().values().cloned().collect()
+}
+
+/// 기본값 폴백과 오류 보고를 함께 처리한다. 정상 재조회 시 해당 파일 오류만 해제한다.
+pub(crate) fn loaded_or_default<T: Default>(
+    app: &AppHandle,
+    key: String,
+    result: Result<T, String>,
+) -> T {
+    let state = app.state::<AppState>();
+    let mut errors = state.load_errors.lock().unwrap();
+    let error = result.as_ref().err();
+    if errors.get(&key) != error {
+        if let Some(error) = error {
+            errors.insert(key, error.clone());
+        } else {
+            errors.remove(&key);
+        }
+        use tauri::Emitter;
+        let _ = app.emit("settings-load-errors", errors.values().cloned().collect::<Vec<_>>());
+    }
+    result.unwrap_or_default()
+}
+
+/// 설정 일괄 갱신: 변경된 항목의 side effect(클릭 통과/크기)를 적용하고
 /// `settings-changed` 이벤트로 모든 창에 알림. 설정 패널의 단일 진입점.
 #[tauri::command]
 pub fn set_settings(app: AppHandle, state: State<'_, AppState>, mut new_settings: Settings) {
@@ -74,14 +99,8 @@ pub fn set_settings(app: AppHandle, state: State<'_, AppState>, mut new_settings
     new_settings.usd_to_krw = new_settings.usd_to_krw.clamp(1.0, 100_000.0);
     new_settings.sleep_after_minutes = new_settings.sleep_after_minutes.clamp(1, 480);
 
-    if old.autostart != new_settings.autostart {
-        let autolaunch = app.autolaunch();
-        if new_settings.autostart {
-            let _ = autolaunch.enable();
-        } else {
-            let _ = autolaunch.disable();
-        }
-    }
+    // 자동 시작은 OS 상태를 확인하는 전용 명령에서만 변경한다.
+    new_settings.autostart = old.autostart;
     if old.click_through != new_settings.click_through {
         apply_click_through(&app, new_settings.click_through);
         crate::tray::sync_click_through(&app, new_settings.click_through);

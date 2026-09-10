@@ -28,7 +28,9 @@ use serde_json::Value;
 use walkdir::WalkDir;
 
 use crate::context::{ContextState, RawContext};
-use crate::model::{ScanOutcome, Source, SourceStatus, UsageEvent};
+use crate::model::{
+    source_status, ParseDiagnostics, ScanOutcome, Source, SourceStatus, UsageEvent,
+};
 use crate::plan::{window_label, PlanMeter, PlanUsage};
 use crate::pricing::PriceTable;
 use crate::session::{dir_label, first_line, is_human_prompt, SessionRow};
@@ -91,6 +93,7 @@ struct FileCache {
     written_at: DateTime<Utc>,
     /// 최근 세션 목록용
     session: Option<SessionRow>,
+    diagnostics: ParseDiagnostics,
 }
 
 pub struct CodexAdapter {
@@ -114,6 +117,7 @@ impl CodexAdapter {
 
         let mut seen = std::collections::HashSet::new();
         let mut any_file = false;
+        let mut diagnostics = ParseDiagnostics::default();
 
         for home in &self.homes {
             for sub in ["sessions", "archived_sessions"] {
@@ -129,7 +133,10 @@ impl CodexAdapter {
                         continue;
                     }
                     any_file = true;
-                    let Ok(meta) = entry.metadata() else { continue };
+                    let Ok(meta) = entry.metadata() else {
+                        diagnostics.files_failed += 1;
+                        continue;
+                    };
                     let mtime = meta.modified().unwrap_or(SystemTime::UNIX_EPOCH);
                     let mtime_dt: DateTime<Utc> = mtime.into();
                     if mtime_dt < since {
@@ -142,10 +149,19 @@ impl CodexAdapter {
                         None => true,
                     };
                     if needs {
-                        let (events, ctx, limits, session) = parse_rollout(path);
+                        let (events, ctx, limits, session, diagnostics) = parse_rollout(path);
                         self.cache.insert(
                             path.to_path_buf(),
-                            FileCache { mtime, size, events, ctx, limits, written_at: mtime_dt, session },
+                            FileCache {
+                                mtime,
+                                size,
+                                events,
+                                ctx,
+                                limits,
+                                written_at: mtime_dt,
+                                session,
+                                diagnostics,
+                            },
                         );
                     } else if let Some(fc) = self.cache.get_mut(path) {
                         // 내용이 그대로여도 mtime 은 갱신될 수 있다 (동일 크기 재기록)
@@ -155,6 +171,9 @@ impl CodexAdapter {
             }
         }
         self.cache.retain(|p, _| seen.contains(p));
+        for fc in self.cache.values() {
+            diagnostics.add(fc.diagnostics);
+        }
 
         // 전역 dedup 후 병합 — 같은 rollout 이 두 루트에 있어도 한 번만 센다
         let mut dedup: std::collections::HashSet<&str> = std::collections::HashSet::new();
@@ -171,7 +190,7 @@ impl CodexAdapter {
         }
         events.sort_by_key(|e| e.ts);
 
-        let status = if any_file { SourceStatus::Ok } else { SourceStatus::NoData };
+        let status = source_status(any_file, diagnostics);
         ScanOutcome { events, status }
     }
 
@@ -518,7 +537,13 @@ fn parse_rate_limits(v: &Value, at: DateTime<Utc>) -> Option<PlanUsage> {
     })
 }
 
-type Rollout = (Vec<ParsedEvent>, RawContext, Option<(DateTime<Utc>, PlanUsage)>, Option<SessionRow>);
+type Rollout = (
+    Vec<ParsedEvent>,
+    RawContext,
+    Option<(DateTime<Utc>, PlanUsage)>,
+    Option<SessionRow>,
+    ParseDiagnostics,
+);
 
 fn parse_rollout(path: &Path) -> Rollout {
     let mut ctx = RawContext::default();
@@ -540,17 +565,33 @@ fn parse_rollout(path: &Path) -> Rollout {
         .and_then(|s| s.to_str())
         .unwrap_or_default()
         .to_string();
-    let Ok(content) = std::fs::read_to_string(path) else { return (vec![], ctx, limits, None) };
+    let Ok(content) = std::fs::read_to_string(path) else {
+        return (
+            vec![],
+            ctx,
+            limits,
+            None,
+            ParseDiagnostics { files_failed: 1, ..Default::default() },
+        );
+    };
+    let mut diagnostics = ParseDiagnostics { files_read: 1, ..Default::default() };
     let mut out = vec![];
     let mut prev_total = Counters::default();
     let mut model: Option<String> = None;
 
-    for line in content.lines() {
+    let trailing_partial = !content.ends_with('\n');
+    let mut lines = content.lines().peekable();
+    while let Some(line) = lines.next() {
         let line = line.trim();
         if line.is_empty() {
             continue;
         }
-        let Ok(v) = serde_json::from_str::<Value>(line) else { continue };
+        let Ok(v) = serde_json::from_str::<Value>(line) else {
+            if !(trailing_partial && lines.peek().is_none()) {
+                diagnostics.checked += 1;
+            }
+            continue;
+        };
         let ty = v.get("type").and_then(Value::as_str).unwrap_or("");
         let payload = v.get("payload").cloned().unwrap_or(Value::Null);
         let p_ty = payload.get("type").and_then(Value::as_str).unwrap_or("");
@@ -609,6 +650,7 @@ fn parse_rollout(path: &Path) -> Rollout {
         if p_ty != "token_count" {
             continue;
         }
+        diagnostics.checked += 1;
         let Some(ts) = v
             .get("timestamp")
             .or_else(|| payload.get("timestamp"))
@@ -631,6 +673,19 @@ fn parse_rollout(path: &Path) -> Rollout {
 
         let last = info.get("last_token_usage").filter(|l| l.is_object());
         let total = info.get("total_token_usage").filter(|t| t.is_object());
+        let has_direct_counters = [
+            "input_tokens",
+            "cached_input_tokens",
+            "cache_write_input_tokens",
+            "output_tokens",
+            "reasoning_output_tokens",
+        ]
+        .iter()
+        .any(|key| info.get(key).is_some());
+        if last.is_none() && total.is_none() && !has_direct_counters {
+            continue;
+        }
+        diagnostics.parsed += 1;
 
         // ── 컨텍스트 ──
         // Codex 는 대화 전체를 매 요청에 다시 보내므로 요청 1건의 total_tokens
@@ -733,7 +788,7 @@ fn parse_rollout(path: &Path) -> Rollout {
         at,
         tokens,
     });
-    (out, ctx, limits, row)
+    (out, ctx, limits, row, diagnostics)
 }
 
 #[cfg(test)]
@@ -1125,6 +1180,20 @@ mod tests {
         let mut adapter = CodexAdapter::new(vec![]);
         let out = adapter.scan(DateTime::UNIX_EPOCH);
         assert_eq!(out.status, SourceStatus::NoData);
+    }
+
+    #[test]
+    fn unreadable_rollout_format_reports_degraded() {
+        let dir = tempfile::tempdir().unwrap();
+        let day = dir.path().join("sessions/2026/09/10");
+        fs::create_dir_all(&day).unwrap();
+        fs::write(day.join("rollout-broken.jsonl"), "not-json\nstill-not-json\nbroken-again\n")
+            .unwrap();
+        let mut adapter = CodexAdapter::new(vec![dir.path().to_path_buf()]);
+        assert_eq!(
+            adapter.scan(DateTime::UNIX_EPOCH).status,
+            SourceStatus::Degraded { checked: 3, failed: 3 }
+        );
     }
 
     /// 실파일(rollout-2026-08-11, free 플랜)에서 관측한 `rate_limits` 그대로.

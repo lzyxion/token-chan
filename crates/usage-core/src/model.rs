@@ -71,12 +71,85 @@ impl UsageEvent {
 pub enum SourceStatus {
     /// 데이터 파싱 성공
     Ok,
+    /// 파일은 있지만 현재 형식에서 사용량을 해석하지 못함
+    Degraded { checked: u64, failed: u64 },
     /// 데이터 루트/파일이 없음 (CLI 미설치 또는 미사용)
     NoData,
+}
+
+/// 소스별 파서가 수집하는 최소 진단값. `checked` 는 사용량 후보 기록 수이고,
+/// `parsed` 는 그중 현재 스키마로 해석한 수다. 파일을 못 연 경우는 기록 수를 알 수
+/// 없으므로 별도로 센다.
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct ParseDiagnostics {
+    pub checked: u64,
+    pub parsed: u64,
+    pub files_read: u64,
+    pub files_failed: u64,
+}
+
+impl ParseDiagnostics {
+    pub fn add(&mut self, other: Self) {
+        self.checked += other.checked;
+        self.parsed += other.parsed;
+        self.files_read += other.files_read;
+        self.files_failed += other.files_failed;
+    }
+}
+
+/// 빈 세션과 파일이 쓰이는 순간의 단일 불완전 행은 정상으로 둔다. 발견한 파일을 전혀
+/// 열지 못했거나, 후보 기록이 충분한데 하나도 해석하지 못한 경우만 경고한다.
+pub(crate) fn source_status(any_file: bool, diagnostics: ParseDiagnostics) -> SourceStatus {
+    if !any_file {
+        SourceStatus::NoData
+    } else if diagnostics.files_read == 0 && diagnostics.files_failed > 0 {
+        SourceStatus::Degraded {
+            checked: diagnostics.files_failed,
+            failed: diagnostics.files_failed,
+        }
+    } else if diagnostics.checked >= 3 && diagnostics.parsed == 0 {
+        SourceStatus::Degraded {
+            checked: diagnostics.checked,
+            failed: diagnostics.checked,
+        }
+    } else {
+        SourceStatus::Ok
+    }
 }
 
 /// 어댑터 스캔 결과
 pub struct ScanOutcome {
     pub events: Vec<UsageEvent>,
     pub status: SourceStatus,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parser_warning_requires_a_strong_failure_signal() {
+        assert_eq!(source_status(false, ParseDiagnostics::default()), SourceStatus::NoData);
+        assert_eq!(
+            source_status(
+                true,
+                ParseDiagnostics { checked: 2, parsed: 0, files_read: 1, files_failed: 0 }
+            ),
+            SourceStatus::Ok
+        );
+        assert_eq!(
+            source_status(
+                true,
+                ParseDiagnostics { checked: 3, parsed: 0, files_read: 1, files_failed: 0 }
+            ),
+            SourceStatus::Degraded { checked: 3, failed: 3 }
+        );
+        assert_eq!(
+            source_status(
+                true,
+                ParseDiagnostics { checked: 0, parsed: 0, files_read: 0, files_failed: 1 }
+            ),
+            SourceStatus::Degraded { checked: 1, failed: 1 }
+        );
+    }
 }

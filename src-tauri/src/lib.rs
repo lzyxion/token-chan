@@ -66,6 +66,9 @@ pub struct AppState {
     /// 마지막 설정 저장의 오류 (None = 성공). 전환 시에만 이벤트를 보내기 위한
     /// 비교용이자, 설정 창이 열릴 때 현재 배너 상태를 물어보는 원본.
     pub save_error: Mutex<Option<String>>,
+    pub autostart_error: Mutex<Option<String>>,
+    /// 파일별 읽기 실패. 시작 시 설정 오류와 실행 중 팩 오류를 창 사이에 공유한다.
+    pub load_errors: Mutex<std::collections::BTreeMap<String, String>>,
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -74,7 +77,7 @@ pub fn run() {
     // 웹뷰는 setup 보다 먼저 살아나 get_settings 를 호출한다. setup 에서 읽으면
     // 그 사이 요청이 기본값을 받아가 캐릭터 크기·팩·임계값이 전부 기본으로 굳는다
     // (프론트는 재시도하지 않음) → 반드시 manage() 전에 읽어 둔다.
-    let loaded = settings::load();
+    let (loaded, load_error) = settings::load();
     let mut builder = tauri::Builder::default();
     // 진단용: TOKENCHAN_NO_SINGLE_INSTANCE=1 이면 단일 인스턴스 검사를 건너뜀
     if std::env::var_os("TOKENCHAN_NO_SINGLE_INSTANCE").is_none() {
@@ -108,11 +111,14 @@ pub fn run() {
             speech_tail: Mutex::new("bottom"),
             drag_grab: Mutex::new(None),
             save_error: Mutex::new(None),
+            autostart_error: Mutex::new(None),
+            load_errors: Mutex::new(load_error.into_iter().map(|e| ("settings".into(), e)).collect()),
             window_resize: Mutex::new(None),
             tray_click_through: Mutex::new(None),
         })
         .setup(move |app| {
             eprintln!("[boot] setup start");
+            commands::restore_autostart(app.handle());
 
             if let Some(pet) = app.get_webview_window("pet") {
                 // 저장해 둔 자리에 저장해 둔 크기로 — 자리와 크기는 한 몸이라
@@ -169,6 +175,9 @@ pub fn run() {
             commands::get_settings,
             commands::set_settings,
             commands::get_save_error,
+            commands::get_load_errors,
+            commands::get_autostart_status,
+            commands::set_autostart,
             commands::open_settings,
             commands::get_accounts,
             commands::set_account_enabled,

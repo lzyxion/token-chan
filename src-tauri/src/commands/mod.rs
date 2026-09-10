@@ -16,6 +16,7 @@
 //! | [`accounts`] | 계정 켜고 끄기, 추가 스캔 홈, 다시 검색 |
 
 mod accounts;
+mod autostart;
 mod character;
 mod config;
 mod pet;
@@ -23,6 +24,7 @@ mod usage;
 mod windows;
 
 pub use accounts::*;
+pub use autostart::*;
 pub use character::*;
 pub use config::*;
 pub use pet::*;

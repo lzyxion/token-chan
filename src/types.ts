@@ -23,7 +23,10 @@ export interface CostParts {
   uncached: number;
 }
 
-export type SourceStatus = { kind: "ok" } | { kind: "no_data" };
+export type SourceStatus =
+  | { kind: "ok" }
+  | { kind: "degraded"; checked: number; failed: number }
+  | { kind: "no_data" };
 
 export interface SourceSummary {
   source: Source;
@@ -267,6 +270,12 @@ export type PetState =
   | "poke";
 
 /** Rust settings::Settings (serde camelCase) */
+export interface AutostartStatus {
+  enabled: boolean;
+  canChange: boolean;
+  error: string | null;
+}
+
 export interface AppSettings {
   /** 화면 언어. 알 수 없는 값은 영어로 처리한다. */
   language: "ko" | "en";

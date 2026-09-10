@@ -186,15 +186,11 @@ mod tests {
         assert!(t.lookup("totally-unknown-model").is_none());
     }
 
-    /// 2026-08-19 공식 페이지 대조값. 셋 다 2026-07-30 인하가 반영돼 있고
-    /// (Luna −80%, Terra −20%, Sol 동결) 캐시 **쓰기**는 과금하지 않아 cw 가 0 이다 —
-    /// 예전엔 Anthropic 의 1.25배 규칙을 그대로 적어 두어 없는 요금을 만들어 냈다.
+    /// 2026-09-10 공식 페이지 대조값. 셋 다 2026-07-30 인하가 반영돼 있다.
     #[test]
     fn gpt_5_6_prices_and_alias_match_the_official_tiers() {
         let t = PriceTable::builtin();
-        // 2026-08-23 공식 표(developers.openai.com/api/docs/pricing) 재대조 — standard·short.
-        // 이전 값(sol 5/30/0/0.5)은 셋이 틀렸다: cache writes 는 **5.6 계열에만 존재**하고
-        // (구세대는 칸이 비었거나 없다), sol 은 4/20 이다.
+        // 공식 표(developers.openai.com/api/docs/pricing) standard·short 구간.
         let cases = [
             ("gpt-5.6-sol", 4.0, 20.0, 5.0, 0.4),
             ("gpt-5.6-terra", 2.0, 12.0, 2.5, 0.2),
@@ -209,34 +205,99 @@ mod tests {
         }
     }
 
-    /// OpenAI 의 cache writes 요금은 **5.6 계열에만** 있다 (공식 표 실측).
+    #[test]
+    fn gpt_6_astra_price_and_context_match_the_official_standard_tier() {
+        let p = PriceTable::builtin().lookup("gpt-6-astra").unwrap();
+        assert_eq!((p.input, p.output, p.cw, p.cr), (10.0, 50.0, 12.5, 1.0));
+        assert_eq!(p.ctx, Some(1_050_000));
+    }
+
+    /// OpenAI 의 cache writes 요금은 Astra와 5.6 계열에만 있다 (공식 표 실측).
     /// 구세대에 값을 넣으면 없는 요금을 물리게 된다.
     #[test]
-    fn openai_cache_writes_only_on_the_5_6_family() {
+    fn openai_cache_writes_match_the_official_model_families() {
         let t = PriceTable::builtin();
-        for m in ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"] {
+        for m in [
+            "gpt-6-astra",
+            "gpt-5.6-sol",
+            "gpt-5.6-terra",
+            "gpt-5.6-luna",
+        ] {
             assert!(t.lookup(m).unwrap().cw > 0.0, "{m} 는 cache writes 요금이 있다");
         }
-        for m in ["gpt-5.3-codex", "gpt-5.1", "gpt-5", "gpt-5-mini", "gpt-5-nano", "gpt-4o"] {
+        for m in [
+            "gpt-5.3-codex",
+            "gpt-5.1",
+            "gpt-5",
+            "gpt-5-mini",
+            "gpt-5-nano",
+            "gpt-4o",
+        ] {
             assert_eq!(t.lookup(m).unwrap().cw, 0.0, "{m} 에는 cache writes 요금이 없다");
         }
         // TTL 선택이 없으므로 1시간 단가도 없다 → cost() 가 cw 로 물러난다
+        assert!(t.lookup("gpt-6-astra").unwrap().cw1h.is_none());
         assert!(t.lookup("gpt-5.6-terra").unwrap().cw1h.is_none());
     }
 
-    /// 실제로 관측되는 모델은 표에 있어야 한다 — 없으면 토큰만 세고 비용은 0 이 된다.
-    /// (agy 가 gemini-3.7-flash 로 넘어갔을 때 실제로 겪었다)
     #[test]
-    fn models_seen_in_the_wild_have_prices() {
+    fn claude_5_1_models_use_the_reduced_cache_read_price() {
         let t = PriceTable::builtin();
-        for m in ["gemini-3.7-flash", "gemini-3.6-flash", "gpt-5.6-terra", "gpt-5.3-codex"] {
+        for m in ["claude-fable-5-1", "claude-mythos-5-1"] {
+            let p = t.lookup(m).unwrap();
+            assert_eq!(
+                (p.input, p.output, p.cw, p.cw1h, p.cr),
+                (10.0, 50.0, 12.5, Some(20.0), 0.25)
+            );
+            assert_eq!(p.ctx, Some(1_000_000));
+        }
+        // `-5`도 접두사이므로 최장 접두사 매칭이 5.1 가격을 제대로 선택해야 한다.
+        assert_eq!(t.lookup("claude-fable-5").unwrap().cr, 1.0);
+    }
+
+    /// 지원 대상 모델은 표에 있어야 한다 — 없으면 토큰만 세고 비용은 0 이 된다.
+    #[test]
+    fn supported_models_have_prices() {
+        let t = PriceTable::builtin();
+        for m in [
+            "gemini-3.8-flash",
+            "gemini-3.7-flash",
+            "gemini-3.6-flash",
+            "gemini-3.5-flash",
+            "gemini-3.5-flash-lite",
+            "gpt-6-astra",
+            "gpt-5.6-terra",
+            "gpt-5.3-codex",
+            "claude-fable-5-1",
+            "claude-mythos-5-1",
+        ] {
             assert!(t.lookup(m).is_some(), "{m} 단가 없음");
         }
-        // 3.6 과 3.7 은 같은 단가다 (공식 표에서 같은 줄). 예전엔 3.6 에 2.5-flash 값이
+        // 3.6~3.8은 같은 도입 단가다. 예전엔 3.6에 2.5-flash 값이
         // 들어가 있어 agy 비용이 2.5배 낮게 잡혔다.
-        let (a, b) = (t.lookup("gemini-3.6-flash").unwrap(), t.lookup("gemini-3.7-flash").unwrap());
-        assert_eq!((a.input, a.output, a.cr), (b.input, b.output, b.cr));
-        assert_eq!((a.input, a.output), (0.75, 3.75));
+        for m in [
+            "gemini-3.6-flash",
+            "gemini-3.7-flash",
+            "gemini-3.8-flash",
+        ] {
+            let p = t.lookup(m).unwrap();
+            assert_eq!((p.input, p.output, p.cr), (0.75, 3.75, 0.075));
+            assert_eq!(p.ctx, Some(1_048_576));
+        }
+        assert_eq!(
+            {
+                let p = t.lookup("gemini-3.5-flash").unwrap();
+                (p.input, p.output, p.cr)
+            },
+            (1.5, 9.0, 0.15)
+        );
+        assert_eq!(
+            {
+                let p = t.lookup("gemini-3.5-flash-lite").unwrap();
+                (p.input, p.output, p.cr)
+            },
+            (0.3, 2.5, 0.03)
+        );
     }
 
     /// 구성 비용의 합은 총 비용과 같아야 한다 — 화면이 둘을 나란히 놓기 때문이다.

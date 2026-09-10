@@ -9,6 +9,61 @@
   padding: 8px;
 }
 
+/* 설정 저장 실패 배너와 같은 지속 오류 패턴. 제목줄 위에 떠서 기존 카드 레이아웃을
+   밀지 않고, 정상 복구 뒤 같은 소스에서 다시 실패하면 재표시된다. */
+.panel-source-error {
+  position: absolute;
+  top: 12px;
+  left: 20px;
+  right: 44px;
+  z-index: 20;
+  background: linear-gradient(rgba(255, 141, 117, 0.13), rgba(255, 141, 117, 0.13)), #1b1e26;
+  border: 1px solid rgba(255, 141, 117, 0.45);
+  border-radius: 8px;
+  color: #ff8d75;
+  padding: 6px 9px;
+  line-height: 1.45;
+  font-size: 11px;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.5);
+  animation: source-error-in 0.18s ease-out;
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+}
+
+.panel-source-error-text {
+  display: -webkit-box;
+  -webkit-line-clamp: 4;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.panel-source-error-close {
+  background: none;
+  border: none;
+  color: #ff8d75;
+  opacity: 0.7;
+  font-size: 12px;
+  line-height: 1.45;
+  padding: 0 2px;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.panel-source-error-close:hover {
+  opacity: 1;
+}
+
+@keyframes source-error-in {
+  from {
+    opacity: 0;
+    transform: translateY(-6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
 /* 리사이즈 손잡이 스타일은 components/resize.css (설정 창과 공유) */
 
 .card {

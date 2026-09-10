@@ -91,7 +91,7 @@ jobs:
           cache: pnpm
       - uses: dtolnay/rust-toolchain@stable
       - uses: swatinem/rust-cache@v2
-      - run: pnpm install
+      - run: pnpm install --frozen-lockfile
       # 태그 빌드면 GitHub Release(초안)까지 만들어 번들을 첨부한다. 초안인 이유:
       # 두 OS 잡이 따로 도는데 완성 전에 공개되면 자산이 반쪽인 릴리스가 노출된다 —
       # 둘 다 끝난 걸 확인하고 사람이 publish 버튼을 누른다.

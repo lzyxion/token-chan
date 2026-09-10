@@ -7,6 +7,7 @@ import type { AppSettings, PackConfig } from "../types";
 import ResizeGrips from "../components/ResizeGrips";
 import { SpeechField } from "../components/SpeechEditor";
 import { useWindowPersist } from "../hooks/useWindowPersist";
+import { useLoadErrors } from "../hooks/useLoadErrors";
 import { DEFAULT_PACK_IMAGES } from "../pet/defaultPack";
 import { useI18n } from "../i18n";
 import "../settings/settings.css";
@@ -86,6 +87,7 @@ const stateOfSpeech = (key: string): string | null => {
  *  대사는 기본 문구(settings.speechLines), 이미지는 내장이라 편집 불가. */
 export default function CharacterStudio() {
   const { t } = useI18n();
+  const loadErrors = useLoadErrors();
   const [s, setS] = useState<AppSettings | null>(null);
   /** 모든 팩 폴더 (idle 없는 미완성 포함) / idle 이 있어 펫이 쓸 수 있는 팩 */
   const [dirs, setDirs] = useState<string[]>([]);
@@ -98,6 +100,7 @@ export default function CharacterStudio() {
   const [packSpeech, setPackSpeech] = useState<Record<string, string[]>>({});
   const [newName, setNewName] = useState("");
   const [error, setError] = useState("");
+  const [errorDismissed, setErrorDismissed] = useState(false);
   /** 인라인 이름 변경 중인 팩과 입력값 (null = 편집 아님) */
   const [renaming, setRenaming] = useState<{ pack: string; value: string } | null>(null);
   /** 드래그 중인 파일이 올라가 있는 상태 카드 (하이라이트용) */
@@ -108,6 +111,11 @@ export default function CharacterStudio() {
     invoke<string[]>("list_character_packs")
       .then(setValidPacks)
       .catch(() => setValidPacks([]));
+  };
+
+  const showError = (value: unknown) => {
+    setError(String(value));
+    setErrorDismissed(false);
   };
 
   /** 선택된 팩을 다시 읽는 함수 — ↻ 가 이펙트 밖에서도 부를 수 있게 ref 로 잡아 둔다 */
@@ -174,7 +182,7 @@ export default function CharacterStudio() {
         if (!state || !path) return;
         invoke("import_state_image_from_path", { pack: selected, state, path })
           .then(() => setError(""))
-          .catch((err) => setError(String(err)));
+          .catch(showError);
       } else {
         setDropTarget(null);
       }
@@ -264,7 +272,9 @@ export default function CharacterStudio() {
     } else {
       const next = { ...config, disabledStates: list };
       setConfig(next);
-      void invoke("set_character_config", { pack: selected, config: next });
+      void invoke("set_character_config", { pack: selected, config: next })
+        .then(() => setError(""))
+        .catch(showError);
     }
   };
 
@@ -285,7 +295,9 @@ export default function CharacterStudio() {
         cur[key] = raw.split("\n");
       }
       setPackSpeech(cur);
-      void invoke("set_character_speech", { pack: selected, lines: cur });
+      void invoke("set_character_speech", { pack: selected, lines: cur })
+        .then(() => setError(""))
+        .catch(showError);
     }
   };
 
@@ -299,7 +311,7 @@ export default function CharacterStudio() {
         refreshLists();
         setSelected(name);
       })
-      .catch((e) => setError(String(e)));
+      .catch(showError);
   };
 
   /** ▶ 테스트 — 펫이 실제 경로(변수 치환 포함)로 그 문구를 말하게 한다.
@@ -346,7 +358,7 @@ export default function CharacterStudio() {
         if (selected === pack) setSelected(name);
         refreshLists();
       })
-      .catch((e) => setError(String(e)));
+      .catch(showError);
   };
 
   /** 팩 폴더째 휴지통으로 — 되돌릴 수 있어 확인창은 안 띄운다 */
@@ -357,12 +369,30 @@ export default function CharacterStudio() {
         if (selected === pack) setSelected("");
         refreshLists();
       })
-      .catch((e) => setError(String(e)));
+      .catch(showError);
   };
 
   return (
     <div className="studio-root">
       <ResizeGrips />
+      {((error && !errorDismissed) || loadErrors.message) && (
+        <div className="settings-save-error" role="alert">
+          <span className="settings-save-error-text" title={!error || errorDismissed ? loadErrors.detail : undefined}>
+            {error && !errorDismissed ? t(
+              `⚠️ ${error} — 변경 사항이 파일에 반영되지 않았습니다. 디스크 공간·권한을 확인한 뒤 다시 시도하세요.`,
+              `⚠️ ${error} — Changes were not written. Check disk space and permissions, then try again.`,
+            ) : loadErrors.message}
+          </span>
+          <button
+            className="settings-save-error-close"
+            title={t("닫기 (다음 오류가 발생하면 다시 표시)", "Dismiss until the next error")}
+            aria-label={t("오류 알림 닫기", "Dismiss error")}
+            onClick={() => error && !errorDismissed ? setErrorDismissed(true) : loadErrors.dismiss()}
+          >
+            ✕
+          </button>
+        </div>
+      )}
       <div className="studio-card">
         <div className="settings-head" data-tauri-drag-region>
           <span data-tauri-drag-region>{t("캐릭터 스튜디오", "Character Studio")}</span>
@@ -456,7 +486,6 @@ export default function CharacterStudio() {
               <button className="settings-btn" onClick={createPack}>
                 {t("+ 만들기", "+ Create")}
               </button>
-              {error && <div className="settings-hint warn-b">{error}</div>}
               <div className="settings-row">
                 <button
                   className="settings-btn studio-grow"

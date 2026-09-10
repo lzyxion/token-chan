@@ -18,7 +18,9 @@ use serde::Deserialize;
 use walkdir::WalkDir;
 
 use crate::context::{ContextState, RawContext};
-use crate::model::{ScanOutcome, Source, SourceStatus, UsageEvent};
+use crate::model::{
+    source_status, ParseDiagnostics, ScanOutcome, Source, SourceStatus, UsageEvent,
+};
 use crate::pricing::PriceTable;
 use crate::session::{dir_label, first_line, is_human_prompt, SessionRow};
 
@@ -110,6 +112,7 @@ struct FileCache {
     /// 시작하는데 그 사이 간격이 실측 47분까지 벌어졌다. 서브에이전트 행도 넣는다 —
     /// 그쪽도 같은 계정의 한도를 쓴다.
     stamps: Vec<DateTime<Utc>>,
+    diagnostics: ParseDiagnostics,
 }
 
 pub struct ClaudeAdapter {
@@ -153,6 +156,7 @@ impl ClaudeAdapter {
 
         let mut seen_files: HashSet<PathBuf> = HashSet::new();
         let mut any_file = false;
+        let mut diagnostics = ParseDiagnostics::default();
 
         for root in &self.roots {
             for entry in WalkDir::new(root).follow_links(false).into_iter().filter_map(|e| e.ok()) {
@@ -165,7 +169,10 @@ impl ClaudeAdapter {
                 }
                 any_file = true;
 
-                let Ok(meta) = entry.metadata() else { continue };
+                let Ok(meta) = entry.metadata() else {
+                    diagnostics.files_failed += 1;
+                    continue;
+                };
                 let mtime = meta.modified().unwrap_or(SystemTime::UNIX_EPOCH);
                 let size = meta.len();
 
@@ -181,10 +188,10 @@ impl ClaudeAdapter {
                     None => true,
                 };
                 if needs_parse {
-                    let (events, ctx, session, stamps) = parse_transcript(path);
+                    let (events, ctx, session, stamps, diagnostics) = parse_transcript(path);
                     self.cache.insert(
                         path.to_path_buf(),
-                        FileCache { mtime, size, events, ctx, session, stamps },
+                        FileCache { mtime, size, events, ctx, session, stamps, diagnostics },
                     );
                 }
             }
@@ -192,6 +199,9 @@ impl ClaudeAdapter {
 
         // 사라진/오래된 파일의 캐시 제거
         self.cache.retain(|p, _| seen_files.contains(p));
+        for fc in self.cache.values() {
+            diagnostics.add(fc.diagnostics);
+        }
 
         // 전역 dedup 후 병합
         let mut dedup: HashSet<&str> = HashSet::new();
@@ -208,7 +218,7 @@ impl ClaudeAdapter {
         }
         events.sort_by_key(|e| e.ts);
 
-        let status = if !any_file { SourceStatus::NoData } else { SourceStatus::Ok };
+        let status = source_status(any_file, diagnostics);
         ScanOutcome { events, status }
     }
 
@@ -470,11 +480,24 @@ fn user_text(content: &serde_json::Value) -> String {
 
 fn parse_transcript(
     path: &Path,
-) -> (Vec<ParsedEvent>, RawContext, Option<SessionRow>, Vec<DateTime<Utc>>) {
+) -> (
+    Vec<ParsedEvent>,
+    RawContext,
+    Option<SessionRow>,
+    Vec<DateTime<Utc>>,
+    ParseDiagnostics,
+) {
     let mut ctx = RawContext::default();
     let Ok(content) = std::fs::read_to_string(path) else {
-        return (vec![], ctx, None, vec![]);
+        return (
+            vec![],
+            ctx,
+            None,
+            vec![],
+            ParseDiagnostics { files_failed: 1, ..Default::default() },
+        );
     };
+    let mut diagnostics = ParseDiagnostics { files_read: 1, ..Default::default() };
     let (mut cwd, mut branch) = (String::new(), String::new());
     let mut title = String::new();
     let (mut last_at, mut last_model, mut tokens) = (None, String::new(), 0u64);
@@ -484,12 +507,20 @@ fn parse_transcript(
 
     let mut out = vec![];
     let mut stamps: Vec<DateTime<Utc>> = vec![];
-    for line in content.lines() {
+    let trailing_partial = !content.ends_with('\n');
+    let mut lines = content.lines().peekable();
+    while let Some(line) = lines.next() {
         let line = line.trim();
         if line.is_empty() {
             continue;
         }
-        let Ok(row) = serde_json::from_str::<Row>(line) else { continue };
+        let Ok(row) = serde_json::from_str::<Row>(line) else {
+            // CLI가 쓰는 중인 마지막 반쪽 행은 다음 스캔에서 완성된다.
+            if !(trailing_partial && lines.peek().is_none()) {
+                diagnostics.checked += 1;
+            }
+            continue;
+        };
         let ts = row
             .timestamp
             .as_deref()
@@ -548,13 +579,19 @@ fn parse_transcript(
         if row.kind.as_deref() != Some("assistant") {
             continue;
         }
+        diagnostics.checked += 1;
         let Some(msg) = row.message else { continue };
         let Some(usage) = msg.usage else { continue };
         let model = msg.model.unwrap_or_default();
-        if model.is_empty() || model == "<synthetic>" {
+        if model == "<synthetic>" {
+            diagnostics.parsed += 1;
+            continue;
+        }
+        if model.is_empty() {
             continue;
         }
         let Some(ts) = ts else { continue };
+        diagnostics.parsed += 1;
 
         // 컨텍스트 = 보낸 것(input + cache write + cache read) + 생성한 것(output).
         // compactMetadata.preTokens 와 대조해 검증한 공식 (context.rs 참고).
@@ -644,7 +681,7 @@ fn parse_transcript(
         at: last_at.unwrap(),
         tokens,
     });
-    (out, ctx, session, stamps)
+    (out, ctx, session, stamps, diagnostics)
 }
 
 /// 계약 테스트([`crate::adapter`] tests)용 표준 픽스처 — 내용 명세는 그쪽 주석 참고.
@@ -1162,5 +1199,17 @@ mod tests {
         let mut adapter = ClaudeAdapter::new(vec![dir.path().to_path_buf()]);
         let out = adapter.scan(DateTime::UNIX_EPOCH);
         assert_eq!(out.status, SourceStatus::NoData);
+    }
+
+    #[test]
+    fn unreadable_transcript_format_reports_degraded() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("broken.jsonl"), "not-json\nstill-not-json\nbroken-again\n")
+            .unwrap();
+        let mut adapter = ClaudeAdapter::new(vec![dir.path().to_path_buf()]);
+        assert_eq!(
+            adapter.scan(DateTime::UNIX_EPOCH).status,
+            SourceStatus::Degraded { checked: 3, failed: 3 }
+        );
     }
 }

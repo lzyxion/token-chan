@@ -241,13 +241,12 @@ pub fn pack_speech_path(pack: &str) -> Option<PathBuf> {
     pack_dir(pack).map(|d| d.join("speech.json"))
 }
 
-/// 팩의 `speech.json` (상황 키 → 문구 목록). 없거나 못 읽으면 None — 기본 문구로 폴백.
+/// 팩의 `speech.json` (상황 키 → 문구 목록). 없음과 읽기 실패를 구분한다.
 pub fn load_pack_speech(
     pack: &str,
-) -> Option<std::collections::HashMap<String, Vec<String>>> {
-    let path = pack_speech_path(pack)?;
-    let text = std::fs::read_to_string(path).ok()?;
-    serde_json::from_str(&text).ok()
+) -> Result<Option<std::collections::HashMap<String, Vec<String>>>, String> {
+    let path = pack_speech_path(pack).ok_or("Invalid pack name or unavailable settings directory")?;
+    read_json(&path).map_err(|e| format!("{}: {e}", path.display()))
 }
 
 /// 팩별 동작 설정 (`characters/<팩>/pack.json`) — 지금은 상태 사용 여부만.
@@ -265,11 +264,11 @@ pub fn pack_config_path(pack: &str) -> Option<PathBuf> {
 
 /// 팩 설정. 파일이 없으면 기본값(모든 상태 사용) — 전역 설정을 상속하지 않는다.
 /// 캐릭터가 자기 설정을 온전히 들고 다녀야 폴더 공유가 자기완결이 된다.
-pub fn load_pack_config(pack: &str) -> PackConfig {
-    pack_config_path(pack)
-        .and_then(|p| std::fs::read_to_string(p).ok())
-        .and_then(|t| serde_json::from_str(&t).ok())
-        .unwrap_or_default()
+pub fn load_pack_config(pack: &str) -> Result<PackConfig, String> {
+    let path = pack_config_path(pack).ok_or("Invalid pack name or unavailable settings directory")?;
+    read_json(&path)
+        .map(|value| value.unwrap_or_default())
+        .map_err(|e| format!("{}: {e}", path.display()))
 }
 
 /// 펫 창 **초기** 크기 (논리 px). 웹뷰가 뜨는 즉시 실측 크기로 다시 맞추므로
@@ -303,9 +302,14 @@ impl Settings {
     }
 }
 
-pub fn load() -> Settings {
-    let Some(path) = config_path() else { return Settings::default() };
-    load_from(&path).unwrap_or_default()
+pub fn load() -> (Settings, Option<String>) {
+    let result = config_path()
+        .ok_or_else(|| "The settings directory is unavailable".to_string())
+        .and_then(|path| load_from(&path));
+    match result {
+        Ok(settings) => (settings, None),
+        Err(error) => (Settings::default(), Some(error)),
+    }
 }
 
 /// 저장 실패를 삼키지 않고 돌려준다 — 호출부(`commands::save_settings`)가
@@ -329,18 +333,37 @@ pub fn save(settings: &Settings) -> Result<(), String> {
     save_to(&path, settings).map_err(|e| e.to_string())
 }
 
-/// 못 읽거나 깨졌으면 `None`. **깨진 파일은 `.bad` 로 옮겨 둔다** —
+/// 없는 파일만 정상적인 기본값이다. 읽기·파싱 실패는 호출자가 배너로 알린다.
+fn read_json<T: serde::de::DeserializeOwned>(path: &Path) -> std::io::Result<Option<T>> {
+    let text = match std::fs::read_to_string(path) {
+        Ok(text) => text,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(e),
+    };
+    serde_json::from_str(&text)
+        .map(Some)
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
+}
+
+/// 못 읽거나 깨졌으면 오류를 돌려준다. **깨진 파일은 `.bad` 로 옮겨 둔다** —
 /// 그대로 두면 다음 저장이 덮어써서 무엇이 있었는지 영영 알 수 없다.
-fn load_from(path: &Path) -> Option<Settings> {
-    let text = std::fs::read_to_string(path).ok()?;
-    match serde_json::from_str::<Settings>(&text) {
-        Ok(mut s) => {
+fn load_from(path: &Path) -> Result<Settings, String> {
+    match read_json::<Settings>(path) {
+        Ok(value) => {
+            let mut s = value.unwrap_or_default();
             s.migrate();
-            Some(s)
+            Ok(s)
         }
-        Err(_) => {
-            let _ = std::fs::rename(path, path.with_extension("json.bad"));
-            None
+        Err(e) => {
+            let mut error = format!("{}: {e}", path.display());
+            if e.kind() == std::io::ErrorKind::InvalidData {
+                let backup = path.with_extension("json.bad");
+                match std::fs::rename(path, &backup) {
+                    Ok(()) => error.push_str(&format!(" (backup: {})", backup.display())),
+                    Err(e) => error.push_str(&format!(" (backup failed: {e})")),
+                }
+            }
+            Err(error)
         }
     }
 }
@@ -355,16 +378,24 @@ fn load_from(path: &Path) -> Option<Settings> {
 /// `rename` 은 같은 디렉토리 안이라 원자적이고, Windows 에서도 기존 파일을 대체한다.
 /// 내용이 디스크에 닿은 뒤에 갈아끼우도록 `sync_all` 을 먼저 부른다.
 fn save_to(path: &Path, settings: &Settings) -> std::io::Result<()> {
+    write_json_atomic(path, settings)
+}
+
+/// 설정 본체와 캐릭터 팩 JSON이 공유하는 원자적 저장 경로.
+pub(crate) fn write_json_atomic<T: Serialize + ?Sized>(
+    path: &Path,
+    value: &T,
+) -> std::io::Result<()> {
     use std::io::Write;
 
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    let json = serde_json::to_string_pretty(settings)
+    let json = serde_json::to_string_pretty(value)
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
 
-    // 고정 이름이라 중간에 죽어 남더라도 다음 저장이 덮어쓴다.
-    // 저장은 항상 설정 뮤텍스를 쥔 채 일어나므로 서로 겹치지 않는다.
+    // 고정 이름이라 중간에 죽어 남더라도 다음 저장이 덮어쓴다. 호출부는 설정 뮤텍스를
+    // 쥐거나 동기 Tauri 명령에서 호출하므로 같은 대상의 저장이 서로 겹치지 않는다.
     let tmp = path.with_extension("json.tmp");
     {
         let mut f = std::fs::File::create(&tmp)?;
@@ -517,6 +548,18 @@ mod tests {
         assert_eq!(load_from(&path).unwrap().retention_days, 42);
     }
 
+    /// 임시 파일을 만들 수 없으면 기존 파일은 손대지 않는다.
+    #[test]
+    fn failed_atomic_write_keeps_the_existing_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        std::fs::write(&path, "old").unwrap();
+        std::fs::create_dir(path.with_extension("json.tmp")).unwrap();
+
+        assert!(write_json_atomic(&path, &sample()).is_err());
+        assert_eq!(std::fs::read_to_string(path).unwrap(), "old");
+    }
+
     /// 깨진 파일은 기본값으로 떨어지되 **덮어쓰지 않고** `.bad` 로 남긴다.
     /// 그대로 두면 다음 저장이 지워 버려 원인을 못 찾는다.
     #[test]
@@ -525,8 +568,71 @@ mod tests {
         let path = dir.path().join("settings.json");
         std::fs::write(&path, "{ 저장 중 잘린 JSON").unwrap();
 
-        assert!(load_from(&path).is_none());
+        assert!(load_from(&path).unwrap_err().contains("backup:"));
         assert!(!path.exists(), "깨진 파일은 자리를 비워 준다");
         assert!(path.with_extension("json.bad").exists(), "내용은 .bad 로 보존된다");
+    }
+
+    #[test]
+    fn missing_settings_are_normal_first_run() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        assert_eq!(load_from(&path).unwrap().retention_days, Settings::default().retention_days);
+        assert!(!path.with_extension("json.bad").exists());
+    }
+
+    #[test]
+    fn unreadable_settings_report_the_path_without_moving_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        // 디렉터리를 파일로 읽는 실패는 관리자 권한에서도 각 OS에서 재현할 수 있다.
+        std::fs::create_dir(&path).unwrap();
+        assert!(load_from(&path).unwrap_err().contains("settings.json"));
+        assert!(path.is_dir());
+        assert!(!path.with_extension("json.bad").exists());
+    }
+
+    #[test]
+    fn missing_pack_files_are_not_errors() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(read_json::<PackConfig>(&dir.path().join("pack.json")).unwrap().is_none());
+        assert!(read_json::<std::collections::HashMap<String, Vec<String>>>(
+            &dir.path().join("speech.json")
+        ).unwrap().is_none());
+    }
+
+    #[test]
+    fn invalid_pack_files_are_reported_and_left_untouched() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("pack.json");
+        for contents in ["{", r#"{"disabledStates": false}"#] {
+            std::fs::write(&path, contents).unwrap();
+            assert!(read_json::<PackConfig>(&path).is_err());
+            assert_eq!(std::fs::read_to_string(&path).unwrap(), contents);
+        }
+        let speech = dir.path().join("speech.json");
+        std::fs::write(&speech, r#"{"poke": 123}"#).unwrap();
+        assert!(read_json::<std::collections::HashMap<String, Vec<String>>>(&speech).is_err());
+        assert!(speech.exists());
+    }
+
+    #[test]
+    fn repaired_pack_file_can_be_read_again() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("pack.json");
+        std::fs::write(&path, "{").unwrap();
+        assert!(read_json::<PackConfig>(&path).is_err());
+        std::fs::write(&path, r#"{"disabledStates": ["sleep"]}"#).unwrap();
+        assert_eq!(read_json::<PackConfig>(&path).unwrap().unwrap().disabled_states, ["sleep"]);
+    }
+
+    #[test]
+    fn failed_backup_is_reported_as_failure() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        std::fs::write(&path, "{").unwrap();
+        std::fs::create_dir(path.with_extension("json.bad")).unwrap();
+        assert!(load_from(&path).unwrap_err().contains("backup failed:"));
+        assert_eq!(std::fs::read_to_string(path).unwrap(), "{");
     }
 }

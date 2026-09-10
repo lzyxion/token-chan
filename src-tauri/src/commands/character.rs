@@ -45,9 +45,10 @@ fn find_state_file(pack_dir: &std::path::Path, state: &str) -> Option<std::path:
 /// 대사는 캐릭터의 속성이라 설정이 아닌 팩 폴더에서 이미지와 함께 관리한다.
 #[tauri::command]
 pub fn get_character_speech(
+    app: AppHandle,
     pack: String,
 ) -> Option<std::collections::HashMap<String, Vec<String>>> {
-    settings::load_pack_speech(&pack)
+    super::config::loaded_or_default(&app, format!("{pack}/speech.json"), settings::load_pack_speech(&pack))
 }
 
 /// 팩 대사 저장 — 설정 창 편집기의 쓰기 경로. 실질 문구가 있는 키만 남기고,
@@ -58,38 +59,71 @@ pub fn set_character_speech(
     app: AppHandle,
     pack: String,
     lines: std::collections::HashMap<String, Vec<String>>,
-) {
-    let Some(path) = settings::pack_speech_path(&pack) else { return };
+) -> Result<(), String> {
+    let Some(path) = settings::pack_speech_path(&pack) else {
+        return Err(text(&app, "잘못된 팩 이름입니다", "Invalid pack name").into());
+    };
     let lines: std::collections::HashMap<String, Vec<String>> = lines
         .into_iter()
         .filter(|(_, v)| v.iter().any(|l| !l.trim().is_empty()))
         .collect();
     if lines.is_empty() {
-        let _ = std::fs::remove_file(&path);
-    } else if let Ok(json) = serde_json::to_string_pretty(&lines) {
-        let _ = std::fs::write(&path, json);
+        remove_if_exists(&path)
+    } else {
+        settings::write_json_atomic(&path, &lines)
     }
+    .map_err(|e| {
+        format!(
+            "{}: {e}",
+            text(&app, "팩 대사 저장 실패", "Failed to save pack speech")
+        )
+    })?;
+    // 저장 후 실제로 다시 읽어 복구 여부도 갱신한다 (비활성 팩은 펫이 재조회하지 않는다).
+    get_character_speech(app.clone(), pack.clone());
     use tauri::Emitter;
     let _ = app.emit("character-speech-changed", &pack);
+    Ok(())
 }
 
 /// 팩별 동작 설정 (`characters/<팩>/pack.json`). 없으면 기본값(모든 상태 사용).
 #[tauri::command]
-pub fn get_character_config(pack: String) -> settings::PackConfig {
-    settings::load_pack_config(&pack)
+pub fn get_character_config(app: AppHandle, pack: String) -> settings::PackConfig {
+    super::config::loaded_or_default(&app, format!("{pack}/pack.json"), settings::load_pack_config(&pack))
 }
 
 /// 팩 설정 저장 — 기본값(끈 상태 없음)이면 파일을 지워 폴더를 깨끗하게 유지한다.
 #[tauri::command]
-pub fn set_character_config(app: AppHandle, pack: String, config: settings::PackConfig) {
-    let Some(path) = settings::pack_config_path(&pack) else { return };
+pub fn set_character_config(
+    app: AppHandle,
+    pack: String,
+    config: settings::PackConfig,
+) -> Result<(), String> {
+    let Some(path) = settings::pack_config_path(&pack) else {
+        return Err(text(&app, "잘못된 팩 이름입니다", "Invalid pack name").into());
+    };
     if config.disabled_states.is_empty() {
-        let _ = std::fs::remove_file(&path);
-    } else if let Ok(json) = serde_json::to_string_pretty(&config) {
-        let _ = std::fs::write(&path, json);
+        remove_if_exists(&path)
+    } else {
+        settings::write_json_atomic(&path, &config)
     }
+    .map_err(|e| {
+        format!(
+            "{}: {e}",
+            text(&app, "팩 설정 저장 실패", "Failed to save pack settings")
+        )
+    })?;
+    get_character_config(app.clone(), pack.clone());
     use tauri::Emitter;
     let _ = app.emit("character-config-changed", &pack);
+    Ok(())
+}
+
+fn remove_if_exists(path: &std::path::Path) -> std::io::Result<()> {
+    match std::fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(e),
+    }
 }
 
 /// 새 팩 폴더 생성. idle 이미지를 넣기 전까지 펫에서는 선택 불가(목록 필터)지만,
@@ -154,6 +188,7 @@ pub fn rename_character_pack(app: AppHandle, old: String, new: String) -> Result
         .into());
     }
     std::fs::rename(&old_dir, &new_dir).map_err(|e| e.to_string())?;
+    clear_pack_load_errors(&app, &old);
 
     let updated = {
         let state = app.state::<AppState>();
@@ -186,9 +221,16 @@ pub fn delete_character_pack(app: AppHandle, pack: String) -> Result<(), String>
         return Err(text(&app, "이미 없는 팩입니다", "This pack no longer exists").into());
     }
     trash::delete(&dir).map_err(|e| e.to_string())?;
+    clear_pack_load_errors(&app, &pack);
     use tauri::Emitter;
     let _ = app.emit("character-images-changed", &pack);
     Ok(())
+}
+
+fn clear_pack_load_errors(app: &AppHandle, pack: &str) {
+    for file in ["speech.json", "pack.json"] {
+        super::config::loaded_or_default(app, format!("{pack}/{file}"), Ok(()));
+    }
 }
 
 /// 스튜디오 좌측 목록용 — idle 이 아직 없는(미완성) 팩 폴더까지 전부

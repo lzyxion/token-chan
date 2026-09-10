@@ -276,6 +276,9 @@ export default function UsagePanel() {
   // 소스별로 나뉘어 오지 않으므로 개요에만 있다.
   const [tab, setTab] = useState<Source | "all">("all");
   const [selectedHistoryDate, setSelectedHistoryDate] = useState<string | null>(null);
+  // 설정 저장 오류 배너와 같은 규칙: 닫은 소스는 같은 오류가 지속되는 동안 숨기고,
+  // 정상으로 돌아오면 목록에서 빼 다음 오류 때 다시 보이게 한다.
+  const [dismissedParserSources, setDismissedParserSources] = useState<Source[]>([]);
   const bodyRef = useRef<HTMLDivElement | null>(null);
 
   useWindowPersist("panel");
@@ -288,6 +291,17 @@ export default function UsagePanel() {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, []);
+
+  useEffect(() => {
+    if (!summary) return;
+    const active = new Set(
+      summary.sources.filter((s) => s.status.kind === "degraded").map((s) => s.source),
+    );
+    setDismissedParserSources((prev) => {
+      const next = prev.filter((source) => active.has(source));
+      return next.length === prev.length ? prev : next;
+    });
+  }, [summary]);
 
   if (!summary) {
     return (
@@ -303,6 +317,14 @@ export default function UsagePanel() {
   // 기록이 있는 벤더만 탭으로 세운다 (`period` 는 옛 백엔드엔 없다)
   const vendorTabs = summary.sources.filter((v) => (v.period ? totalOf(v.period) : 0) > 0);
   const picked = summary.sources.find((v) => v.source === tab) ?? null;
+  const parserErrors = summary.sources.filter(
+    (s) => s.status.kind === "degraded" && !dismissedParserSources.includes(s.source),
+  );
+  const parserErrorLabels = parserErrors.map((s) => s.label).join(", ");
+  const parserErrorFailed = parserErrors.reduce(
+    (sum, s) => sum + (s.status.kind === "degraded" ? s.status.failed : 0),
+    0,
+  );
   const shownModels = summary.models_today;
   const shownPeriodModels = picked
     ? summary.models_period.filter((m) => m.source === picked.source)
@@ -395,6 +417,30 @@ export default function UsagePanel() {
   return (
     <div className="panel-root" onWheel={onWheel}>
       <ResizeGrips />
+      {parserErrors.length > 0 && (
+        <div className="panel-source-error" role="alert">
+          <span className="panel-source-error-text">
+            {t(
+              `⚠️ ${parserErrorLabels} 기록 ${parserErrorFailed}개를 읽지 못했습니다. CLI 로그 형식이 변경됐거나 파일이 손상됐을 수 있습니다.`,
+              `⚠️ Could not read ${parserErrorFailed} ${parserErrorLabels} log records. The CLI log format may have changed or files may be damaged.`,
+            )}
+          </span>
+          <button
+            className="panel-source-error-close"
+            title={t(
+              "닫기 (오류가 복구될 때까지 다시 띄우지 않음)",
+              "Dismiss until the error recovers",
+            )}
+            onClick={() =>
+              setDismissedParserSources((prev) => [
+                ...new Set([...prev, ...parserErrors.map((s) => s.source)]),
+              ])
+            }
+          >
+            ✕
+          </button>
+        </div>
+      )}
       <div className="card">
         {/* 닫기는 드래그 영역(.head) 밖 — 헤더 안에 두면 드래그와 클릭이 얽힌다 */}
         <button
